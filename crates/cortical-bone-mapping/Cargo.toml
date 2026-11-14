@@ -1,0 +1,19 @@
+[package]
+name = "cortical-bone-mapping"
+description = "Cortical bone mapping (Treece et al.) with global, regularised and curvature-penalised model fitting, and model-driven segmentation refinement"
+readme = "../../README.md"
+keywords = ["cortical-thickness", "bone", "hr-pqct", "ct", "image-analysis"]
+categories = ["science", "computer-vision", "algorithms"]
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+ndarray.workspace = true
+rayon.workspace = true
+libm.workspace = true
+
+[dev-dependencies]
+proptest = "1"

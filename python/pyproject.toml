@@ -1,0 +1,39 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "cortical-bone-mapping-rs"
+description = "Cortical bone mapping (Treece et al.; Neeteson & Boyd) in Rust: cortical thickness by model fitting, with spatial and curvature regularisation and segmentation refinement"
+readme = "../README.md"
+license = { text = "MIT" }
+authors = [{ name = "Nathan J. Neeteson" }]
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.21"]
+keywords = ["cortical thickness", "cortical bone mapping", "HR-pQCT", "CT", "bone", "image analysis"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Intended Audience :: Science/Research",
+]
+dynamic = ["version"]
+
+[project.optional-dependencies]
+test = ["pytest>=7", "scipy>=1.7", "hypothesis>=6"]
+docs = ["matplotlib>=3.5", "scipy>=1.7", "pillow>=9"]
+
+[project.urls]
+Repository = "https://github.com/njneeteson/cortical-bone-mapping-rs"
+"Neeteson & Boyd 2025" = "https://doi.org/10.1016/j.compbiomed.2025.110636"
+"Treece & Gee 2018" = "https://doi.org/10.1007/s11914-018-0475-3"
+
+[tool.maturin]
+python-source = "python"
+module-name = "cortical_bone_mapping_rs._core"
+features = ["pyo3/extension-module"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

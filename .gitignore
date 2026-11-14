@@ -1,0 +1,14 @@
+/target
+**/__pycache__/
+*.pyc
+*.pyd
+*.so
+.venv/
+python/.venv/
+.pytest_cache/
+.nox/
+*.egg-info/
+dist/
+*.pdb
+.hypothesis/
+*.vtk

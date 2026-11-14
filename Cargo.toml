@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = ["crates/cortical-bone-mapping", "python"]
+
+[workspace.package]
+version = "0.1.0"
+authors = ["Nathan J. Neeteson"]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/njneeteson/cortical-bone-mapping-rs"
+
+[workspace.dependencies]
+ndarray = { version = "0.17", features = ["rayon"] }
+rayon = "1.12"
+libm = "0.2"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+
+# The end-to-end tests fit thousands of profiles; run them optimised.
+[profile.test]
+opt-level = 3
+
+[profile.dev.package."*"]
+opt-level = 3

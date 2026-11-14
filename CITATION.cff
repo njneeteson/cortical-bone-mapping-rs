@@ -1,0 +1,72 @@
+cff-version: 1.2.0
+message: >-
+  If you use this software, please cite the cortical bone mapping method
+  (Treece et al.), its global/regularised extensions (Neeteson & Boyd 2025),
+  both listed under references, and this implementation including the
+  version you used.
+type: software
+title: "cortical-bone-mapping-rs: cortical bone mapping in Rust with Python bindings"
+abstract: >-
+  Model-based cortical thickness measurement (cortical bone mapping) from
+  CT and HR-pQCT images, with local, multigrid and spatially regularised
+  fits, a curvature penalty on the fitted surfaces, fixed or estimated
+  point-spread functions, and model-driven refinement of the periosteal
+  segmentation. Rust with Python bindings (cortical_bone_mapping_rs).
+authors:
+  - family-names: Neeteson
+    given-names: Nathan J.
+version: 0.1.0
+license: MIT
+repository-code: https://github.com/njneeteson/cortical-bone-mapping-rs
+keywords:
+  - cortical bone mapping
+  - cortical thickness
+  - HR-pQCT
+  - CT
+  - bone
+  - image analysis
+  - Rust
+  - Python
+references:
+  - type: article
+    title: Advancing Cortical Bone Mapping with global optimization
+    authors:
+      - family-names: Neeteson
+        given-names: Nathan J.
+      - family-names: Boyd
+        given-names: Steven K.
+    journal: Computers in Biology and Medicine
+    year: 2025
+    doi: 10.1016/j.compbiomed.2025.110636
+  - type: article
+    title: "Cortical Bone Mapping: Measurement and Statistical Analysis of Localised Skeletal Changes"
+    authors:
+      - family-names: Treece
+        given-names: Graham M.
+      - family-names: Gee
+        given-names: Andrew H.
+    journal: Current Osteoporosis Reports
+    volume: 16
+    issue: 5
+    start: 617
+    end: 625
+    year: 2018
+    doi: 10.1007/s11914-018-0475-3
+  - type: article
+    title: High resolution cortical bone thickness measurement from clinical CT data
+    authors:
+      - family-names: Treece
+        given-names: Graham M.
+      - family-names: Gee
+        given-names: Andrew H.
+      - family-names: Mayhew
+        given-names: P. M.
+      - family-names: Poole
+        given-names: Kenneth E. S.
+    journal: Medical Image Analysis
+    volume: 14
+    issue: 3
+    start: 276
+    end: 290
+    year: 2010
+    doi: 10.1016/j.media.2010.01.003

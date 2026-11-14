@@ -1,0 +1,74 @@
+[
+  {
+    "method": "local",
+    "nodes": 7392,
+    "bonelab_time": 47.063025240185674,
+    "bonelab_time_extrapolated_from": 400,
+    "bonelab_peak_bytes": 379729,
+    "bonelab_rmse": 0.0200780853295342,
+    "rust_fit_time": 0.26821269999999997,
+    "rust_total_time": 0.31231879995903,
+    "rust_rmse": 0.01982764922930728
+  },
+  {
+    "method": "multigrid",
+    "nodes": 7392,
+    "bonelab_time": 12.679827300016768,
+    "bonelab_peak_bytes": 51901919,
+    "bonelab_rmse": 0.01403031878864583,
+    "rust_fit_time": 0.8455241,
+    "rust_total_time": 0.8884623000049032,
+    "rust_rmse": 0.008937337658495503
+  },
+  {
+    "method": "regularized k=64",
+    "nodes": 7392,
+    "bonelab_time": 2.826448799984064,
+    "bonelab_peak_bytes": 62138086,
+    "bonelab_rmse": 0.018650004260897562,
+    "rust_fit_time": 0.470299,
+    "rust_total_time": 0.5164730999968015,
+    "rust_rmse": 0.015179591178465734
+  },
+  {
+    "method": "regularized k=500",
+    "nodes": 7392,
+    "bonelab_time": 5.804988700023387,
+    "bonelab_peak_bytes": 83157647,
+    "bonelab_rmse": 0.01771102688725517,
+    "rust_fit_time": 0.8678294999999999,
+    "rust_total_time": 0.9119661000440829,
+    "rust_rmse": 0.013927630486589727
+  },
+  {
+    "method": "local",
+    "nodes": 32736,
+    "bonelab_time": 197.5169034918258,
+    "bonelab_time_extrapolated_from": 400,
+    "bonelab_peak_bytes": 60592,
+    "bonelab_rmse": 0.01845390806221154,
+    "rust_fit_time": 0.4461852,
+    "rust_total_time": 0.5363338000024669,
+    "rust_rmse": 0.019341031028982693
+  },
+  {
+    "method": "multigrid",
+    "nodes": 32736,
+    "bonelab_time": 63.27359359996626,
+    "bonelab_peak_bytes": 228869586,
+    "bonelab_rmse": 0.016305943327829975,
+    "rust_fit_time": 1.2877673,
+    "rust_total_time": 1.3788871999713592,
+    "rust_rmse": 0.01184472837264287
+  },
+  {
+    "method": "regularized k=64",
+    "nodes": 32736,
+    "bonelab_time": 9.966723899997305,
+    "bonelab_peak_bytes": 274584359,
+    "bonelab_rmse": 0.01868155309385097,
+    "rust_fit_time": 0.8662162,
+    "rust_total_time": 0.9553461999748833,
+    "rust_rmse": 0.015324858259849911
+  }
+]

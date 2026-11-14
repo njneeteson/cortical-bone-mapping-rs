@@ -1,0 +1,46 @@
+[
+  {
+    "method": "local",
+    "nodes": 7392,
+    "rust_time": 0.30788880004547536,
+    "scipy_time": 6.575976422337815,
+    "scipy_time_extrapolated_from": 1000,
+    "rust_rmse": 0.01982764922930728,
+    "scipy_rmse": 0.020066114907291575,
+    "median_abs_difference": 3.986069729844388e-08
+  },
+  {
+    "method": "regularized k=64",
+    "nodes": 7392,
+    "rust_time": 0.5237615999649279,
+    "scipy_time": 9.6340861999779,
+    "scipy_peak_bytes": 108313637,
+    "scipy_iterations": 234,
+    "rust_cost": 2920.543315779171,
+    "scipy_cost": 2920.5433266406776,
+    "rust_rmse": 0.015179591178465734,
+    "scipy_rmse": 0.015179994175605995
+  },
+  {
+    "method": "local",
+    "nodes": 32736,
+    "rust_time": 0.545507800008636,
+    "scipy_time": 29.222569516830145,
+    "scipy_time_extrapolated_from": 1000,
+    "rust_rmse": 0.019341031028982693,
+    "scipy_rmse": 0.020093727305239884,
+    "median_abs_difference": 4.1557110697088007e-08
+  },
+  {
+    "method": "regularized k=64",
+    "nodes": 32736,
+    "rust_time": 0.9684698000201024,
+    "scipy_time": 65.60820860002423,
+    "scipy_peak_bytes": 502177714,
+    "scipy_iterations": 340,
+    "rust_cost": 2842.3842786350433,
+    "scipy_cost": 2842.384332502302,
+    "rust_rmse": 0.015324858259849911,
+    "scipy_rmse": 0.015324914338057112
+  }
+]
