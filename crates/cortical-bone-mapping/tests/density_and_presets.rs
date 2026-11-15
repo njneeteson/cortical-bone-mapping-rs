@@ -101,3 +101,17 @@ fn table1_presets() {
         _ => unreachable!(),
     }
 }
+
+#[test]
+fn global_solves_respect_the_work_budget() {
+    let ph = cylinder(40.0, 4);
+    let (img, mask) = ph.generate();
+    let mut o = options(&ph, regularized(64, None));
+    let free = run(img.view(), mask.view(), NO_SUB, &o).unwrap();
+    assert!(!free.info.budget_exhausted && free.info.converged == 1.0);
+    o.solver.cg_max_total = 5;
+    let capped = run(img.view(), mask.view(), NO_SUB, &o).unwrap();
+    assert!(capped.info.budget_exhausted && capped.info.converged == 0.0);
+    // the global initialisation and the regularised solve each get the budget
+    assert!(capped.info.cg_iterations <= 5, "{}", capped.info.cg_iterations);
+}

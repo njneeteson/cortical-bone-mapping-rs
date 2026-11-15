@@ -15,6 +15,7 @@ mathematical notation follows our paper (Neeteson & Boyd 2025).
 * [Regularised method](#regularised-method)
 * [Curvature penalty (extension)](#curvature-penalty)
 * [Segmentation refinement (extension)](#segmentation-refinement)
+* [Starting segmentations](#starting-segmentations)
 * [Memory and performance design](#memory-and-performance-design)
 * [Differences from the original implementations](#differences)
 
@@ -106,15 +107,12 @@ formulation as re-implemented in our 2025 paper ("local method").
   with two rounds of 3·MAD outlier rejection; then the chosen method is run
   with `σ` fixed from the PSF.
 
-The cortical density `ρc` is always fixed; `ρc` and `σ` cannot both be
-determined from a thin cortex (Treece et al. 2012).
-
 ## Cortical density
 
-`ρc` is fixed during the fit: with `ρc` free, thickness and density trade off
-(a thinner, denser cortex blurs into nearly the same profile), so `t` would
-be poorly determined where the cortex is thin. Three ways to choose it
-(`ModelOptions::rho_c_mode`, Python `rho_c=`):
+`ρc` is never fitted. Thickness and density trade off: a thinner, denser
+cortex blurs into nearly the same profile, so with `ρc` free `t` would be
+poorly determined wherever the cortex is thin (Treece et al. 2012). There are
+three ways to choose it (`ModelOptions::rho_c_mode`, Python `rho_c=`):
 
 * **fixed** (default, `ρc = 1000`, Table 1): right for a density-calibrated
   scanner when the cortical tissue density is known. A wrong value biases
@@ -171,14 +169,34 @@ matrix-free preconditioned conjugate gradients**:
 * Marquardt damping `D = diag(JᵀJ)`, Nielsen's update, projected steps and
   active-set freezing for the bounds; the predicted reduction uses the
   actual (projected) step;
+* inexact Newton: each PCG solve stops at a relative residual of
+  `η = min(0.1, √g)` (`g` the scaled gradient below), down to `cg_tolerance`
+  near the optimum, so early steps are cheap and late steps accurate;
 * the gradient of every term has been checked against finite differences for
   all roles, with and without interpolation, for both curvature modes and
   both Laplacians (`global::tests`).
 
+**Stopping.** A solve stops, converged, when
+
+* the scaled gradient `max_v |g_v| / (√D_v ‖r‖)` is below `gtol`,
+* an accepted step reduces the cost by less than `ftol` (relative),
+* the step is below `xtol`, or
+* the last 10 accepted steps together reduced the cost by less than 10⁻⁴
+  (relative). This *stall* test ends the slow crawl of projected steps when
+  many nodes sit on a bound (e.g. profiles that miss the cortex).
+
+It stops *unconverged* when it runs out of budget: `max_iterations` linear
+solves (accepted and rejected trial steps alike) or `cg_max_total` CG
+iterations in all. The fit is then flagged (`FitInfo::budget_exhausted`).
+The budget matters for badly posed inputs. On a segmentation that has leaked
+into the marrow, most profiles carry no cortical information, the smoothing
+term dominates, and the block-Jacobi preconditioner, which only sees each
+node's own block, needs ~70 CG iterations per step instead of ~14.
+
 Compared with first-order L-BFGS-B on the same objective (as in our 2025 paper)
 this exploits the least-squares structure: it converges in 5–30 outer
-iterations and reaches the same optimum (the SciPy comparison agrees on the
-final cost to 8 significant digits; see [performance](performance.md)).
+iterations and reaches the same optimum as a converged L-BFGS-B solve (see
+[performance](performance.md)).
 
 All parallel reductions use fixed-size chunks summed in a fixed order, so
 results are **bitwise identical** across runs and thread counts.
@@ -236,10 +254,9 @@ modes:
   `H(V + d n) − H(V_d) ≈ ½ Δ_S d`, computed as
   `n_i · ½ Σ_k L_ik (d_k − d_i) n_k`. A uniform offset (any parallel surface)
   costs nothing, so neither the shape of the bone nor a uniform cortex is
-  penalised, only bumps. (An earlier version penalised the full curvature
-  change `‖H(S) − H(V)‖`; that biases thickness, because the endosteal surface
-  of a cylinder is *meant* to be more curved than the periosteal one. The
-  phantom showed a −0.6 mm bias, which motivated the parallel-surface form.)
+  penalised, only bumps. (Penalising the full change `‖H(S) − H(V)‖` instead
+  biases thickness: the endosteal surface of a cylinder is *meant* to be more
+  curved than the periosteal one; −0.6 mm on the cylinder phantom.)
   Residual per node and surface:
   `r = √(μ/N) · ρc · ℓ · n_i · ½ Σ_k L_ik (d_k − d_i) n_k`, linear in `(m, t)`.
 * **`excess`**: absolute mean curvature above a threshold `κ`,
@@ -260,9 +277,9 @@ Two Laplacians:
   by the weighted second moment `M2_i = Σ w_ik |p_k − p_i|²` so that
   `L f = 4(Σ w f − f)/M2 ≈ Δf` for any truncation. Sampling (instead of the
   `k` nearest) keeps the operator at the requested scale whatever the node
-  density, which keeps the Gauss–Newton systems well conditioned: at 134k
-  nodes, nearest-neighbour rows needed 1447 CG iterations and 65 s; sampled
-  rows need 435 and 21 s with the same accuracy.
+  density, which keeps the Gauss–Newton systems well conditioned (about 3×
+  fewer CG iterations than nearest-neighbour rows at 134k nodes, with the
+  same accuracy).
 * **Cotangent Laplacian** (`curvature_scale=None`): curvature at mesh
   resolution, the textbook discrete mean curvature. Its bending energy scales
   as `h⁻⁴` with edge length `h`, so the systems are stiff and need thousands
@@ -297,11 +314,39 @@ v_i ← v_i + α (m_i − t_i/2) n_i        (0 < α ≤ 1, default 0.5)
   the smallest voxel spacing). With `α = 0.5` the displacement halves every
   iteration (it is a damped fixed-point iteration whose fixed point is the
   fitted periosteal surface); the floor is `α ×` the noise of the fitted edge.
+  Refinement also stops, unconverged, if a fit exhausts its work budget:
+  moving the surface on an unreliable fit would only propagate it.
+
+Refinement corrects the *position* of a surface, not its *topology*. A
+segmentation that has leaked into the marrow (through a cortical break, say)
+has part of the endosteal surface and the trabecular network in its outer
+surface; no profile fit can turn that into a periosteum. Hence the choice of
+starting segmentation below.
 
 Outputs: the refined periosteal surface, the fitted endosteal surface, and
 masks of the regions they enclose (even–odd ray-parity rasterisation along
 axis 0) and of the cortex between them. The same masks can be produced from
 any single fit (`CbmResult.masks`, `cortical_masks`).
+
+## Starting segmentations
+
+Refinement needs a starting surface that is *topologically* right (one
+closed surface around each bone) and *geometrically* close enough that the
+profiles cross the cortex (within the sampled range). Two are provided:
+
+* **`hull_segmentation`** (recommended): threshold (default 320 mg HA/cm³),
+  binary median (Buie's step 3) against noise speckle, the largest 3D
+  component (drops a separate fibula/ulna and stray voxels), then the convex
+  hull of every slice. The hull cannot leak: it always contains the
+  thresholded bone, so its errors are outward bulges over concave parts of
+  the periosteum, which refinement pulls in. Its limits are concavities
+  deeper than the inward sampling range, and bones that touch at the
+  threshold (they become one component, and one hull per slice).
+* **`buie_segmentation`**: the dual-threshold method of Buie et al. (2007),
+  as the standard-of-care reference. It is usually close, but it fails
+  topologically on wide cortical breaks and very porous cortices (the outer
+  region floods the marrow); see [segmentation](segmentation.md) for its
+  implementation and the comparison.
 
 ## Memory and performance design
 

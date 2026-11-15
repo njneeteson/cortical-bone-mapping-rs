@@ -54,6 +54,7 @@ __all__ = [
     "JointPhantom",
     "BuieOptions",
     "buie_segmentation",
+    "hull_segmentation",
     "cortical_bone_mapping",
     "refine_segmentation",
     "voxelize",
@@ -137,6 +138,9 @@ class Options:
         per problem for the global methods).
     cg_max_iterations, cg_tolerance
         Conjugate-gradient inner solves of the global methods.
+    cg_max_total
+        CG iterations allowed over one global solve; a fit that exhausts it is
+        flagged (``info["budget_exhausted"]``) and stops refinement.
 
     **Method**
 
@@ -216,6 +220,7 @@ class Options:
     xtol: float = 1e-10
     cg_max_iterations: int = 200
     cg_tolerance: float = 1e-3
+    cg_max_total: int = 2000
     # method
     method: Literal["local", "multigrid", "regularized"] = "local"
     multigrid_spacings: Sequence[float] = (7.7696, 3.8848, 1.9424, 0.9712)
@@ -1023,3 +1028,20 @@ def buie_segmentation(image, options: Optional[BuieOptions] = None, **kwargs):
     d["endosteal_kernel"] = tuple(int(v) for v in o.endosteal_kernel)
     d["gaussian_support"] = tuple(float(v) for v in o.gaussian_support)
     return _core.buie(_as_image(image), d)
+
+
+def hull_segmentation(image, threshold: float = 320.0, median_kernel=(1, 3, 3),
+                      largest_component: bool = True) -> np.ndarray:
+    """A conservative starting segmentation for :func:`refine_segmentation`.
+
+    Threshold the image (``image >= threshold``; 320 mg HA/cm^3 is the usual
+    bone threshold for calibrated HR-pQCT), remove noise speckle with a binary
+    median (``median_kernel``, as Buie's step 3), keep the largest 3D component
+    (drops a separate fibula/ulna), and take the convex hull of every slice
+    along axis 0. Unlike a morphological closing, the hull cannot leak through
+    cortical breaks or a porous cortex into the marrow; its errors are outward
+    bulges over concave parts of the periosteum, which refinement removes.
+    Returns a boolean mask.
+    """
+    return _core.hull_segmentation(_as_image(image), float(threshold),
+                                   tuple(int(k) for k in median_kernel), bool(largest_component))

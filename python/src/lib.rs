@@ -163,6 +163,7 @@ fn parse_options(d: &Bound<'_, PyDict>) -> PyResult<cbm::Options> {
             xtol: req(d, "xtol")?,
             cg_max_iterations: req(d, "cg_max_iterations")?,
             cg_tolerance: req(d, "cg_tolerance")?,
+            cg_max_total: req(d, "cg_max_total")?,
         },
         method,
         init_from_global: req(d, "init_from_global")?,
@@ -218,6 +219,7 @@ fn result_dict<'py>(py: Python<'py>, r: &cbm::CbmResult) -> PyResult<Bound<'py, 
     info.set_item("data_cost", r.info.data_cost)?;
     info.set_item("smoothing_cost", r.info.smoothing_cost)?;
     info.set_item("curvature_cost", r.info.curvature_cost)?;
+    info.set_item("budget_exhausted", r.info.budget_exhausted)?;
     let t = PyDict::new(py);
     for (k, v) in &r.info.timings {
         t.set_item(k, v)?;
@@ -727,6 +729,27 @@ fn buie<'py>(
     ))
 }
 
+/// Threshold + median + largest component + per-slice convex hull.
+#[pyfunction]
+#[pyo3(signature = (image, threshold, median_kernel, largest_component))]
+fn hull_segmentation<'py>(
+    py: Python<'py>,
+    image: &Bound<'py, PyAny>,
+    threshold: f64,
+    median_kernel: [usize; 3],
+    largest_component: bool,
+) -> PyResult<Bound<'py, numpy::PyArray3<bool>>> {
+    let o = cbm::segmentation::HullOptions {
+        threshold,
+        median_kernel,
+        largest_component,
+    };
+    let r = with_image!(image, |img| Ok::<_, PyErr>(
+        py.detach(|| cbm::segmentation::hull_segmentation(img, &o))
+    ))?;
+    Ok(r.into_pyarray(py))
+}
+
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(run, m)?)?;
@@ -741,6 +764,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(joint_phantom, m)?)?;
     m.add_function(wrap_pyfunction!(joint_phantom_edges, m)?)?;
     m.add_function(wrap_pyfunction!(buie, m)?)?;
+    m.add_function(wrap_pyfunction!(hull_segmentation, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

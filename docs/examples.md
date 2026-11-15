@@ -1,5 +1,10 @@
 # Examples
 
+These examples check the methods on simple, smooth phantoms with known
+geometry; [segmentation](segmentation.md) tests the whole automatic pipeline
+on realistic ones (trabeculae, porosity, neighbouring bones, cortical breaks,
+a knee joint).
+
 All figures are produced by [`scripts/make_figures.py`](scripts/make_figures.py)
 from synthetic phantoms (`cbm.Phantom`) with known geometry. The default
 phantom is a cylinder along array axis 0 with 0.1 mm voxels, outer radius
@@ -82,7 +87,8 @@ A tibia-like phantom: a three-lobed outer surface with
 has 7-lobed bumps of 0.35 mm. Refinement uses the regularised method with
 `α = 0.5`. The RMS displacement halves every iteration, as expected for an
 under-relaxed fixed-point iteration, and the Dice coefficient with the true
-segmentation approaches 1.
+segmentation approaches 1. In practice the starting segmentation comes
+from the image (`cbm.hull_segmentation`, see [segmentation](segmentation.md)).
 
 Run it yourself:
 

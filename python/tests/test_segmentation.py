@@ -1,5 +1,5 @@
-"""The realistic bone phantom, Buie's dual-threshold segmentation, and CBM
-correction of a Buie segmentation."""
+"""Realistic phantoms, the starting segmentations (Buie's dual threshold and
+the threshold hull), and automatic segmentation with CBM from the image alone."""
 
 import numpy as np
 import pytest
@@ -52,31 +52,34 @@ def test_buie_partitions_and_finds_the_bone(osteoporotic):
     assert dice(bc2, bc) > 0.99
 
 
-def test_cbm_corrects_buie_endosteal_surface_on_porous_thin_cortex(osteoporotic):
+def test_hull_contains_the_bone(osteoporotic):
+    ph, img, peri, endo = osteoporotic
+    h = cbm.hull_segmentation(img)
+    assert (h & peri).sum() / peri.sum() > 0.998  # a superset of the bone ...
+    assert dice(h, peri) > 0.97  # ... and a close one
+
+
+def test_hull_then_refinement_beats_buie_on_a_porous_thin_cortex(osteoporotic):
+    """From the image alone, without the true density: hull, then CBM
+    refinement. Buie classifies the porous inner cortex as marrow."""
     ph, img, peri, endo = osteoporotic
     cort = peri & ~endo
-    bp, bc, bt = cbm.buie_segmentation(img)
-    fit = cbm.cortical_bone_mapping(img, bp, rho_c=800.0, **CBM)
-    _, _, c = fit.masks(img.shape)
     s = slice(3, -3)
-    d_buie, d_cbm = dice(bc[s], cort[s]), dice(c[s], cort[s])
+    _, bc, _ = cbm.buie_segmentation(img)
+    rr = cbm.refine_segmentation(img, cbm.hull_segmentation(img), rho_c="estimate", **CBM)
+    assert rr.converged
+    assert 650 < rr.result.rho_c < 850  # the porous cortex's apparent density
+    d_buie, d_cbm = dice(bc[s], cort[s]), dice(rr.cortical_mask[s], cort[s])
     assert d_buie < 0.85 and d_cbm > 0.9, (d_buie, d_cbm)
-    t = ph.true_thickness(fit)
+    assert dice(rr.periosteal_mask[s], peri[s]) > 0.99
+    t = ph.true_thickness(rr.result)
     ok = np.isfinite(t)
-    assert abs((fit.thickness[ok] - t[ok]).mean()) < 0.05
+    assert abs((rr.result.thickness[ok] - t[ok]).mean()) < 0.08
 
 
-def test_cbm_without_the_true_density(osteoporotic):
-    """With rho_c estimated from the image, CBM still corrects Buie's
-    endosteal error (rho_c is the porous cortex's apparent density)."""
+def test_rho_c_modes(osteoporotic):
     ph, img, peri, endo = osteoporotic
-    bp, bc, _ = cbm.buie_segmentation(img)
-    fit = cbm.cortical_bone_mapping(img, bp, rho_c="estimate", **CBM)
-    assert 650 < fit.rho_c < 850
-    _, _, c = fit.masks(img.shape)
-    s = slice(3, -3)
-    cort = peri & ~endo
-    assert dice(c[s], cort[s]) > dice(bc[s], cort[s]) + 0.05
+    bp, _, _ = cbm.buie_segmentation(img)
     pm = cbm.cortical_bone_mapping(img, bp, rho_c="profile_max", **CBM)
     assert pm.rho_c_node is not None and pm.rho_c_node.shape == (pm.n,)
     with pytest.raises(ValueError):
@@ -103,9 +106,13 @@ def test_neighbour_and_breaks_phantom():
     assert (lab == 2).any() and (peri[lab == 2]).all() and not endo[lab == 2].any()
     cortex = peri & ~endo & (lab == 0)
     assert img[lab == 2].mean() < 0.5 * img[cortex].mean()  # soft tissue in the break
-    # the paper's largest-bone pre-processing keeps the neighbour out at a 0.3 mm gap
+    # the paper's largest-bone pre-processing keeps the neighbour out at a 0.3 mm gap,
+    # and so does the hull's largest-component step
     bp, _, _ = cbm.buie_segmentation(img)
     assert bp[lab == 1].mean() < 0.05
+    assert cbm.hull_segmentation(img)[lab == 1].mean() < 0.05
+    # the hull spans the break; Buie may not
+    assert cbm.hull_segmentation(img)[lab == 2].all()
 
 
 def test_joint_phantom_truth():

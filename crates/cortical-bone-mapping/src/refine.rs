@@ -199,6 +199,11 @@ pub fn refine_segmentation<T: Voxel, U: Voxel, V: Voxel>(
                 converged = true;
                 break;
             }
+            if result.info.budget_exhausted {
+                // the fit itself did not converge: moving on it would only
+                // propagate an unreliable surface
+                break;
+            }
         }
         let shape = image.dim();
         let periosteal = result.surface.clone();

@@ -135,7 +135,7 @@ fn lobed_bone_with_gross_bumps_converges() {
     .1;
     let o = options(&ph, regularized(64, None));
     let r = refine_segmentation(img.view(), bad.view(), NO_SUB, &o, &RefineOptions::default()).unwrap();
-    assert!(r.converged, "{:?}", r.history);
+    assert!(r.converged, "{:?} {:?}", r.history, r.result.info);
     let after = dice(&r.periosteal_mask, &truth);
     assert!(after > 0.995, "dice {after}");
     for w in r.history.windows(2) {

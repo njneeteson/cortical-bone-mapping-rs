@@ -81,12 +81,20 @@ pub struct State {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Settings {
+    /// Maximum number of linear solves (accepted and rejected trial steps).
     pub max_iterations: usize,
     pub ftol: f64,
     pub gtol: f64,
     pub xtol: f64,
+    /// Maximum CG iterations per linear solve.
     pub cg_max_iterations: usize,
+    /// Relative CG residual reached near convergence. Solves stop at the
+    /// looser forcing term `min(0.1, sqrt(g))` (`g` the scaled gradient)
+    /// while far from it (inexact Newton).
     pub cg_tolerance: f64,
+    /// Maximum CG iterations over the whole solve: bounds the work when the
+    /// problem is badly posed (status `MaxIterations`).
+    pub cg_max_total: usize,
 }
 
 impl Default for Settings {
@@ -97,6 +105,7 @@ impl Default for Settings {
             gtol: 1e-6,
             xtol: 1e-10,
             cg_max_iterations: 200,
+            cg_max_total: 2000,
             cg_tolerance: 1e-3,
         }
     }
@@ -610,6 +619,9 @@ fn dotp(a: &[f64], b: &[f64]) -> f64 {
     det_sum(a.len(), |i| a[i] * b[i])
 }
 
+const STALL_WINDOW: usize = 10;
+const STALL_DECREASE: f64 = 1e-4;
+
 /// Solve the problem, updating `state` in place.
 pub fn solve(problem: &Problem, state: &mut State, settings: &Settings) -> SolveInfo {
     let lay = problem.layout();
@@ -660,9 +672,10 @@ pub fn solve(problem: &Problem, state: &mut State, settings: &Settings) -> Solve
     let mut trial = state.clone();
     let mut free = vec![true; nv];
     let mut hv = vec![0.0; nv];
+    // costs after the last accepted steps, for the stall test
+    let mut recent: std::collections::VecDeque<f64> = std::collections::VecDeque::from([ev.cost]);
 
     while iterations < settings.max_iterations {
-        iterations += 1;
         // Gauss–Newton diagonal for scaling, damping and the gradient test.
         let (fblocks, gblock) = problem.diag_blocks(&lay, &ev, &smooth_diag, &curv_diag);
         let bs = nfc * nfc;
@@ -693,9 +706,18 @@ pub fn solve(problem: &Problem, state: &mut State, settings: &Settings) -> Solve
             status = Status::Gtol;
             break;
         }
+        // inexact Newton (forcing term min(0.1, sqrt(|g|)) on the scaled
+        // gradient): loose solves far from the optimum, tight near it
+        let eta = gmax.sqrt().min(0.1).max(settings.cg_tolerance);
         // Inner loop: try steps with increasing damping until one is accepted.
+        // Every trial counts towards the iteration budget.
         let mut accepted = false;
         while !accepted {
+            if iterations >= settings.max_iterations || cg_total >= settings.cg_max_total {
+                unpack(&xv, state);
+                return finish(iterations, cg_total, Status::MaxIterations, &ev);
+            }
+            iterations += 1;
             let damp: Vec<f64> = diag.iter().map(|&d| mu * d.max(dfloor)).collect();
             let mut pf = fblocks.clone();
             for k in 0..ndof {
@@ -724,6 +746,9 @@ pub fn solve(problem: &Problem, state: &mut State, settings: &Settings) -> Solve
             let mut p = z.clone();
             let mut rz = dotp(&r, &z);
             for _ in 0..settings.cg_max_iterations {
+                if cg_total >= settings.cg_max_total {
+                    break;
+                }
                 cg_total += 1;
                 problem.hess_vec(&lay, &ev, &p, &mut hv);
                 hv.par_iter_mut()
@@ -741,7 +766,7 @@ pub fn solve(problem: &Problem, state: &mut State, settings: &Settings) -> Solve
                 r.par_iter_mut()
                     .zip(hv.par_iter())
                     .for_each(|(rv, &h)| *rv -= alpha * h);
-                if dotp(&r, &r).sqrt() <= settings.cg_tolerance * bnorm {
+                if dotp(&r, &r).sqrt() <= eta * bnorm {
                     break;
                 }
                 pre.apply(&r, &free, &mut z);
@@ -784,6 +809,16 @@ pub fn solve(problem: &Problem, state: &mut State, settings: &Settings) -> Solve
                 nu = 2.0;
                 if actual <= settings.ftol * prev {
                     return finish(iterations, cg_total, Status::Ftol, &ev);
+                }
+                // stall: the last STALL_WINDOW accepted steps together reduced
+                // the cost by less than STALL_DECREASE (relative). Happens when
+                // steps are cut by the bounds at many nodes (projected Newton).
+                recent.push_back(ev.cost);
+                if recent.len() > STALL_WINDOW {
+                    let old = recent.pop_front().unwrap();
+                    if old - ev.cost <= STALL_DECREASE * old {
+                        return finish(iterations, cg_total, Status::Ftol, &ev);
+                    }
                 }
             } else {
                 mu *= nu;

@@ -176,6 +176,10 @@ pub struct SolverOptions {
     pub xtol: f64,
     pub cg_max_iterations: usize,
     pub cg_tolerance: f64,
+    /// CG iterations allowed over one global solve (bounds the work on a
+    /// badly posed problem; the fit is then flagged in
+    /// [`FitInfo::budget_exhausted`]).
+    pub cg_max_total: usize,
 }
 
 impl Default for SolverOptions {
@@ -187,6 +191,7 @@ impl Default for SolverOptions {
             xtol: 1e-10,
             cg_max_iterations: 200,
             cg_tolerance: 1e-3,
+            cg_max_total: 2000,
         }
     }
 }
@@ -403,6 +408,8 @@ pub struct FitInfo {
     pub data_cost: f64,
     pub smoothing_cost: f64,
     pub curvature_cost: f64,
+    /// A global solve stopped on its iteration or CG budget.
+    pub budget_exhausted: bool,
     /// Wall time per stage (seconds).
     pub timings: Vec<(String, f64)>,
 }
@@ -676,6 +683,7 @@ fn global_settings(o: &Options) -> global::Settings {
         xtol: o.solver.xtol,
         cg_max_iterations: o.solver.cg_max_iterations,
         cg_tolerance: o.solver.cg_tolerance,
+        cg_max_total: o.solver.cg_max_total,
     }
 }
 
@@ -1090,4 +1098,5 @@ fn accumulate(info: &mut FitInfo, si: &global::SolveInfo) {
     info.smoothing_cost = si.smoothing_cost;
     info.curvature_cost = si.curvature_cost;
     info.converged = if si.status == Status::MaxIterations { 0.0 } else { 1.0 };
+    info.budget_exhausted |= si.status == Status::MaxIterations;
 }

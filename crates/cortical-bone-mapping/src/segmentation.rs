@@ -457,8 +457,138 @@ pub fn gaussian_truncated(m: &Array3<bool>, sigma: f64, r: [usize; 3]) -> Array3
     f
 }
 
+/// Options of [`hull_segmentation`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct HullOptions {
+    /// Bone threshold (image units; 320 mg HA/cm³ for calibrated HR-pQCT).
+    pub threshold: f64,
+    /// Binary median kernel (as Buie's step 3) to remove noise speckle.
+    pub median_kernel: [usize; 3],
+    /// Keep only the largest 3D component (removes a separate fibula/ulna).
+    pub largest_component: bool,
+}
+
+impl Default for HullOptions {
+    fn default() -> Self {
+        HullOptions {
+            threshold: 320.0,
+            median_kernel: [1, 3, 3],
+            largest_component: true,
+        }
+    }
+}
+
+/// A conservative periosteal segmentation: threshold, median, largest
+/// component, then the convex hull of every slice (along axis 0).
+///
+/// Unlike a closing, a hull cannot leak through cortical breaks or porous
+/// cortex into the marrow: it always contains the thresholded bone, so its
+/// only errors are outward ones over concave parts of the periosteum, the
+/// kind that model-driven refinement removes. It is a starting point for
+/// [`refine_segmentation`](crate::refine::refine_segmentation), not a
+/// segmentation in its own right.
+pub fn hull_segmentation<T: Voxel>(image: ArrayView3<T>, o: &HullOptions) -> Array3<bool> {
+    let mut m = Array3::from_elem(image.dim(), false);
+    Zip::from(&mut m)
+        .and(&image)
+        .par_for_each(|b, &v| *b = v.to_f64() >= o.threshold);
+    if o.median_kernel.iter().any(|&k| k > 1) {
+        m = binary_median(&m, o.median_kernel);
+    }
+    if o.largest_component {
+        m = largest_component(&m, false);
+    }
+    let mut out = Array3::from_elem(m.dim(), false);
+    out.axis_iter_mut(Axis(0))
+        .into_par_iter()
+        .zip(m.axis_iter(Axis(0)).into_par_iter())
+        .for_each(|(mut o, sl)| {
+            let hull = convex_hull(&row_extremes(&sl));
+            fill_convex(&hull, &mut o);
+        });
+    out
+}
+
+/// The leftmost and rightmost set pixel of every row, as (row, column)
+/// points: enough to determine the convex hull of a slice.
+fn row_extremes(sl: &ndarray::ArrayView2<bool>) -> Vec<(f64, f64)> {
+    let mut pts = Vec::new();
+    for (j, row) in sl.outer_iter().enumerate() {
+        let first = row.iter().position(|&b| b);
+        let last = row.iter().rposition(|&b| b);
+        if let (Some(a), Some(b)) = (first, last) {
+            pts.push((j as f64, a as f64));
+            if b != a {
+                pts.push((j as f64, b as f64));
+            }
+        }
+    }
+    pts
+}
+
+/// Andrew's monotone chain; counter-clockwise, without collinear points.
+fn convex_hull(pts: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    let mut p = pts.to_vec();
+    p.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    p.dedup();
+    if p.len() < 3 {
+        return p;
+    }
+    let cross = |o: (f64, f64), a: (f64, f64), b: (f64, f64)| (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0);
+    let mut h: Vec<(f64, f64)> = Vec::with_capacity(2 * p.len());
+    for pass in 0..2 {
+        let start = h.len();
+        let iter: Box<dyn Iterator<Item = &(f64, f64)>> =
+            if pass == 0 { Box::new(p.iter()) } else { Box::new(p.iter().rev()) };
+        for &q in iter {
+            while h.len() >= start + 2 && cross(h[h.len() - 2], h[h.len() - 1], q) <= 0.0 {
+                h.pop();
+            }
+            h.push(q);
+        }
+        h.pop();
+    }
+    h
+}
+
+/// Set the pixels whose centres lie in the convex polygon `hull` (inclusive).
+fn fill_convex(hull: &[(f64, f64)], out: &mut ndarray::ArrayViewMut2<bool>) {
+    if hull.is_empty() {
+        return;
+    }
+    let (_, nk) = out.dim();
+    let eps = 1e-9;
+    let jmin = hull.iter().map(|q| q.0).fold(f64::INFINITY, f64::min);
+    let jmax = hull.iter().map(|q| q.0).fold(f64::NEG_INFINITY, f64::max);
+    for j in (jmin.ceil() as usize)..=(jmax.floor() as usize) {
+        let y = j as f64;
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        let n = hull.len();
+        for e in 0..n {
+            let (a, b) = (hull[e], hull[(e + 1) % n]);
+            if (a.0 - y).abs() < eps {
+                lo = lo.min(a.1);
+                hi = hi.max(a.1);
+            }
+            if (a.0 - y) * (b.0 - y) < 0.0 {
+                let x = a.1 + (y - a.0) / (b.0 - a.0) * (b.1 - a.1);
+                lo = lo.min(x);
+                hi = hi.max(x);
+            }
+        }
+        if lo <= hi {
+            let k0 = (lo - eps).ceil().max(0.0) as usize;
+            let k1 = ((hi + eps).floor() as usize).min(nk - 1);
+            for k in k0..=k1 {
+                out[[j, k]] = true;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use ndarray::Array2;
     use super::*;
 
     fn brute_dilate(m: &Array3<bool>, k: [usize; 3]) -> Array3<bool> {
@@ -585,5 +715,46 @@ mod tests {
             .iter()
             .zip(res.cortical.iter().zip(res.trabecular.iter()))
             .all(|(&p, (&c, &t))| p == (c || t) && !(c && t)));
+    }
+
+    #[test]
+    fn hull_contains_the_bone_and_closes_breaks() {
+        // a ring with a wide gap, a speckle, a separate small disc
+        let (n0, n1, n2) = (3, 80, 80);
+        let img = Array3::from_shape_fn((n0, n1, n2), |(_, j, k)| {
+            let (y, x) = (j as f64 - 35.0, k as f64 - 35.0);
+            let r = (y * y + x * x).sqrt();
+            let ring = (20.0..25.0).contains(&r) && !(x > 15.0 && y.abs() < 8.0);
+            let disc = ((j as f64 - 72.0).powi(2) + (k as f64 - 72.0).powi(2)).sqrt() < 4.0;
+            let speckle = j == 2 && k == 70;
+            if ring || disc || speckle {
+                1000.0f32
+            } else {
+                0.0
+            }
+        });
+        let h = hull_segmentation(img.view(), &HullOptions::default());
+        let thr = img.mapv(|v| v >= 320.0);
+        for (t, (j, k)) in thr.indexed_iter().filter(|(_, &t)| t).map(|((_, j, k), t)| (t, (j, k))) {
+            let in_ring = ((j as f64 - 35.0).powi(2) + (k as f64 - 35.0).powi(2)).sqrt() < 26.0;
+            assert!(!*t || !in_ring || h[[1, j, k]], "ring pixel ({j},{k}) outside hull");
+        }
+        // the gap and the marrow are filled; the disc and the speckle are not included
+        assert!(h[[1, 35, 35]] && h[[1, 35, 57]]);
+        assert!(!h[[1, 72, 72]] && !h[[1, 2, 70]]);
+        // the hull of a disc is about the disc
+        let filled = h.index_axis(Axis(0), 1).iter().filter(|&&b| b).count() as f64;
+        let area = std::f64::consts::PI * 24.5f64.powi(2);
+        assert!((filled - area).abs() < 0.06 * area, "{filled} vs {area}");
+    }
+
+    #[test]
+    fn convex_hull_of_a_square_with_interior_points() {
+        let pts = vec![(0.0, 0.0), (0.0, 4.0), (4.0, 0.0), (4.0, 4.0), (2.0, 2.0), (0.0, 2.0)];
+        let h = convex_hull(&pts);
+        assert_eq!(h.len(), 4);
+        let mut out = Array2::from_elem((6, 6), false);
+        fill_convex(&h, &mut out.view_mut());
+        assert_eq!(out.iter().filter(|&&b| b).count(), 25);
     }
 }
