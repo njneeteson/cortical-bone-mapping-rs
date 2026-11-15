@@ -98,7 +98,7 @@ def test_presets():
 
 
 def test_neighbour_and_breaks_phantom():
-    ph = cbm.BonePhantom(dims=(8, 240, 240), noise=0.0, neighbour=(1.5, 0.5, 0.3, np.pi / 4),
+    ph = cbm.BonePhantom(dims=(8, 240, 240), noise=0.0, neighbour=(1.5, 0.5, 0.5, np.pi / 4),
                          breaks=[(2.0, 1.0, 0.24, 0.3)])
     img, peri, endo = ph.generate()
     lab = ph.labels()
@@ -106,7 +106,7 @@ def test_neighbour_and_breaks_phantom():
     assert (lab == 2).any() and (peri[lab == 2]).all() and not endo[lab == 2].any()
     cortex = peri & ~endo & (lab == 0)
     assert img[lab == 2].mean() < 0.5 * img[cortex].mean()  # soft tissue in the break
-    # the paper's largest-bone pre-processing keeps the neighbour out at a 0.3 mm gap,
+    # the paper's largest-bone pre-processing keeps the neighbour out at a 0.5 mm gap,
     # and so does the hull's largest-component step
     bp, _, _ = cbm.buie_segmentation(img)
     assert bp[lab == 1].mean() < 0.05
@@ -116,7 +116,7 @@ def test_neighbour_and_breaks_phantom():
 
 
 def test_joint_phantom_truth():
-    ph = cbm.JointPhantom(dims=(60, 120, 120), radius=3.0, noise=0.0)
+    ph = cbm.JointPhantom(dims=(100, 120, 120), radius=3.0, joint_space=2.0, joint_level=0.4, noise=0.0)
     img, peri, endo = ph.generate()
     assert set(np.unique(peri)) == {0, 1, 2}
     assert ((endo > 0) <= (peri > 0)).all()

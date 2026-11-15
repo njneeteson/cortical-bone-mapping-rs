@@ -816,11 +816,14 @@ class BonePhantom:
       ``(radius, cortical thickness, gap, angle)``: circular, solid cortex,
       same trabecular pattern, placed so that the gap between the periosteal
       surfaces along direction ``angle`` (radians, 0 = array axis 1) is
-      ``gap`` in every slice;
+      ``gap`` in every slice. Real neighbours are always separated by some
+      soft tissue (typically 1-5 mm), so ``gap`` should be positive;
     * optionally cortical ``breaks``, each ``(angle, width, z_center, length)``:
-      the full cortical depth replaced by soft tissue over a periosteal arc of
-      length ``width`` for ``|z - z_center| < length / 2``. The true
-      periosteal surface spans the break.
+      a channel of soft tissue through the full cortical depth, elliptical on
+      the periosteal surface with axes ``width`` (along the arc, centred on
+      ``angle``) and ``length`` (along the axis, centred on ``z_center``).
+      Realistic HR-pQCT breaks are ~0.3-1.2 mm across. The true periosteal
+      surface spans the break.
 
     Densities: ``rho_soft`` outside, ``rho_bone`` for cortical and
     trabecular tissue, ``rho_marrow`` in marrow and pores. The truth masks
@@ -892,7 +895,7 @@ class BonePhantom:
 @dataclass
 class JointPhantom:
     """A knee-joint phantom: the articular ends of the tibia (below) and the
-    femur (above, along array axis 0) across a narrow joint space.
+    femur (above, along array axis 0) across a cartilage-filled joint space.
 
     Each bone is a star-shaped cylinder (footprint ``radius``, femur
     ``femur_scale`` larger) cut by its articular surface, with the rim
@@ -909,16 +912,19 @@ class JointPhantom:
 
     This is a scaled-down joint (a real tibial plateau is ~70 mm wide): it
     reproduces the local geometry of the contact region in a small volume.
+    The default joint space, 4 mm, is a healthy bone-to-bone distance (medial
+    radiographic joint space width ~4.8 mm in women, ~5.7 mm in men); ~2 mm
+    is moderate osteoarthritis.
     """
 
-    dims: Tuple[int, int, int] = (100, 200, 200)
+    dims: Tuple[int, int, int] = (180, 200, 200)
     spacing: Triple = (0.0607, 0.0607, 0.0607)
     radius: float = 5.0
     femur_scale: float = 1.05
     shape_harmonics: int = 5
     shape_amplitude: float = 0.08
-    joint_level: float = 0.45
-    joint_space: float = 0.4
+    joint_level: float = 0.35
+    joint_space: float = 4.0
     contact_offset: Tuple[float, float] = (0.8, -0.5)
     tibia_curvature: float = 20.0
     femur_curvature: float = 9.0

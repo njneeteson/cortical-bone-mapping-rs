@@ -340,12 +340,13 @@ profiles cross the cortex (within the sampled range). Two are provided:
   hull of every slice. The hull cannot leak: it always contains the
   thresholded bone, so its errors are outward bulges over concave parts of
   the periosteum, which refinement pulls in. Its limits are concavities
-  deeper than the inward sampling range, and bones that touch at the
-  threshold (they become one component, and one hull per slice).
+  deeper than the inward sampling range, and two bones joined at the
+  threshold across a thin soft-tissue gap (they become one component, and
+  one hull per slice).
 * **`buie_segmentation`**: the dual-threshold method of Buie et al. (2007),
   as the standard-of-care reference. It is usually close, but it fails
-  topologically on wide cortical breaks and very porous cortices (the outer
-  region floods the marrow); see [segmentation](segmentation.md) for its
+  topologically on cortical breaks of ~1.2 mm and more (the marrow mask
+  leaks through the break into the cortex); see [segmentation](segmentation.md) for its
   implementation and the comparison.
 
 ## Memory and performance design

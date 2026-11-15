@@ -83,7 +83,10 @@ pub struct BonePhantom {
 /// A second, simpler bone beside the main one: a circular cross-section with
 /// a solid cortex and the same trabecular pattern, placed so that the gap
 /// between the two periosteal surfaces along the direction `angle` is `gap`
-/// in every slice (it follows the main bone's surface).
+/// in every slice (it follows the main bone's surface). In vivo there is
+/// always soft tissue between the radius and ulna or the tibia and fibula
+/// (interosseous membrane, joint cartilage), typically 1–5 mm at the
+/// standard HR-pQCT sites; `gap` should be positive.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NeighbourBone {
     pub radius: f64,
@@ -93,9 +96,15 @@ pub struct NeighbourBone {
     pub angle: f64,
 }
 
-/// A cortical break: the full cortical depth replaced by soft tissue over an
-/// arc of periosteal length `width` around `angle`, for axial positions
-/// within `length / 2` of `z_center` (physical units).
+/// A cortical break: a channel of soft tissue through the full cortical
+/// depth, elliptical on the periosteal surface with axes `width` (along the
+/// arc, centred on `angle`) and `length` (along the axis, centred on
+/// `z_center`), in physical units. Real breaks in HR-pQCT are small: the
+/// detectable ones are ≳ 0.25 mm across, healthy finger joints show a median
+/// break volume of ~0.2 mm³ and rheumatoid arthritis ~0.5 mm³ (Peters et al.
+/// 2017, 2019), i.e. diameters of roughly 0.3–1.2 mm through a ~0.5–1 mm
+/// cortex. At the radius and tibia the analogues are transcortical vascular
+/// foramina and, in thin osteoporotic cortices, local loss of the shell.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CorticalBreak {
     pub angle: f64,
@@ -105,7 +114,9 @@ pub struct CorticalBreak {
 }
 
 impl Default for BonePhantom {
-    /// A small distal-tibia-like segment at HR-pQCT resolution.
+    /// A small long-bone segment at HR-pQCT resolution (scaled down: a real
+    /// distal radius has a periosteal radius of ~8.5–10.5 mm, a distal tibia
+    /// ~13.5–16.5 mm).
     fn default() -> Self {
         BonePhantom {
             dims: (32, 192, 192),
@@ -380,7 +391,9 @@ impl BonePhantom {
         let tau = 2.0 * std::f64::consts::PI;
         self.breaks.iter().any(|b| {
             let dth = (th - b.angle + 0.5 * tau).rem_euclid(tau) - 0.5 * tau;
-            (dth * big_r).abs() < 0.5 * b.width && (z - b.z_center).abs() < 0.5 * b.length
+            let u = dth * big_r / (0.5 * b.width);
+            let v = (z - b.z_center) / (0.5 * b.length);
+            u * u + v * v < 1.0
         })
     }
 
@@ -577,7 +590,7 @@ mod tests {
 
     #[test]
     fn neighbour_and_breaks() {
-        let gap = 0.3;
+        let gap = 0.5;
         let ph = BonePhantom {
             dims: (6, 200, 200),
             noise: 0.0,

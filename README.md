@@ -128,11 +128,14 @@ See [method](docs/method.md#cortical-density).
 * **Accuracy.** On smooth phantoms the spatially constrained methods reduce
   thickness error 1.5–5× relative to the local fit
   ([examples](docs/examples.md)).
-* **Automatic segmentation.** On realistic phantoms, hull → CBM matches Buie
-  where Buie is right, corrects its −0.13 mm thickness bias on a thin porous
-  cortex (cortex Dice 0.82 → 0.93), and does not leak through cortical
-  breaks. Nearby bones within the sampling range, touching bones and the knee
-  joint remain hard ([segmentation](docs/segmentation.md)).
+* **Automatic segmentation.** On phantoms built from published HR-pQCT
+  values, hull → CBM refinement with the curvature penalty is as good as or
+  better than Buie on every shaft (thickness RMSE 40–85 µm). It corrects
+  Buie's −0.13 mm bias on a thin porous cortex (cortex Dice 0.81 → 0.93) and
+  bridges a 1.2 mm cortical break that makes Buie's marrow leak into the
+  cortex. Still hard: a neighbouring bone within the outside sampling range
+  (0.5 mm gap) and the knee's subchondral plate
+  ([segmentation](docs/segmentation.md)).
 * **Speed and memory.** Against the original Python implementation (Bonelab)
   on the same profiles, the local fit is ~420× faster, multigrid ~45× and the
   regularised fit ~10–20× (against a converged solve), with equal or better
@@ -201,7 +204,7 @@ See [method](docs/method.md#cortical-density).
 cargo test --workspace && cargo clippy --all-targets -- -D warnings
 cd python && maturin develop --release && pytest tests
 python docs/scripts/make_figures.py                 # docs/images
-python docs/scripts/segmentation_experiment.py      # docs/segmentation.md results (~50 min)
+python docs/scripts/segmentation_experiment.py      # docs/segmentation.md results (~70 min)
 cargo run --release --example benchmark -p cortical-bone-mapping -- --json docs/benchmark_results.json
 python docs/scripts/compare_scipy.py
 python docs/scripts/compare_bonelab.py /path/to/Bonelab

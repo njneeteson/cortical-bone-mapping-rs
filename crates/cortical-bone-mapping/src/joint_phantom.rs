@@ -1,6 +1,6 @@
 //! A knee-joint phantom: the articular ends of two bones (proximal tibia
 //! below, distal femur above, along array axis 0) facing each other across a
-//! narrow joint space.
+//! joint space (cartilage).
 //!
 //! Each bone is the intersection of a star-shaped cylinder (its in-plane
 //! footprint, a random harmonic curve) and a half-space bounded by its
@@ -24,8 +24,11 @@
 //!
 //! The phantom is a scaled-down joint (a real tibial plateau is ~70 mm wide):
 //! it reproduces the local geometry of the contact region (plate, curvature,
-//! a sub-millimetre joint space, opposing bone within the sampling range) in
-//! a volume small enough for tests. Ground truth is exact as for
+//! a cartilage-filled joint space) in a volume small enough for tests. The
+//! default joint space, 4 mm, is a healthy bone-to-bone distance (radiographic
+//! medial joint space width ~4.8 mm in women and ~5.7 mm in men; tibial
+//! cartilage ~1.5 mm thick); narrowing to ~2 mm is moderate osteoarthritis,
+//! and bone-on-bone contact only occurs in end-stage disease. Ground truth is exact as for
 //! [`BonePhantom`](crate::bone_phantom::BonePhantom).
 
 use ndarray::Array3;
@@ -85,14 +88,14 @@ pub struct JointPhantom {
 impl Default for JointPhantom {
     fn default() -> Self {
         JointPhantom {
-            dims: (100, 200, 200),
+            dims: (180, 200, 200),
             spacing: [0.0607; 3],
             radius: 5.0,
             femur_scale: 1.05,
             shape_harmonics: 5,
             shape_amplitude: 0.08,
-            joint_level: 0.45,
-            joint_space: 0.4,
+            joint_level: 0.35,
+            joint_space: 4.0,
             contact_offset: [0.8, -0.5],
             tibia_curvature: 20.0,
             femur_curvature: 9.0,
@@ -356,8 +359,10 @@ mod tests {
     #[test]
     fn joint_geometry_and_truth() {
         let ph = JointPhantom {
-            dims: (60, 120, 120),
+            dims: (100, 120, 120),
             radius: 3.0,
+            joint_space: 2.0,
+            joint_level: 0.4,
             noise: 0.0,
             ..JointPhantom::default()
         };

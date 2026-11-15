@@ -5,10 +5,13 @@ Every pipeline starts from the image alone, on realistic phantoms with exact
 ground truth (60.7 um voxels, noise sigma = 80):
 
   healthy, osteoporotic, thick      long-bone shafts (cbm.BonePhantom)
-  neighbour 1.0 / 0.3 / 0 mm        a fibula / ulna at that gap
-  breaks                            cortical breaks 0.3-2.4 mm wide
-  knee, knee narrow                 tibia / femur contact region
-                                    (cbm.JointPhantom), joint space 1.0 / 0.3 mm
+  neighbour 2.0 / 1.0 / 0.5 mm      an ulna-like bone at that gap (soft tissue between)
+  breaks                            four round cortical breaks 0.3-1.2 mm across
+  knee, knee OA                     tibia / femur contact region
+                                    (cbm.JointPhantom), joint space 4.5 / 2.0 mm
+
+The shafts are distal-radius sized (periosteal radius 8.5 mm, ~230 mm^2) with
+HR-pQCT (XtremeCT II) values: see docs/segmentation.md#phantoms.
 
 Pipelines:
 
@@ -67,22 +70,28 @@ DOCS = Path(__file__).resolve().parents[1]
 H = 0.0607
 MARGIN = 3  # slices excluded at each end
 NOISE = 80.0
+SHAFT_RADIUS = 8.5  # mm: a distal radius (Tt.Ar ~ 230 mm^2)
 
 HEALTHY = dict(thickness_mean=0.9, bvtv=0.2, endo_bvtv=0.4, porosity=0.03, endo_porosity=0.15, rho_bone=1050.0)
 SHAFTS = {
     "healthy": HEALTHY,
-    "osteoporotic": dict(thickness_mean=0.45, thickness_min=0.1, bvtv=0.12, endo_bvtv=0.35, porosity=0.06,
+    "osteoporotic": dict(thickness_mean=0.45, thickness_min=0.2, bvtv=0.12, endo_bvtv=0.35, porosity=0.06,
                          endo_porosity=0.35, rho_bone=850.0),
     "thick": dict(thickness_mean=1.5, bvtv=0.28, endo_bvtv=0.5, porosity=0.02, endo_porosity=0.1, rho_bone=1100.0),
-    "neighbour 1.0 mm": dict(HEALTHY, dims=(40, 240, 240), neighbour=(1.5, 0.5, 1.0, np.pi / 4)),
-    "neighbour 0.3 mm": dict(HEALTHY, dims=(40, 240, 240), neighbour=(1.5, 0.5, 0.3, np.pi / 4)),
-    "neighbour 0 mm": dict(HEALTHY, dims=(40, 240, 240), neighbour=(1.5, 0.5, 0.0, np.pi / 4)),
-    "breaks": dict(HEALTHY, breaks=[(0.3, 0.3, 1.2, 1.2), (1.9, 0.8, 1.2, 1.2), (3.5, 1.6, 1.2, 1.2),
-                                    (5.0, 2.4, 1.2, 1.2)]),
+    # an ulna-like neighbour (radius 3.5 mm, cortex 0.8 mm); there is always soft tissue between
+    "neighbour 2.0 mm": dict(HEALTHY, dims=(40, 500, 500), neighbour=(3.5, 0.8, 2.0, np.pi / 4)),
+    "neighbour 1.0 mm": dict(HEALTHY, dims=(40, 480, 480), neighbour=(3.5, 0.8, 1.0, np.pi / 4)),
+    "neighbour 0.5 mm": dict(HEALTHY, dims=(40, 470, 470), neighbour=(3.5, 0.8, 0.5, np.pi / 4)),
+    # round breaks spanning the sizes seen on HR-pQCT: detection limit ~0.25 mm; median
+    # volumes ~0.2 mm^3 (healthy) and ~0.5 mm^3 (rheumatoid arthritis), i.e. ~0.3-1.2 mm across
+    "breaks": dict(HEALTHY, breaks=[(0.3, 0.3, 1.2, 0.3), (1.9, 0.5, 1.2, 0.5), (3.5, 0.8, 1.2, 0.8),
+                                    (5.0, 1.2, 1.2, 1.2)]),
 }
 KNEES = {
-    "knee": dict(joint_space=1.0, rho_bone=950.0),
-    "knee narrow": dict(joint_space=0.3, rho_bone=950.0),
+    # bone-to-bone distance at the contact point: healthy (~4.8-5.7 mm radiographic JSW) and
+    # moderate osteoarthritis; the joint space holds cartilage
+    "knee": dict(dims=(220, 200, 200), joint_level=0.38, joint_space=4.5, rho_bone=950.0),
+    "knee OA": dict(dims=(180, 200, 200), joint_level=0.45, joint_space=2.0, rho_bone=950.0),
 }
 FITS = {
     "local": dict(method="local"),
@@ -96,7 +105,7 @@ REFINES = {
     "refine+curvature": FITS["reg+curvature"],
 }
 SAMPLING = dict(outside=1.0, inside=3.0)
-FIGURE = ("osteoporotic", "neighbour 0 mm", "breaks", "knee")
+FIGURE = ("osteoporotic", "neighbour 0.5 mm", "breaks", "knee OA")
 
 
 def options(site):
@@ -190,9 +199,9 @@ class Shaft:
 
     def __init__(self, name, kw):
         kw = dict(kw)
-        dims = kw.pop("dims", (40, 200, 200))
+        dims = kw.pop("dims", (40, 360, 360))
         self.name = name
-        self.ph = cbm.BonePhantom(dims=dims, noise=NOISE, seed=7, **kw)
+        self.ph = cbm.BonePhantom(dims=dims, radius=SHAFT_RADIUS, noise=NOISE, seed=7, **kw)
         self.img, self.tp, self.te = self.ph.generate()
         self.labels = self.ph.labels()
         self.tc = self.tp & ~self.te & (self.labels != 2)
@@ -234,7 +243,7 @@ class Knee(Shaft):
 
     def __init__(self, name, kw):
         self.name = name
-        self.ph = cbm.JointPhantom(dims=(140, 200, 200), joint_level=0.5, noise=NOISE, seed=5, **kw)
+        self.ph = cbm.JointPhantom(noise=NOISE, seed=5, **kw)
         self.img, tp, te = self.ph.generate()
         self.tp, self.te = tp > 0, te > 0
         self.tc = self.tp & ~self.te
