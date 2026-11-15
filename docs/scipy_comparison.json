@@ -2,8 +2,8 @@
   {
     "method": "local",
     "nodes": 7392,
-    "rust_time": 0.30788880004547536,
-    "scipy_time": 6.575976422337815,
+    "rust_time": 0.41965549997985363,
+    "scipy_time": 10.03773281256482,
     "scipy_time_extrapolated_from": 1000,
     "rust_rmse": 0.01982764922930728,
     "scipy_rmse": 0.020066114907291575,
@@ -12,20 +12,20 @@
   {
     "method": "regularized k=64",
     "nodes": 7392,
-    "rust_time": 0.5237615999649279,
-    "scipy_time": 9.6340861999779,
-    "scipy_peak_bytes": 108313637,
-    "scipy_iterations": 234,
-    "rust_cost": 2920.543315779171,
-    "scipy_cost": 2920.5433266406776,
-    "rust_rmse": 0.015179591178465734,
-    "scipy_rmse": 0.015179994175605995
+    "rust_time": 0.66694040002767,
+    "scipy_time": 9.912667499971576,
+    "scipy_peak_bytes": 108311172,
+    "scipy_iterations": 214,
+    "rust_cost": 2920.5452669940473,
+    "scipy_cost": 2920.5452818581016,
+    "rust_rmse": 0.01517951716647051,
+    "scipy_rmse": 0.015179591154520743
   },
   {
     "method": "local",
     "nodes": 32736,
-    "rust_time": 0.545507800008636,
-    "scipy_time": 29.222569516830145,
+    "rust_time": 0.5758849999983795,
+    "scipy_time": 30.204302515408024,
     "scipy_time_extrapolated_from": 1000,
     "rust_rmse": 0.019341031028982693,
     "scipy_rmse": 0.020093727305239884,
@@ -34,13 +34,13 @@
   {
     "method": "regularized k=64",
     "nodes": 32736,
-    "rust_time": 0.9684698000201024,
-    "scipy_time": 65.60820860002423,
-    "scipy_peak_bytes": 502177714,
-    "scipy_iterations": 340,
-    "rust_cost": 2842.3842786350433,
-    "scipy_cost": 2842.384332502302,
-    "rust_rmse": 0.015324858259849911,
-    "scipy_rmse": 0.015324914338057112
+    "rust_time": 0.8929301000316627,
+    "scipy_time": 65.19747369998368,
+    "scipy_peak_bytes": 502177347,
+    "scipy_iterations": 330,
+    "rust_cost": 2842.385714774208,
+    "scipy_cost": 2842.3857598844797,
+    "rust_rmse": 0.015324799905210774,
+    "scipy_rmse": 0.015324124366934115
   }
 ]

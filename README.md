@@ -1,101 +1,33 @@
 # cortical-bone-mapping-rs
 
 Cortical bone mapping (CBM) in Rust, with Python bindings: model-based
-measurement of cortical thickness from CT and HR-pQCT images, after
+measurement of cortical thickness, and automatic segmentation of the
+periosteal and endosteal surfaces, from CT and HR-pQCT images.
 
-> G. M. Treece, A. H. Gee, P. M. Mayhew, K. E. S. Poole, *High resolution
-> cortical bone thickness measurement from clinical CT data*, Medical Image
-> Analysis 14(3):276–290, 2010; and G. M. Treece, A. H. Gee, *Cortical Bone
-> Mapping: Measurement and Statistical Analysis of Localised Skeletal
-> Changes*, Curr. Osteoporos. Rep. 16:617–625, 2018,
-> [doi:10.1007/s11914-018-0475-3](https://doi.org/10.1007/s11914-018-0475-3)
-
-with the global multigrid and spatially regularised fits of
-
-> N. J. Neeteson, S. K. Boyd, *Advancing Cortical Bone Mapping with global
-> optimization*, Computers in Biology and Medicine, 2025,
-> [doi:10.1016/j.compbiomed.2025.110636](https://doi.org/10.1016/j.compbiomed.2025.110636)
-
-and two extensions: a **curvature penalty** on the fitted surfaces, and
-**model-driven segmentation refinement** that snaps a poor periosteal
-segmentation onto the fitted periosteal surface.
-
-![A bad segmentation (red) tightening onto the periosteum](docs/images/refinement.gif)
-
-*Segmentation refinement on a phantom: the input mask is dilated by 0.45 mm
-with 7-lobed bumps. Left, a slice with the segmentation (red) and the true
-periosteum (green, dashed). Right, the surface coloured by its distance from
-the true periosteum.*
-
-Given a grey-scale image and a binary segmentation of the bone (1 inside the
-periosteal surface), CBM samples a density profile along the inward normal
-at every vertex of the outer surface and fits a blurred three-level step
-model. The result is, at every surface point, a normal and the fitted
-parameters: cortical **thickness** `t`, the position `m` of the cortical
-mid-line along the normal, the blur `σ`, and the soft-tissue and trabecular
-densities `ρs`, `ρb`. The cortical density `ρc` is fixed.
+CBM samples a density profile along the inward normal at every vertex of
+the bone's outer surface and fits a blurred three-level step model (soft
+tissue, cortex, trabecular bone). At every surface point the result is the
+cortical **thickness** `t`, the position `m` of the cortical mid-line, the
+blur `σ`, and the soft-tissue and trabecular densities `ρs`, `ρb`; the
+cortical density `ρc` is fixed or estimated from the image.
 
 ![Profile fit](docs/images/profile_fit.png)
 
-Further documentation:
+This crate implements
 
-* **[docs/method.md](docs/method.md)**: the model, every method and solver,
-  the extensions, the memory/performance design, and the deliberate
-  differences from the original implementations.
-* **[docs/examples.md](docs/examples.md)**: accuracy of every method on
-  phantoms, noise sweeps, the curvature penalty, and segmentation refinement.
-* **[docs/performance.md](docs/performance.md)**: run time and memory, and
-  comparisons with the original Python implementation (Bonelab) and with SciPy.
-* **[docs/buie.md](docs/buie.md)**: Buie's dual-threshold segmentation
-  (implemented from the 2007 paper), and an experiment on realistic bone
-  phantoms: CBM fitted to a Buie segmentation cuts the endosteal error of a
-  thin porous cortex from 134 to 39 µm (cortex Dice 0.78 → 0.94).
+* the original method of Treece et al. (2010) (one fit per node), with fixed,
+  PSF-based or estimated blur;
+* the global **multigrid** and spatially **regularised** fits of Neeteson &
+  Boyd (2025), with a much faster solver;
+* two extensions: a **curvature penalty** on the fitted surfaces, and
+  **segmentation refinement**, which moves a rough periosteal segmentation
+  onto the fitted periosteum until it stops moving.
 
-## Features
+![A rough segmentation (red) tightening onto the periosteum](docs/images/refinement.gif)
 
-* **Methods.**
-  * `local`: an independent fit per node (Treece et al.).
-  * `multigrid`: `m, t, σ` on control points, refined coarse to fine (Neeteson & Boyd).
-  * `regularized`: per-node `m, t, σ` with spatial regularisation (Neeteson & Boyd).
-* **Blur handling.** `σ` can be free, fixed, given by a Gaussian PSF
-  (direction-dependent, as in Treece et al.), or estimated as a PSF from the
-  data (isotropic, axial or anisotropic).
-* **Curvature penalty (new).** Penalises curvature that the fit adds to the
-  periosteal and endosteal surfaces (`"change"`, which leaves bone shape and
-  uniform offsets free), or absolute curvature above a threshold
-  (`"excess"`). It uses a scale-controlled point-cloud Laplacian or the
-  cotangent Laplacian, and can be used alone or with the smoothing term.
-* **Buie dual threshold.** Segmentation after Buie et al. (2007), usable as
-  the starting segmentation (`cbm.buie_segmentation`).
-* **Realistic phantoms.** `cbm.BonePhantom` has an irregular, axially
-  varying shape and thickness, trabeculae, cortical pores and an
-  endocortical transition zone, optionally a neighbouring fibula / ulna and
-  cortical breaks. `cbm.JointPhantom` is the contact region of a knee
-  (tibial plateau and femoral condyle across a joint space). Both have exact
-  ground truth along any line.
-* **Segmentation refinement (new).** An under-relaxed fixed-point iteration
-  that moves the surface to the fitted periosteal edge and refits until it
-  stabilises. It returns refined periosteal, endosteal and cortical masks.
-* **Fast and frugal.**
-  * Bounded Levenberg–Marquardt with analytic Jacobians for the local fits.
-  * Matrix-free Gauss–Newton / PCG for the global fits.
-  * Multithreaded, with the image read in place in its own dtype.
-  * `f32` profiles, and compact sparse operators built without temporary
-    copies.
-  * Against the original Python implementation (Bonelab) on the same profiles: the
-    local fit is ~440× faster, multigrid ~50× and regularised ~12× against
-    Bonelab's defaults, which stop early (~10–20× against a converged
-    Bonelab solve), with equal or better accuracy. The regularised fit
-    is ~70× faster than a converged SciPy L-BFGS-B solve of the same
-    objective and reaches the same optimum (see
-    [performance](docs/performance.md)).
-* **Reproducible.** Results are bitwise identical across runs and thread counts.
-* **Tested.**
-  * Analytic gradients are checked against finite differences.
-  * The local fit is compared with SciPy `least_squares`.
-  * Every method is tested for accuracy on phantoms with known geometry,
-    including one built independently with SciPy.
-  * Property tests and refinement convergence tests.
+*Refinement on a phantom whose input mask is dilated by 0.45 mm with 7-lobed
+bumps. Left, a slice with the segmentation (red) and the true periosteum
+(green, dashed); right, the surface coloured by its distance from the truth.*
 
 ## Install
 
@@ -103,15 +35,29 @@ Further documentation:
 pip install ./python          # builds the Rust extension (needs a Rust toolchain)
 ```
 
-## Python
+## Usage
+
+From the image alone, an automatic segmentation and a thickness map
+(see [docs/segmentation.md](docs/segmentation.md)):
 
 ```python
 import cortical_bone_mapping_rs as cbm
 
+start = cbm.hull_segmentation(image)             # threshold 320 + per-slice convex hull
+options = cbm.Options.preset("radius_tibia", rho_c="estimate")
+rr = cbm.refine_segmentation(image, start, options=options,
+                             curvature="change", curvature_weight=1.0)
+rr.periosteal_mask, rr.endosteal_mask, rr.cortical_mask
+rr.result.thickness
+```
+
+Thickness on a given segmentation (1 inside the periosteal surface):
+
+```python
 res = cbm.cortical_bone_mapping(
     image, mask, spacing=(0.0607, 0.0607, 0.0607),  # array-axis order (z, y, x)
     method="regularized",           # "local" | "multigrid" | "regularized"
-    normal_constraint="in_plane",   # e.g. transverse-plane normals for radius/tibia
+    normal_constraint="in_plane",   # transverse-plane normals for radius/tibia
     sub_mask=None,                  # optionally restrict where thickness is reported
 )
 res.points, res.normals          # (N, 3) surface nodes and inward normals
@@ -122,11 +68,11 @@ res.save_vtk("thickness.vtk")    # or res.to_pyvista()
 peri, endo, cortex = res.masks(image.shape)
 ```
 
-Every option (see `help(cbm.Options)`) can be passed as a keyword or through
-an `Options` object. Some examples:
+Every option (`help(cbm.Options)`) can be passed as a keyword or through an
+`Options` object:
 
 ```python
-# Treece-style fixed blur estimated as an axial PSF
+# Treece-style fixed blur, estimated as an axial PSF
 cbm.cortical_bone_mapping(image, mask, spacing, sigma="estimate_psf", psf_model="axial", psf_axis=0)
 
 # multigrid with control-point spacings in mm
@@ -134,85 +80,131 @@ cbm.cortical_bone_mapping(image, mask, spacing, method="multigrid", multigrid_sp
 
 # curvature penalty, alone or with the smoothing term
 cbm.cortical_bone_mapping(image, mask, spacing, method="regularized",
-                          reg_lambda=0.0, curvature="change", curvature_weight=1.0,
-                          curvature_scale=0.25)
-
-# refine a poor segmentation
-rr = cbm.refine_segmentation(image, bad_mask, spacing, method="regularized", relaxation=0.5)
-rr.periosteal_mask, rr.endosteal_mask, rr.cortical_mask, rr.history
+                          reg_lambda=0.0, curvature="change", curvature_weight=1.0)
 ```
 
 Images may be `float32/64`, `int8/16/32` or `uint8/16/32` and are not copied.
-Synthetic phantoms with known cortical geometry are available as
-`cbm.Phantom` (simple shells), `cbm.BonePhantom` (long bones, optionally with
-a neighbouring bone and cortical breaks) and `cbm.JointPhantom` (knee).
+Also available: `cbm.buie_segmentation` (Buie et al. 2007, implemented from
+the paper), and phantoms with exact ground truth: `cbm.Phantom` (smooth
+shells), `cbm.BonePhantom` (realistic long bones, optionally with a
+neighbouring fibula/ulna and cortical breaks) and `cbm.JointPhantom` (the
+contact region of a knee).
 
-## Rust
+From Rust:
 
 ```rust
-use cortical_bone_mapping::{run, Geometry, Method, NormalConstraint, Options, SamplingOptions};
+use cortical_bone_mapping::{run, Options, Site};
 
-let opts = Options {
-    geometry: Geometry::new([0.0607; 3]),
-    sampling: SamplingOptions { normal_constraint: NormalConstraint::InPlane(0), ..Default::default() },
-    method: Method::regularized(),
-    ..Default::default()
-};
+let opts = Options::preset(Site::RadiusTibia, 0.0607);
 let res = run(image.view(), mask.view(), None::<ndarray::ArrayView3<u8>>, &opts)?;
 let t = res.thickness();
 ```
 
-Run `cargo run --release --example phantom` for all methods on a phantom,
-`--example refine` for segmentation refinement, and `--example benchmark`
-for timings with peak memory.
+`cargo run --release --example phantom` runs every method on a phantom,
+`--example refine` shows refinement, and `--example benchmark` reports
+timings and peak memory.
 
-## Accuracy at a glance
+## Parameters
 
-On a 0.1 mm cylinder phantom (thickness 0.8 ± 0.3 mm, PSF 0.12 mm, noise
-σ = 120 on a 50/1000/250 density scale), as thickness RMSE:
+`cbm.Options.preset("radius_tibia")` and `preset("knee")` give the parameter
+sets of Table 1 of Neeteson & Boyd (2025): Taubin smoothing (100 iterations,
+pass-band 0.1 or 0.01), sampling 5 mm outside and 15 mm inside, profile
+smoothing σ = 3 samples, normals in the transverse plane (radius & tibia) or
+along the scan axis (knee), `λ = 1`, `σ_reg = 1.942 mm` (32 voxels), 500 or
+1000 regularisation neighbours, multigrid spacings from 128 or 256 down to
+16 voxels. Array axis 0 is the scan axis; overrides are keywords. The plain
+defaults use the same model guesses and bounds with generic sampling (2 mm
+outside, 4 mm inside).
+
+**Cortical density.** `ρc` is never fitted. Give it (`rho_c=1000`, Table 1),
+estimate it from the image (`rho_c="estimate"`), or take each node's profile
+maximum (`rho_c="profile_max"`, what the original Python implementation does
+when no density is given). On realistic phantoms the estimate is the most
+robust: the per-node maximum overestimates thin-cortex thickness by ~0.2 mm.
+See [method](docs/method.md#cortical-density).
+
+## Results at a glance
+
+* **Accuracy.** On smooth phantoms the spatially constrained methods reduce
+  thickness error 1.5–5× relative to the local fit
+  ([examples](docs/examples.md)).
+* **Automatic segmentation.** On realistic phantoms, hull → CBM matches Buie
+  where Buie is right, corrects its −0.13 mm thickness bias on a thin porous
+  cortex (cortex Dice 0.82 → 0.93), and does not leak through cortical
+  breaks. Nearby bones within the sampling range, touching bones and the knee
+  joint remain hard ([segmentation](docs/segmentation.md)).
+* **Speed and memory.** Against the original Python implementation (Bonelab)
+  on the same profiles, the local fit is ~420× faster, multigrid ~45× and the
+  regularised fit ~10–20× (against a converged solve), with equal or better
+  accuracy; 134k nodes take 2–22 s and 0.1–0.75 GB
+  ([performance](docs/performance.md)).
 
 ![Methods on a noisy phantom](docs/images/methods_comparison.png)
 
-## Defaults and presets
+## Documentation
 
-The model defaults (initial guesses and bounds, `ρc = 1000`, residual boost
-10, regularisation `λ = 1`, `σ_reg = 1.942 mm` (32 voxels), 500 neighbours,
-multigrid spacings of 128/64/32/16 voxels of 60.7 µm) follow Table 1 of
-Neeteson & Boyd (2025) for the radius and tibia. Sampling defaults (2 mm
-outside, 4 mm inside, one voxel spacing, no profile smoothing) are generic.
-All lengths are in the units of `spacing`.
+* **[docs/method.md](docs/method.md)**: the model, every method and the
+  solver, cortical density, the extensions, the starting segmentations, the
+  memory/performance design, and the deliberate differences from the
+  original implementations.
+* **[docs/examples.md](docs/examples.md)**: accuracy of every method on
+  smooth phantoms, noise sweeps, the curvature penalty, and refinement.
+* **[docs/segmentation.md](docs/segmentation.md)**: automatic segmentation
+  from the image alone; Buie's method as implemented; the experiment on
+  realistic phantoms.
+* **[docs/performance.md](docs/performance.md)**: run time and memory, and
+  comparisons with the original Python implementation and with SciPy.
 
-The full parameter sets of Table 1 are available as presets:
+## Features
 
-```python
-o = cbm.Options.preset("radius_tibia")   # or "knee"; overrides as keywords
-res = cbm.cortical_bone_mapping(image, mask, options=o)
-```
+* **Methods**: `local` (Treece et al.), `multigrid` and `regularized`
+  (Neeteson & Boyd), the latter optionally with the curvature penalty
+  (`"change"`: curvature added by the fit; `"excess"`: curvature above a
+  threshold), or with the curvature penalty alone.
+* **Blur**: free, fixed, from a Gaussian PSF (direction-dependent), or a PSF
+  estimated from the data (isotropic, axial or anisotropic).
+* **Fast and frugal**: bounded Levenberg–Marquardt with analytic Jacobians
+  per node; matrix-free Gauss–Newton/PCG with a work budget for the global
+  fits; multithreaded; the image read in place; `f32` profiles and compact
+  sparse operators.
+* **Reproducible**: results are bitwise identical across runs and thread
+  counts.
+* **Tested**: analytic gradients against finite differences; the local fit
+  against SciPy `least_squares`; every method for accuracy on phantoms with
+  known geometry (one built independently with SciPy); property tests;
+  refinement convergence; Buie's steps against brute force.
 
-`radius_tibia`: Taubin pass-band 0.1, sampling 5 mm outside / 15 mm inside,
-profile smoothing σ = 3 samples, normals in the transverse plane. `knee`:
-pass-band 0.01, normals along the scan axis (subchondral plate), multigrid
-from 256 voxels, 1000 regularisation neighbours. Array axis 0 is the scan
-axis. Table 1's L-BFGS-B tolerances do not apply to this solver.
+## References
 
-**Cortical density.** `ρc` is not fitted. It can be given (`rho_c=1000`),
-estimated from the image (`rho_c="estimate"`: the cortical plateau level of
-nodes whose fitted cortex is thick enough to have one), or taken per node as
-the profile maximum (`rho_c="profile_max"`, what the original Python
-implementation does when no density is given). On realistic phantoms the
-estimate is the most robust choice; the per-node maximum underestimates a
-thin cortex's density, especially after profile smoothing, and so
-overestimates its thickness ([docs/buie.md](docs/buie.md)).
+> G. M. Treece, A. H. Gee, P. M. Mayhew, K. E. S. Poole, *High resolution
+> cortical bone thickness measurement from clinical CT data*, Medical Image
+> Analysis 14(3):276–290, 2010.
+
+> G. M. Treece, A. H. Gee, *Cortical Bone Mapping: Measurement and
+> Statistical Analysis of Localised Skeletal Changes*, Curr. Osteoporos.
+> Rep. 16:617–625, 2018,
+> [doi:10.1007/s11914-018-0475-3](https://doi.org/10.1007/s11914-018-0475-3)
+
+> N. J. Neeteson, S. K. Boyd, *Advancing Cortical Bone Mapping with global
+> optimization*, Computers in Biology and Medicine, 2025,
+> [doi:10.1016/j.compbiomed.2025.110636](https://doi.org/10.1016/j.compbiomed.2025.110636)
+
+> H. R. Buie, G. M. Campbell, R. J. Klinck, J. A. MacNeil, S. K. Boyd,
+> *Automatic segmentation of cortical and trabecular compartments based on a
+> dual threshold technique for in vivo micro-CT bone analysis*, Bone
+> 41:505–515, 2007,
+> [doi:10.1016/j.bone.2007.07.007](https://doi.org/10.1016/j.bone.2007.07.007)
 
 ## Development
 
 ```bash
 cargo test --workspace && cargo clippy --all-targets -- -D warnings
 cd python && maturin develop --release && pytest tests
-python docs/scripts/make_figures.py           # docs/images
+python docs/scripts/make_figures.py                 # docs/images
+python docs/scripts/segmentation_experiment.py      # docs/segmentation.md results (~50 min)
 cargo run --release --example benchmark -p cortical-bone-mapping -- --json docs/benchmark_results.json
-python docs/scripts/compare_bonelab.py /path/to/Bonelab
 python docs/scripts/compare_scipy.py
+python docs/scripts/compare_bonelab.py /path/to/Bonelab
 ```
 
 ## License

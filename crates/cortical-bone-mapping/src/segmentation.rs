@@ -538,8 +538,11 @@ fn convex_hull(pts: &[(f64, f64)]) -> Vec<(f64, f64)> {
     let mut h: Vec<(f64, f64)> = Vec::with_capacity(2 * p.len());
     for pass in 0..2 {
         let start = h.len();
-        let iter: Box<dyn Iterator<Item = &(f64, f64)>> =
-            if pass == 0 { Box::new(p.iter()) } else { Box::new(p.iter().rev()) };
+        let iter: Box<dyn Iterator<Item = &(f64, f64)>> = if pass == 0 {
+            Box::new(p.iter())
+        } else {
+            Box::new(p.iter().rev())
+        };
         for &q in iter {
             while h.len() >= start + 2 && cross(h[h.len() - 2], h[h.len() - 1], q) <= 0.0 {
                 h.pop();
@@ -588,8 +591,8 @@ fn fill_convex(hull: &[(f64, f64)], out: &mut ndarray::ArrayViewMut2<bool>) {
 
 #[cfg(test)]
 mod tests {
-    use ndarray::Array2;
     use super::*;
+    use ndarray::Array2;
 
     fn brute_dilate(m: &Array3<bool>, k: [usize; 3]) -> Array3<bool> {
         let r = radii(k);
