@@ -45,6 +45,7 @@
 
 pub mod bone_phantom;
 pub mod global;
+pub mod joint_phantom;
 pub mod kdtree;
 pub mod local;
 pub mod mesh;
@@ -63,8 +64,8 @@ pub mod volume;
 pub use mesh::Mesh;
 pub use operators::CurvatureMode;
 pub use pipeline::{
-    run, CbmResult, CurvatureOptions, Error, FitInfo, Method, ModelOptions, Options, SamplingOptions, SigmaMode,
-    SolverOptions, SurfaceOptions,
+    run, CbmResult, CurvatureOptions, Error, FitInfo, Method, ModelOptions, Options, RhoCMode, SamplingOptions,
+    SigmaMode, Site, SolverOptions, SurfaceOptions,
 };
 pub use profiles::NormalConstraint;
 pub use psf::PsfModel;

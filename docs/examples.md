@@ -48,15 +48,15 @@ fit.
 ![Curvature sweep](images/curvature_sweep.png)
 
 Thickness RMSE against the curvature weight `μ` for several Laplacian
-scales (curvature penalty only, `λ = 0`), compared with the Neeteson
-penalty against `λ`, at noise σ = 150 (local fit: 36 µm).
+scales (curvature penalty only, `λ = 0`), compared with the spatial
+smoothing penalty against `λ`, at noise σ = 150 (local fit: 36 µm).
 
 * Small Laplacian scales (0.15–0.25 mm, 1.5–2.5 voxels) reach ~7 µm at
   `μ ≈ 0.3–1`.
 * Larger scales are weaker against node-scale noise and, at large weights,
   flatten the true cos 2θ thickness pattern, which has curvature too. Every
   scale degrades beyond `μ ≈ 3`.
-* On this very smooth phantom the Neeteson penalty reaches the same accuracy
+* On this very smooth phantom the smoothing penalty reaches the same accuracy
   (~7 µm) at large `λ` (30); with k = 64 at 0.1 mm node spacing its operator
   only spans ~0.45 mm.
 

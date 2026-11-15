@@ -3,8 +3,8 @@
 //! One weighted least-squares problem over all profiles at once:
 //!
 //! ```text
-//! L = 1/(2NM) Σ_ij γj (f̂ij − fij)²                         data (eq. 6.3)
-//!   + ½ Σ_c κ_c Σ_i ((ω v_c)_i)²                           smoothing (eq. 6.13)
+//! L = 1/(2NM) Σ_ij γj (f̂ij − fij)²                         data
+//!   + ½ Σ_c κ_c Σ_i ((ω v_c)_i)²                           smoothing
 //!   + ½ Σ_surfaces Σ_i ‖r_curv,i‖²                         curvature (extension)
 //! ```
 //!

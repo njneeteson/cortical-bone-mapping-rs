@@ -74,6 +74,34 @@ pub struct BonePhantom {
     pub noise: f64,
     pub seed: u64,
     pub supersample: usize,
+    /// A neighbouring bone (fibula / ulna) next to the main bone.
+    pub neighbour: Option<NeighbourBone>,
+    /// Cortical breaks (channels of soft tissue through the cortex).
+    pub breaks: Vec<CorticalBreak>,
+}
+
+/// A second, simpler bone beside the main one: a circular cross-section with
+/// a solid cortex and the same trabecular pattern, placed so that the gap
+/// between the two periosteal surfaces along the direction `angle` is `gap`
+/// in every slice (it follows the main bone's surface).
+#[derive(Clone, Debug, PartialEq)]
+pub struct NeighbourBone {
+    pub radius: f64,
+    pub thickness: f64,
+    pub gap: f64,
+    /// Direction from the main bone (radians; 0 = array axis 1).
+    pub angle: f64,
+}
+
+/// A cortical break: the full cortical depth replaced by soft tissue over an
+/// arc of periosteal length `width` around `angle`, for axial positions
+/// within `length / 2` of `z_center` (physical units).
+#[derive(Clone, Debug, PartialEq)]
+pub struct CorticalBreak {
+    pub angle: f64,
+    pub width: f64,
+    pub z_center: f64,
+    pub length: f64,
 }
 
 impl Default for BonePhantom {
@@ -105,6 +133,8 @@ impl Default for BonePhantom {
             noise: 40.0,
             seed: 1,
             supersample: 2,
+            neighbour: None,
+            breaks: Vec::new(),
         }
     }
 }
@@ -120,7 +150,7 @@ struct Coeffs {
 }
 
 /// Inverse of erf for the level-set widths (Giles' approximation).
-fn erfinv(x: f64) -> f64 {
+pub(crate) fn erfinv(x: f64) -> f64 {
     let w = -((1.0 - x) * (1.0 + x)).ln();
     if w < 5.0 {
         let w = w - 2.5;
@@ -157,7 +187,7 @@ fn erfinv(x: f64) -> f64 {
     }
 }
 
-fn waves(rng: &mut Rng, n: usize, wavelength: f64, axial_stretch: f64) -> Vec<(V3, f64)> {
+pub(crate) fn waves(rng: &mut Rng, n: usize, wavelength: f64, axial_stretch: f64) -> Vec<(V3, f64)> {
     let k = 2.0 * std::f64::consts::PI / wavelength;
     (0..n)
         .map(|_| {
@@ -169,9 +199,88 @@ fn waves(rng: &mut Rng, n: usize, wavelength: f64, axial_stretch: f64) -> Vec<(V
 }
 
 #[inline]
-fn field(w: &[(V3, f64)], p: V3) -> f64 {
+pub(crate) fn field(w: &[(V3, f64)], p: V3) -> f64 {
     let s: f64 = w.iter().map(|(k, ph)| (crate::util::dot(*k, p) + ph).cos()).sum();
     s * (2.0 / w.len() as f64).sqrt() // unit variance
+}
+
+/// Render a phantom: integrate `density` over each voxel by supersampling,
+/// blur with a Gaussian PSF (`blur` per axis, physical units) and add
+/// Gaussian noise of standard deviation `noise`.
+pub(crate) fn render(
+    dims: (usize, usize, usize),
+    g: &Geometry,
+    blur: V3,
+    noise: f64,
+    seed: u64,
+    supersample: usize,
+    density: impl Fn(V3) -> f64 + Sync,
+) -> Array3<f32> {
+    let ss = supersample.max(1);
+    let (d0, d1, d2) = dims;
+    let mut truth = Array3::<f64>::zeros(dims);
+    truth
+        .as_slice_mut()
+        .unwrap()
+        .par_iter_mut()
+        .enumerate()
+        .for_each(|(lin, v)| {
+            let (i, j, k) = (lin / (d1 * d2), (lin / d2) % d1, lin % d2);
+            let off = |q: usize| (q as f64 + 0.5) / ss as f64 - 0.5;
+            let mut acc = 0.0;
+            for a in 0..ss {
+                for b in 0..ss {
+                    for e in 0..ss {
+                        acc += density(g.to_physical([i as f64 + off(a), j as f64 + off(b), k as f64 + off(e)]));
+                    }
+                }
+            }
+            *v = acc / (ss * ss * ss) as f64;
+        });
+    let sig = [0, 1, 2].map(|a| blur[a] / g.spacing[a]);
+    let blurred = gaussian_filter(&truth, sig);
+    drop(truth);
+    let n = d0 * d1 * d2;
+    let mut eps = vec![0f32; n];
+    eps.par_chunks_mut(65536).enumerate().for_each(|(ci, ch)| {
+        let mut r = Rng::new(seed ^ 0xABCD ^ (ci as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        ch.iter_mut().for_each(|v| *v = r.normal() as f32);
+    });
+    Array3::from_shape_vec(
+        dims,
+        blurred
+            .iter()
+            .zip(eps)
+            .map(|(&v, e)| (v + noise * e as f64) as f32)
+            .collect(),
+    )
+    .unwrap()
+}
+
+/// The first `x` in `(from, x1]` where `f` becomes negative, by stepping `h`
+/// and bisection; NaN if `f(from) < 0` (already inside) or never.
+pub(crate) fn first_entry(f: &dyn Fn(f64) -> f64, from: f64, x1: f64, h: f64) -> f64 {
+    let mut a = from;
+    if f(a) < 0.0 {
+        return f64::NAN;
+    }
+    while a < x1 {
+        let b = (a + h).min(x1);
+        if f(b) < 0.0 {
+            let (mut lo, mut hi) = (a, b);
+            for _ in 0..50 {
+                let m = 0.5 * (lo + hi);
+                if f(m) < 0.0 {
+                    hi = m
+                } else {
+                    lo = m
+                }
+            }
+            return 0.5 * (lo + hi);
+        }
+        a = b;
+    }
+    f64::NAN
 }
 
 impl BonePhantom {
@@ -237,11 +346,7 @@ impl BonePhantom {
         let (dy, dx) = (p[1] - cc[0], p[2] - cc[1]);
         let r = (dy * dy + dx * dx).sqrt();
         let th = dx.atan2(dy);
-        let mut s = 1.0;
-        for (i, &(a, ph, w)) in c.shape.iter().enumerate() {
-            s += a * ((i + 2) as f64 * th + ph + w * z).cos();
-        }
-        let big_r = self.radius * s;
+        let big_r = self.radius_at(c, th, z);
         let mut tf = 1.0;
         for (i, &(a, ph, w)) in c.thick.iter().enumerate() {
             tf += a * ((i + 1) as f64 * th + ph + w * z).cos();
@@ -252,10 +357,50 @@ impl BonePhantom {
         (r, th, big_r, t)
     }
 
+    /// Periosteal radius `R(θ, z)` of the main bone.
+    fn radius_at(&self, c: &Coeffs, th: f64, z: f64) -> f64 {
+        let mut s = 1.0;
+        for (i, &(a, ph, w)) in c.shape.iter().enumerate() {
+            s += a * ((i + 2) as f64 * th + ph + w * z).cos();
+        }
+        self.radius * s
+    }
+
+    /// In-plane distance from the neighbouring bone's axis, if there is one.
+    fn neighbour_distance(&self, c: &Coeffs, p: V3) -> Option<(f64, &NeighbourBone)> {
+        let nb = self.neighbour.as_ref()?;
+        let cc = self.center_at(c, p[0]);
+        let d = self.radius_at(c, nb.angle, p[0]) + nb.gap + nb.radius;
+        let (ny, nx) = (cc[0] + d * nb.angle.cos(), cc[1] + d * nb.angle.sin());
+        Some((((p[1] - ny).powi(2) + (p[2] - nx).powi(2)).sqrt(), nb))
+    }
+
+    /// Whether the point (taken to be in the cortex shell) lies in a break.
+    fn in_break(&self, th: f64, big_r: f64, z: f64) -> bool {
+        let tau = 2.0 * std::f64::consts::PI;
+        self.breaks.iter().any(|b| {
+            let dth = (th - b.angle + 0.5 * tau).rem_euclid(tau) - 0.5 * tau;
+            (dth * big_r).abs() < 0.5 * b.width && (z - b.z_center).abs() < 0.5 * b.length
+        })
+    }
+
     fn density(&self, c: &Coeffs, p: V3) -> f64 {
-        let (r, _, big_r, t) = self.polar(c, p);
+        let (r, th, big_r, t) = self.polar(c, p);
         let re = big_r - t;
         if r >= big_r {
+            match self.neighbour_distance(c, p) {
+                Some((d, nb)) if d < nb.radius => {
+                    let solid = d >= nb.radius - nb.thickness;
+                    let trab = self.bvtv > 0.0 && field(&c.trab, p).abs() < 2f64.sqrt() * erfinv(self.bvtv.min(0.99));
+                    if solid || trab {
+                        self.rho_bone
+                    } else {
+                        self.rho_marrow
+                    }
+                }
+                _ => self.rho_soft,
+            }
+        } else if r >= re && self.in_break(th, big_r, p[0]) {
             self.rho_soft
         } else if r >= re {
             // relative depth from the endosteal surface (0) to the periosteum (1)
@@ -291,48 +436,10 @@ impl BonePhantom {
     pub fn generate(&self) -> (Array3<f32>, Array3<bool>, Array3<bool>) {
         let c = self.coeffs();
         let g = self.geometry();
-        let ss = self.supersample.max(1);
-        let (d0, d1, d2) = self.dims;
-        let mut truth = Array3::<f64>::zeros(self.dims);
-        truth
-            .as_slice_mut()
-            .unwrap()
-            .par_iter_mut()
-            .enumerate()
-            .for_each(|(lin, v)| {
-                let (i, j, k) = (lin / (d1 * d2), (lin / d2) % d1, lin % d2);
-                let off = |q: usize| (q as f64 + 0.5) / ss as f64 - 0.5;
-                let mut acc = 0.0;
-                for a in 0..ss {
-                    for b in 0..ss {
-                        for e in 0..ss {
-                            acc += self.density(
-                                &c,
-                                g.to_physical([i as f64 + off(a), j as f64 + off(b), k as f64 + off(e)]),
-                            );
-                        }
-                    }
-                }
-                *v = acc / (ss * ss * ss) as f64;
-            });
-        let sig = [0, 1, 2].map(|a| self.blur[a] / self.spacing[a]);
-        let blurred = gaussian_filter(&truth, sig);
-        drop(truth);
-        let n = d0 * d1 * d2;
-        let mut noise = vec![0f32; n];
-        noise.par_chunks_mut(65536).enumerate().for_each(|(ci, ch)| {
-            let mut r = Rng::new(self.seed ^ 0xABCD ^ (ci as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
-            ch.iter_mut().for_each(|v| *v = r.normal() as f32);
+        let image = render(self.dims, &g, self.blur, self.noise, self.seed, self.supersample, |p| {
+            self.density(&c, p)
         });
-        let image = Array3::from_shape_vec(
-            self.dims,
-            blurred
-                .iter()
-                .zip(noise)
-                .map(|(&v, e)| (v + self.noise * e as f64) as f32)
-                .collect(),
-        )
-        .unwrap();
+        let (_, d1, d2) = self.dims;
         let mut peri = Array3::from_elem(self.dims, false);
         let mut endo = Array3::from_elem(self.dims, false);
         peri.as_slice_mut()
@@ -347,6 +454,32 @@ impl BonePhantom {
                 *ev = r < big_r - t;
             });
         (image, peri, endo)
+    }
+
+    /// Feature labels at voxel centres: 1 = neighbouring bone, 2 = cortical
+    /// break (soft tissue inside the main bone's cortex shell), 0 otherwise.
+    pub fn labels(&self) -> Array3<u8> {
+        let c = self.coeffs();
+        let g = self.geometry();
+        let (_, d1, d2) = self.dims;
+        let mut out = Array3::<u8>::zeros(self.dims);
+        out.as_slice_mut()
+            .unwrap()
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(lin, v)| {
+                let (i, j, k) = (lin / (d1 * d2), (lin / d2) % d1, lin % d2);
+                let p = g.to_physical([i as f64, j as f64, k as f64]);
+                let (r, th, big_r, t) = self.polar(&c, p);
+                *v = if r >= big_r {
+                    u8::from(matches!(self.neighbour_distance(&c, p), Some((d, nb)) if d < nb.radius))
+                } else if r >= big_r - t && self.in_break(th, big_r, p[0]) {
+                    2
+                } else {
+                    0
+                };
+            });
+        out
     }
 
     /// The true periosteal and endosteal crossing positions `(x_p, x_e)`
@@ -369,33 +502,7 @@ impl BonePhantom {
                     let (r, _, big_r, t) = self.polar(&c, at(x));
                     r - (big_r - t)
                 };
-                let find = |f: &dyn Fn(f64) -> f64, from: f64| -> f64 {
-                    let mut a = from;
-                    let mut fa = f(a);
-                    if fa < 0.0 {
-                        return f64::NAN; // already inside
-                    }
-                    while a < x1 {
-                        let b = (a + h).min(x1);
-                        let fb = f(b);
-                        if fb < 0.0 {
-                            let (mut lo, mut hi) = (a, b);
-                            for _ in 0..50 {
-                                let m = 0.5 * (lo + hi);
-                                if f(m) < 0.0 {
-                                    hi = m
-                                } else {
-                                    lo = m
-                                }
-                            }
-                            return 0.5 * (lo + hi);
-                        }
-                        a = b;
-                        fa = fb;
-                    }
-                    let _ = fa;
-                    f64::NAN
-                };
+                let find = |f: &dyn Fn(f64) -> f64, from: f64| first_entry(f, from, x1, h);
                 let xp = find(&outer, x0);
                 if xp.is_nan() {
                     return (f64::NAN, f64::NAN);
@@ -466,5 +573,58 @@ mod tests {
         let (_, _, big_r, t) = ph.polar(&c, [mid[0], cc[0] + 4.0, cc[1]]);
         assert!(((7.0 - e.0) - big_r).abs() < 1e-6, "{e:?} R {big_r}");
         assert!(((e.1 - e.0) - t).abs() < 1e-6);
+    }
+
+    #[test]
+    fn neighbour_and_breaks() {
+        let gap = 0.3;
+        let ph = BonePhantom {
+            dims: (6, 200, 200),
+            noise: 0.0,
+            neighbour: Some(NeighbourBone {
+                radius: 1.2,
+                thickness: 0.4,
+                gap,
+                angle: std::f64::consts::FRAC_PI_4,
+            }),
+            breaks: vec![CorticalBreak {
+                angle: -2.0,
+                width: 1.0,
+                z_center: 0.15,
+                length: 0.2,
+            }],
+            ..BonePhantom::default()
+        };
+        let (_, peri, _) = ph.generate();
+        let lab = ph.labels();
+        let c = ph.coeffs();
+        let g = ph.geometry();
+        // the neighbour is outside the main bone, at the requested gap
+        assert!(lab.iter().zip(peri.iter()).all(|(&l, &p)| !(l == 1 && p)));
+        let z = 3.0 * g.spacing[0];
+        let a = std::f64::consts::FRAC_PI_4;
+        let cc = ph.center_at(&c, z);
+        let r = ph.radius_at(&c, a, z);
+        let at = |d: f64| [z, cc[0] + d * a.cos(), cc[1] + d * a.sin()];
+        assert!(ph.neighbour_distance(&c, at(r + 0.5 * gap)).unwrap().0 > 1.2);
+        assert!(ph.neighbour_distance(&c, at(r + gap + 0.05)).unwrap().0 < 1.2);
+        // breaks: soft tissue through the cortex in the labelled slices only
+        let nb = lab.iter().filter(|&&l| l == 2).count();
+        assert!(nb > 0);
+        // |z − 0.15| < 0.1 mm: slices 1–4 at 60.7 µm
+        for (idx, &l) in lab.indexed_iter() {
+            if l == 2 {
+                assert!((1..=4).contains(&idx.0), "break at slice {}", idx.0);
+            }
+        }
+        let mid = 2.0 * g.spacing[0];
+        let cc = ph.center_at(&c, mid);
+        let (_, _, big_r, t) = ph.polar(&c, [mid, cc[0] + (-2f64).cos(), cc[1] + (-2f64).sin()]);
+        let p = [
+            mid,
+            cc[0] + (big_r - 0.5 * t) * (-2f64).cos(),
+            cc[1] + (big_r - 0.5 * t) * (-2f64).sin(),
+        ];
+        assert_eq!(ph.density(&c, p), ph.rho_soft);
     }
 }

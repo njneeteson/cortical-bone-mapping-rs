@@ -148,15 +148,16 @@ pub fn buie<T: Voxel>(image: ArrayView3<T>, o: &BuieOptions) -> BuieResult {
         .and(&image)
         .par_for_each(|b, &v| *b = v.to_f64() >= o.periosteal_threshold);
     // 3. median
-    let s3 = binary_median(&s2, o.median_kernel);
+    let mut s3 = binary_median(&s2, o.median_kernel);
     drop(s2);
-    // 4. dilate
-    let mut s4 = dilate(&s3, o.periosteal_kernel);
-    drop(s3);
+    // pre-processing: keep the largest bone before any dilation, so that a
+    // nearby fibula / ulna cannot be merged with it by the closing
     if o.largest_bone_only {
-        let keep = largest_component(&s4, o.connectivity_2d);
-        s4 = keep;
+        s3 = largest_component(&s3, o.connectivity_2d);
     }
+    // 4. dilate
+    let s4 = dilate(&s3, o.periosteal_kernel);
+    drop(s3);
     // 5. select the outer non-bone region; bone is everything else
     let bg = s4.mapv(|b| !b);
     drop(s4);

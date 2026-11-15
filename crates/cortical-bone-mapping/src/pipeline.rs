@@ -13,6 +13,7 @@
 use std::time::Instant;
 
 use ndarray::ArrayView3;
+use rayon::prelude::*;
 
 use crate::global::{self, Problem, Role, Smoothing, State};
 use crate::local::{self, FitSettings, Status};
@@ -115,11 +116,34 @@ pub enum SigmaMode {
     EstimatePsf { model: PsfModel, min_ratio: f64 },
 }
 
+/// How the (fixed, not fitted) cortical density `ρc` is chosen.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RhoCMode {
+    /// [`ModelOptions::rho_c`] as given (e.g. the mineralised tissue density
+    /// of a density-calibrated scanner).
+    Fixed,
+    /// One value for all nodes, estimated from the data as the cortical
+    /// plateau level where the cortex is thick enough to have one: local fits
+    /// (σ free), then for nodes whose fitted cortex has samples farther than
+    /// 2σ from both edges (at least 3), the median of those samples; `ρc` is
+    /// the median over such nodes. Starts from the 90th percentile of the
+    /// profile maxima and is iterated twice. Profile maxima alone are biased
+    /// up by noise, and down by blur and profile smoothing on a thin cortex.
+    Estimate,
+    /// One value per node: the maximum of its (smoothed) profile, as the
+    /// original Python implementation does when no density is given. A thin
+    /// or blurred cortex never reaches the tissue density, so this trades
+    /// the model's partial-volume correction for robustness to density
+    /// variation.
+    ProfileMax,
+}
+
 /// The profile model: fixed cortical density, residual weighting, initial
 /// guesses and bounds for `[m, t, σ, ρs, ρb]`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModelOptions {
     pub rho_c: f64,
+    pub rho_c_mode: RhoCMode,
     /// `γ0`: weight of residuals at the surface node relative to the inner end.
     pub residual_boost: f64,
     pub init: Params,
@@ -130,9 +154,10 @@ pub struct ModelOptions {
 
 impl Default for ModelOptions {
     fn default() -> Self {
-        // Initial guesses and bounds follow Table 6.1 of Neeteson & Boyd.
+        // Initial guesses and bounds follow Table 1 of Neeteson & Boyd (2025).
         ModelOptions {
             rho_c: 1000.0,
+            rho_c_mode: RhoCMode::Fixed,
             residual_boost: 10.0,
             init: [0.0, 1.0, 0.1, 0.0, 0.0],
             lower: [-3.0, 0.0607, 0.01, -200.0, -200.0],
@@ -208,15 +233,15 @@ pub enum Method {
     /// Independent fit at every node (Treece et al.; "local" method).
     Local,
     /// `m, t, σ` on control points at decreasing spacings, interpolated to
-    /// the nodes (Neeteson & Boyd, §6.1.2.1).
+    /// the nodes (Neeteson & Boyd 2025).
     Multigrid {
         /// Control point spacings (physical units), coarse to fine.
         spacings: Vec<f64>,
         neighbours: usize,
         seed: u64,
     },
-    /// `m, t, σ` per node with spatial regularisation (Neeteson & Boyd,
-    /// §6.1.2.2), optionally with a curvature penalty.
+    /// `m, t, σ` per node with spatial regularisation (Neeteson & Boyd
+    /// 2025), optionally with a curvature penalty.
     Regularized {
         /// Regularisation coefficient `λ` (0 disables the smoothing term).
         lambda: f64,
@@ -233,22 +258,52 @@ pub enum Method {
 
 impl Method {
     pub fn multigrid() -> Self {
-        // Table 6.1 (radius & tibia): 128, 64, 32, 16 voxels of 60.7 µm.
+        // Table 1 of Neeteson & Boyd (2025), radius & tibia: 128, 64, 32, 16
+        // voxels of 60.7 µm.
         Method::Multigrid {
-            spacings: vec![7.77, 3.885, 1.942, 0.971],
+            spacings: vec![7.7696, 3.8848, 1.9424, 0.9712],
             neighbours: 5,
             seed: 0,
         }
     }
     pub fn regularized() -> Self {
+        // Table 1: λ = 1, σ_reg = 1.942 mm (32 voxels), 500 neighbours.
         Method::Regularized {
             lambda: 1.0,
-            sigma: 1.924,
+            sigma: 1.9424,
             neighbours: 500,
             cutoff: 3.0,
             init_from_local: false,
             curvature: None,
         }
+    }
+    /// Multigrid with the control-point spacings of Table 1 for `site`, in
+    /// voxels of size `voxel` (radius & tibia 128…16, knee 256…16).
+    pub fn multigrid_for(site: Site, voxel: f64) -> Self {
+        let coarsest = match site {
+            Site::RadiusTibia => 128.0,
+            Site::Knee => 256.0,
+        };
+        let mut spacings = vec![];
+        let mut s: f64 = coarsest;
+        while s >= 16.0 {
+            spacings.push(s * voxel);
+            s /= 2.0;
+        }
+        Method::Multigrid {
+            spacings,
+            neighbours: 5,
+            seed: 0,
+        }
+    }
+    /// Regularised fit with the Table 1 parameters for `site` (500
+    /// neighbours for radius & tibia, 1000 for the knee).
+    pub fn regularized_for(site: Site) -> Self {
+        let mut m = Method::regularized();
+        if let (Site::Knee, Method::Regularized { neighbours, .. }) = (site, &mut m) {
+            *neighbours = 1000;
+        }
+        m
     }
     pub fn name(&self) -> &'static str {
         match self {
@@ -292,6 +347,50 @@ impl Default for Options {
     }
 }
 
+/// Anatomical sites with published parameter sets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Site {
+    /// Distal radius and tibia (HR-pQCT): normals in the transverse plane.
+    RadiusTibia,
+    /// Proximal tibia and distal femur at the knee: normals along the axis
+    /// (subchondral plate of the articular surfaces).
+    Knee,
+}
+
+impl Options {
+    /// The parameters of Table 1 of Neeteson & Boyd (2025) for `site`, with
+    /// isotropic voxels of size `voxel` and the regularised method. Array
+    /// axis 0 is taken as the scan (axial) direction.
+    ///
+    /// Taubin smoothing 100 iterations (pass-band 0.1, knee 0.01); sampling
+    /// 5 mm outside and 15 mm inside at the voxel size; profile smoothing σ = 3
+    /// samples; model guesses and bounds as [`ModelOptions::default`]. The
+    /// optimiser tolerances of Table 1 belong to L-BFGS-B and are not used.
+    pub fn preset(site: Site, voxel: f64) -> Options {
+        let (passband, constraint) = match site {
+            Site::RadiusTibia => (0.1, NormalConstraint::InPlane(0)),
+            Site::Knee => (0.01, NormalConstraint::AlongAxis(0)),
+        };
+        Options {
+            geometry: Geometry::new([voxel; 3]),
+            surface: SurfaceOptions {
+                taubin_iterations: 100,
+                taubin_passband: passband,
+                ..Default::default()
+            },
+            sampling: SamplingOptions {
+                outside: 5.0,
+                inside: 15.0,
+                resolution: Some(voxel),
+                smoothing: 3.0,
+                normal_constraint: constraint,
+            },
+            method: Method::regularized_for(site),
+            ..Default::default()
+        }
+    }
+}
+
 /// Diagnostics of a fit.
 #[derive(Clone, Debug, Default)]
 pub struct FitInfo {
@@ -324,7 +423,11 @@ pub struct CbmResult {
     pub params: Vec<Params>,
     /// Weighted RMS residual per node.
     pub residual: Vec<f64>,
+    /// The cortical density used (for [`RhoCMode::ProfileMax`], the median
+    /// over nodes).
     pub rho_c: f64,
+    /// Per-node cortical densities ([`RhoCMode::ProfileMax`] only).
+    pub rho_c_node: Option<Vec<f64>>,
     /// The single model fitted to all profiles.
     pub global_params: Params,
     /// The PSF used or estimated, if any.
@@ -343,6 +446,10 @@ impl CbmResult {
     }
     pub fn thickness(&self) -> Vec<f64> {
         self.param(T)
+    }
+    /// The cortical density at node `i`.
+    pub fn rho_c_at(&self, i: usize) -> f64 {
+        self.rho_c_node.as_ref().map_or(self.rho_c, |v| v[i])
     }
     /// Fitted surface `p + (m + side·t/2) n` (`side` −1 periosteal, +1 endosteal).
     fn offset_points(&self, side: f64) -> Vec<V3> {
@@ -433,7 +540,7 @@ fn check_options(o: &Options) -> Result<(), Error> {
             if *lambda < 0.0 || !(*sigma > 0.0) || *neighbours == 0 {
                 return bad("regularized needs lambda >= 0, sigma > 0, neighbours > 0");
             }
-            if let Some(c) = curvature {
+            if let Some(c) = curvature.as_ref() {
                 if c.weight < 0.0 || c.length.is_some_and(|l| !(l > 0.0)) || c.scale.is_some_and(|l| !(l > 0.0)) {
                     return bad("curvature weight must be >= 0, length and scale > 0");
                 }
@@ -597,12 +704,38 @@ pub fn fit_surface<T: Voxel>(
     let n = points.len();
     let resolution = o.sampling.resolution.unwrap_or_else(|| o.geometry.min_spacing());
     let line = SampleLine::new(o.sampling.outside, o.sampling.inside, resolution);
-    let profiles = Profiles::sample(image, &o.geometry, &points, &normals, &line, o.sampling.smoothing);
+    let mut profiles = Profiles::sample(image, &o.geometry, &points, &normals, &line, o.sampling.smoothing);
     let x = line.x.clone();
     let weights = residual_weights(&x, o.model.residual_boost);
-    timings.push(("sampling".to_string(), t0.elapsed().as_secs_f64()));
 
-    let rho_c = o.model.rho_c;
+    // ---- cortical density. Per-node densities are handled by scaling each
+    // profile to the common `rho_c`: the model is linear in (ρs, ρc, ρb), so
+    // m, t, σ are unchanged and ρs, ρb (and the residual) scale back after
+    // the fit.
+    let maxima = || -> Vec<f64> {
+        (0..n)
+            .map(|i| profiles.row(i).iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b)) as f64)
+            .collect()
+    };
+    let (rho_c, rho_c_node) = match o.model.rho_c_mode {
+        RhoCMode::Fixed => (o.model.rho_c, None),
+        RhoCMode::Estimate => (estimate_rho_c(&profiles, &x, &weights, maxima(), o), None),
+        RhoCMode::ProfileMax => {
+            let mx = maxima();
+            let rc = quantile_of(mx.clone(), 0.5);
+            if !(rc > 0.0) {
+                return Err(Error::InvalidOption("profile maxima are not positive".into()));
+            }
+            let node: Vec<f64> = mx.iter().map(|&v| v.max(0.05 * rc)).collect();
+            let m = profiles.m;
+            profiles.values.chunks_mut(m).zip(&node).for_each(|(row, &rn)| {
+                let s = (rc / rn) as f32;
+                row.iter_mut().for_each(|v| *v *= s);
+            });
+            (rc, Some(node))
+        }
+    };
+    timings.push(("sampling".to_string(), t0.elapsed().as_secs_f64()));
     let mut info = FitInfo {
         method: o.method.name().to_string(),
         ..Default::default()
@@ -626,31 +759,7 @@ pub fn fit_surface<T: Voxel>(
     // ---- global initialisation: one model for all profiles
     let t1 = Instant::now();
     let global_fit = |init: Params, sigma_fixed: &Option<Vec<f64>>| -> Params {
-        let mut roles = [Role::Global; NPARAM];
-        let mut fixed: [Option<&[f64]>; NPARAM] = [None; NPARAM];
-        if let Some(sf) = sigma_fixed {
-            roles[SIGMA] = Role::Fixed;
-            fixed[SIGMA] = Some(sf.as_slice());
-        }
-        let pr = Problem {
-            profiles: &profiles,
-            x: &x,
-            weights: &weights,
-            rho_c,
-            roles,
-            fixed_per_node: fixed,
-            interp: None,
-            smoothing: None,
-            curvature: None,
-            lower: o.model.lower,
-            upper: o.model.upper,
-        };
-        let mut st = State {
-            field: vec![],
-            scalars: init,
-        };
-        global::solve(&pr, &mut st, &global_settings(o));
-        st.scalars
+        fit_one_model(&profiles, &x, &weights, rho_c, init, sigma_fixed.as_deref(), o)
     };
     let mut global_params = if o.init_from_global {
         global_fit(init, &sigma_fixed)
@@ -844,7 +953,7 @@ pub fn fit_surface<T: Voxel>(
 
     // ---- residuals
     let wsum: f64 = weights.iter().sum();
-    let residual: Vec<f64> = params
+    let mut residual: Vec<f64> = params
         .iter()
         .enumerate()
         .map(|(i, p)| {
@@ -858,6 +967,21 @@ pub fn fit_surface<T: Voxel>(
             (s / wsum).sqrt()
         })
         .collect();
+    let mut params = params;
+    if let Some(node) = &rho_c_node {
+        let m = profiles.m;
+        for (i, &rn) in node.iter().enumerate() {
+            let s = rn / rho_c;
+            params[i][RHO_S] *= s;
+            params[i][RHO_B] *= s;
+            residual[i] *= s;
+            if o.keep_profiles {
+                profiles.values[i * m..(i + 1) * m]
+                    .iter_mut()
+                    .for_each(|v| *v *= s as f32);
+            }
+        }
+    }
     info.timings = timings;
     Ok(CbmResult {
         surface,
@@ -868,11 +992,94 @@ pub fn fit_surface<T: Voxel>(
         params,
         residual,
         rho_c,
+        rho_c_node,
         global_params,
         psf,
         info,
         profiles: o.keep_profiles.then_some((x, profiles)),
     })
+}
+
+/// One model `[m, t, σ, ρs, ρb]` fitted to all profiles.
+fn fit_one_model(
+    profiles: &Profiles,
+    x: &[f64],
+    weights: &[f64],
+    rho_c: f64,
+    init: Params,
+    sigma_fixed: Option<&[f64]>,
+    o: &Options,
+) -> Params {
+    let mut roles = [Role::Global; NPARAM];
+    let mut fixed: [Option<&[f64]>; NPARAM] = [None; NPARAM];
+    if let Some(sf) = sigma_fixed {
+        roles[SIGMA] = Role::Fixed;
+        fixed[SIGMA] = Some(sf);
+    }
+    let pr = Problem {
+        profiles,
+        x,
+        weights,
+        rho_c,
+        roles,
+        fixed_per_node: fixed,
+        interp: None,
+        smoothing: None,
+        curvature: None,
+        lower: o.model.lower,
+        upper: o.model.upper,
+    };
+    let mut st = State {
+        field: vec![],
+        scalars: init,
+    };
+    global::solve(&pr, &mut st, &global_settings(o));
+    st.scalars
+}
+
+/// [`RhoCMode::Estimate`]: the cortical plateau level of thick-cortex nodes.
+fn estimate_rho_c(profiles: &Profiles, x: &[f64], weights: &[f64], maxima: Vec<f64>, o: &Options) -> f64 {
+    let n = profiles.n;
+    let mut rc = quantile_of(maxima, 0.9);
+    for _ in 0..2 {
+        let g = fit_one_model(profiles, x, weights, rc, o.model.init, None, o);
+        let fits = local::fit_all(profiles, x, weights, rc, &vec![g; n], &fit_settings(o, true));
+        let plateaus: Vec<f64> = fits
+            .par_iter()
+            .enumerate()
+            .filter_map(|(i, f)| {
+                let p = f.params;
+                let (lo, hi) = (p[M] - 0.5 * p[T] + 2.0 * p[SIGMA], p[M] + 0.5 * p[T] - 2.0 * p[SIGMA]);
+                let mut v: Vec<f64> = x
+                    .iter()
+                    .zip(profiles.row(i))
+                    .filter(|(&xj, _)| xj >= lo && xj <= hi)
+                    .map(|(_, &y)| y as f64)
+                    .collect();
+                (v.len() >= 3).then(|| {
+                    v.sort_by(f64::total_cmp);
+                    v[v.len() / 2]
+                })
+            })
+            .collect();
+        if plateaus.len() < 10 {
+            break;
+        }
+        rc = quantile_of(plateaus, 0.5);
+    }
+    rc
+}
+
+/// The `q` quantile (linear interpolation) of finite values; NaN if none.
+fn quantile_of(mut v: Vec<f64>, q: f64) -> f64 {
+    v.retain(|x| x.is_finite());
+    if v.is_empty() {
+        return f64::NAN;
+    }
+    v.sort_by(f64::total_cmp);
+    let pos = q.clamp(0.0, 1.0) * (v.len() - 1) as f64;
+    let (lo, hi) = (pos.floor() as usize, pos.ceil() as usize);
+    v[lo] + (pos - lo as f64) * (v[hi] - v[lo])
 }
 
 fn accumulate(info: &mut FitInfo, si: &global::SolveInfo) {

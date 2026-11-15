@@ -39,7 +39,7 @@ fn main() {
             "reg+curv",
             Method::Regularized {
                 lambda: 1.0,
-                sigma: 1.924,
+                sigma: 1.9424,
                 neighbours: 100,
                 cutoff: 3.0,
                 init_from_local: false,

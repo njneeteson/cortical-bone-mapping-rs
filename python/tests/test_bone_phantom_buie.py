@@ -64,3 +64,61 @@ def test_cbm_corrects_buie_endosteal_surface_on_porous_thin_cortex(osteoporotic)
     t = ph.true_thickness(fit)
     ok = np.isfinite(t)
     assert abs((fit.thickness[ok] - t[ok]).mean()) < 0.05
+
+
+def test_cbm_without_the_true_density(osteoporotic):
+    """With rho_c estimated from the image, CBM still corrects Buie's
+    endosteal error (rho_c is the porous cortex's apparent density)."""
+    ph, img, peri, endo = osteoporotic
+    bp, bc, _ = cbm.buie_segmentation(img)
+    fit = cbm.cortical_bone_mapping(img, bp, rho_c="estimate", **CBM)
+    assert 650 < fit.rho_c < 850
+    _, _, c = fit.masks(img.shape)
+    s = slice(3, -3)
+    cort = peri & ~endo
+    assert dice(c[s], cort[s]) > dice(bc[s], cort[s]) + 0.05
+    pm = cbm.cortical_bone_mapping(img, bp, rho_c="profile_max", **CBM)
+    assert pm.rho_c_node is not None and pm.rho_c_node.shape == (pm.n,)
+    with pytest.raises(ValueError):
+        cbm.cortical_bone_mapping(img, bp, rho_c="max", **CBM)
+
+
+def test_presets():
+    o = cbm.Options.preset("radius_tibia")
+    assert (o.outside, o.inside, o.profile_smoothing, o.normal_constraint) == (5.0, 15.0, 3.0, "in_plane")
+    assert o.reg_neighbours == 500 and abs(o.reg_sigma - 32 * 0.0607) < 1e-3
+    k = cbm.Options.preset("knee", outside=1.0)
+    assert k.normal_constraint == "along_axis" and k.reg_neighbours == 1000 and k.outside == 1.0
+    assert np.allclose(np.array(k.multigrid_spacings) / 0.0607, [256, 128, 64, 32, 16])
+    with pytest.raises(ValueError):
+        cbm.Options.preset("hip")
+
+
+def test_neighbour_and_breaks_phantom():
+    ph = cbm.BonePhantom(dims=(8, 240, 240), noise=0.0, neighbour=(1.5, 0.5, 0.3, np.pi / 4),
+                         breaks=[(2.0, 1.0, 0.24, 0.3)])
+    img, peri, endo = ph.generate()
+    lab = ph.labels()
+    assert (lab == 1).any() and not (peri & (lab == 1)).any()
+    assert (lab == 2).any() and (peri[lab == 2]).all() and not endo[lab == 2].any()
+    cortex = peri & ~endo & (lab == 0)
+    assert img[lab == 2].mean() < 0.5 * img[cortex].mean()  # soft tissue in the break
+    # the paper's largest-bone pre-processing keeps the neighbour out at a 0.3 mm gap
+    bp, _, _ = cbm.buie_segmentation(img)
+    assert bp[lab == 1].mean() < 0.05
+
+
+def test_joint_phantom_truth():
+    ph = cbm.JointPhantom(dims=(60, 120, 120), radius=3.0, noise=0.0)
+    img, peri, endo = ph.generate()
+    assert set(np.unique(peri)) == {0, 1, 2}
+    assert ((endo > 0) <= (peri > 0)).all()
+    # vertical lines through the joint space: down to the tibia, up to the femur
+    c = (np.array(img.shape) - 1) / 2 * 0.0607
+    z = ph.joint_height() + 0.5 * ph.joint_space
+    pts = np.array([[z, c[1] + ph.contact_offset[0] + dy, c[2] + ph.contact_offset[1]] for dy in (-0.5, 0, 0.5)])
+    down = ph.edges_along(pts, np.tile([-1.0, 0, 0], (3, 1)), 0.0, 2.0)
+    up = ph.edges_along(pts, np.tile([1.0, 0, 0], (3, 1)), 0.0, 2.0)
+    assert (down[:, 2] == cbm.JointPhantom.TIBIA).all() and (up[:, 2] == cbm.JointPhantom.FEMUR).all()
+    plate = down[:, 1] - down[:, 0]
+    assert (plate > ph.plate_min - 1e-6).all() and (plate < 1.0).all()

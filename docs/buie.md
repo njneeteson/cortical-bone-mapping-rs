@@ -35,7 +35,9 @@ and the Methods of
 Also from the paper:
 
 * **Pre-processing.** Keep only the largest bone component (removes the
-  fibula/ulna; `largest_bone_only`).
+  fibula/ulna; `largest_bone_only`). This is done on the thresholded image,
+  before the step-4 dilation: after it, a neighbour closer than twice the
+  dilation radius (~1.8 mm) would already be merged with the bone.
 * **Padding.** Pad the data in-plane by the dilation radius, so that dilation
   cannot clip at the image edge (the paper's Discussion).
 * **Connectivity.** Optionally 2D (per slice), which the paper reports is
@@ -138,5 +140,5 @@ Observations:
   * Phantoms are not bone: the "true" endosteum of real trabecularised cortex
     is itself a definition.
   * CBM here knows the true cortical density (`ρc`); on real data `ρc` must be
-    chosen, and `t` scales roughly as `1/ρc` (Neeteson & Boyd, Fig. 6.1).
+    chosen, and `t` scales roughly as `1/ρc` (Neeteson & Boyd 2025).
   * These results are on synthetic data only, pending real HR-pQCT data.

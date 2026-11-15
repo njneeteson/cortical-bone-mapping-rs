@@ -63,7 +63,7 @@ fn main() {
                 "regularized k=64",
                 Method::Regularized {
                     lambda: 1.0,
-                    sigma: 1.924,
+                    sigma: 1.9424,
                     neighbours: 64,
                     cutoff: 3.0,
                     init_from_local: false,
@@ -75,7 +75,7 @@ fn main() {
                 "reg+curvature",
                 Method::Regularized {
                     lambda: 1.0,
-                    sigma: 1.924,
+                    sigma: 1.9424,
                     neighbours: 64,
                     cutoff: 3.0,
                     init_from_local: false,

@@ -4,7 +4,7 @@
 //! surface normal, the true density is modelled as three constant levels
 //! separated by two step edges (soft tissue → cortex → trabecular/marrow).
 //! The imaging system blurs these steps with a Gaussian of standard deviation
-//! `σ`, giving (Treece et al. 2010, 2012; Neeteson & Boyd 2025, eq. 6.1):
+//! `σ`, giving (Treece et al. 2010, 2012; Neeteson & Boyd 2025):
 //!
 //! ```text
 //! f(x) = ρs + (ρc − ρs)/2 · [1 + erf((x − m + t/2) / (σ√2))]
@@ -76,7 +76,7 @@ pub fn eval_grad(x: f64, p: &Params, rho_c: f64) -> (f64, Params) {
     (f, grad)
 }
 
-/// Residual weights along the profile (Treece et al. 2010; eq. 6.5):
+/// Residual weights along the profile (Treece et al. 2010):
 /// `γj = γ0 + (1 − γ0) · |xj| / max|x|`, so residuals at the surface node
 /// (`x = 0`) weigh `γ0` times as much as those at the far end of the line,
 /// decreasing linearly both outwards and inwards (as in the reference

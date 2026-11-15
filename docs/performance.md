@@ -42,7 +42,7 @@ Where the memory goes at 134k nodes:
 
 * profiles: `N × 67 × 4 B` = 36 MB;
 * Gauss–Newton blocks and work vectors: about 25 doubles per node;
-* the Neeteson operator `ω`: 8 B per neighbour, so 536 MB for k = 500 and
+* the smoothing operator `ω`: 8 B per neighbour, so 536 MB for k = 500 and
   69 MB for k = 64. It is the dominant cost at the paper's k = 500. Building
   it in place (fixed stride, then compaction) brought the k = 500 peak down
   from 1166 MB to 751 MB;
@@ -59,7 +59,7 @@ Two design changes made during development were driven by profiling:
   order, so results are bitwise identical for any thread count. This costs
   nothing measurable.
 
-## Against Bonelab (the reference implementation)
+## Against Bonelab (the original Python implementation)
 
 `python docs/scripts/compare_bonelab.py /path/to/Bonelab`. Bonelab's
 `LocalTreeceMinimization`, `GlobalControlPointTreeceMinimization` and
@@ -68,7 +68,7 @@ once by this crate. Bonelab's PyVista surface and sampling stages are not
 timed. "This crate fit" is the global initialisation plus the method fit.
 Bonelab's local fit is timed on 400 nodes and extrapolated (marked *).
 Bonelab's memory is its Python-heap peak during the fit (tracemalloc).
-Options follow Table 6.1 of the paper (k = 500 only at the smaller size).
+Options follow Table 1 of the paper (k = 500 only at the smaller size).
 
 ![Bonelab comparison](images/bonelab_comparison.png)
 

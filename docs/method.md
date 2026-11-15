@@ -1,22 +1,22 @@
 # Method
 
 This page describes what is computed and how, including where this
-implementation deliberately differs from the reference implementations. The
-mathematical notation follows Neeteson & Boyd (2025), chapter 6 of
-Neeteson's thesis.
+implementation deliberately differs from the original implementations. The
+mathematical notation follows our paper (Neeteson & Boyd 2025).
 
 * [Pipeline](#pipeline)
 * [The profile model](#the-profile-model)
 * [Residual weighting](#residual-weighting)
 * [Local method (Treece et al.)](#local-method)
 * [Blur: free, fixed, PSF, estimated PSF](#blur)
+* [Cortical density](#cortical-density)
 * [The global engine](#the-global-engine)
 * [Multigrid method](#multigrid-method)
 * [Regularised method](#regularised-method)
 * [Curvature penalty (extension)](#curvature-penalty)
 * [Segmentation refinement (extension)](#segmentation-refinement)
 * [Memory and performance design](#memory-and-performance-design)
-* [Differences from the reference implementations](#differences)
+* [Differences from the original implementations](#differences)
 
 ## Pipeline
 
@@ -68,8 +68,8 @@ density, `a₁ = ρc − ρs`, `a₂ = ρb − ρc`, `g_k = a_k φ(u_k)/σ`:
 `γ_j = γ0 + (1 − γ0) |x_j| / max|x|`: residuals at the node weigh `γ0` times
 those at the end of the line, so the model prefers to place its edges near
 the surface instead of on trabeculae (Treece et al. 2010). The absolute value
-follows the Bonelab reference implementation (eq. 6.5 of the paper is
-written without it).
+follows the original Python implementation in Bonelab (the paper writes
+the weighting without it).
 
 ## Local method
 
@@ -88,7 +88,7 @@ a **bounded Levenberg–Marquardt** iteration:
   gradient `max_i |g_i| / (‖J_i‖‖r‖)` (`gtol`) or step size (`xtol`).
 
 Nodes are fitted in parallel with no shared state. This is the classic CBM
-formulation as re-implemented by Neeteson & Boyd ("local method").
+formulation as re-implemented in our 2025 paper ("local method").
 
 ## Blur
 
@@ -109,14 +109,44 @@ formulation as re-implemented by Neeteson & Boyd ("local method").
 The cortical density `ρc` is always fixed; `ρc` and `σ` cannot both be
 determined from a thin cortex (Treece et al. 2012).
 
+## Cortical density
+
+`ρc` is fixed during the fit: with `ρc` free, thickness and density trade off
+(a thinner, denser cortex blurs into nearly the same profile), so `t` would
+be poorly determined where the cortex is thin. Three ways to choose it
+(`ModelOptions::rho_c_mode`, Python `rho_c=`):
+
+* **fixed** (default, `ρc = 1000`, Table 1): right for a density-calibrated
+  scanner when the cortical tissue density is known. A wrong value biases
+  thickness roughly in proportion, `t ∝ 1/ρc`, because the fit conserves the
+  cortical mass under the blurred profile.
+* **estimate**: one value for all nodes, the cortical plateau level where the
+  cortex is thick enough to show one. Starting from the 90th percentile of
+  the profile maxima, fit every node locally (`σ` free), keep nodes whose
+  fitted cortex has at least 3 samples farther than `2σ` from both edges,
+  take the median of those samples per node, and the median over nodes;
+  repeat once. It measures the *apparent* density of the cortex, i.e. with
+  its sub-resolution porosity, which is what a uniform-cortex model sees.
+  Profile maxima alone are biased up by noise and down by blur and profile
+  smoothing on a thin cortex.
+* **profile_max**: per node, the maximum of its (smoothed) profile, as the
+  original Python implementation does when no density is given. Per-node
+  densities need no change to the solvers: the model is linear in
+  `(ρs, ρc, ρb)`, so each profile is scaled by `ρ̄c / ρc,i` before the fit
+  (`ρ̄c` the median) and `ρs, ρb` and the residual are scaled back afterwards;
+  `m, t, σ` are unchanged. This differs from a per-node density only in the
+  relative weight of each node's data term against the regularisation. A thin
+  or blurred cortex never reaches its tissue density, so this underestimates
+  `ρc` and overestimates `t` exactly where the cortex is thin.
+
 ## The global engine
 
 The multigrid, regularised and initial global fits are all instances of one
 weighted least-squares problem over all profiles,
 
 ```text
-L = 1/(2NM) Σ_ij γ_j (f̂_ij − f_ij)²                     (data, eq. 6.3)
-  + ½ Σ_c κ_c ‖ω v_c‖²                                  (smoothing, eq. 6.13)
+L = 1/(2NM) Σ_ij γ_j (f̂_ij − f_ij)²                     (data)
+  + ½ Σ_c κ_c ‖ω v_c‖²                                  (smoothing)
   + ½ Σ_{surfaces} ‖r_curv‖²                            (curvature, extension)
 ```
 
@@ -145,7 +175,7 @@ matrix-free preconditioned conjugate gradients**:
   all roles, with and without interpolation, for both curvature modes and
   both Laplacians (`global::tests`).
 
-Compared with first-order L-BFGS-B on the same objective (Neeteson & Boyd)
+Compared with first-order L-BFGS-B on the same objective (as in our 2025 paper)
 this exploits the least-squares structure: it converges in 5–30 outer
 iterations and reaches the same optimum (the SciPy comparison agrees on the
 final cost to 8 significant digits; see [performance](performance.md)).
@@ -162,20 +192,19 @@ For each control-point spacing `s` (coarse to fine):
    a point if no accepted point lies within `s`; O(N) with a hash grid;
    deterministic for a seed);
 2. interpolation matrix `A` (N × Q): each node averages its `n` nearest
-   control points with normalised Gaussian weights of standard deviation `s`
-   (eq. 6.6–6.7);
+   control points with normalised Gaussian weights of standard deviation `s`;
 3. solve with `m, t, σ` as fields on the control points and `ρs, ρb` global,
    initialised from the previous level (or the global fit).
 
 ## Regularised method
 
-`m, t, σ` per node, `ρs, ρb` global, plus the penalty of eq. 6.13:
+`m, t, σ` per node, `ρs, ρb` global, plus the smoothing penalty:
 
 ```text
 λ/(2N) · ρc² · [ ‖ω m‖²/t0² + ‖ω t‖²/t0² + ‖ω σ‖²/σ0² ]
 ```
 
-with `t0`, `σ0` from the global fit and `ω` the `N × N` operator of eq. 6.14,
+with `t0`, `σ0` from the global fit and `ω` the `N × N` smoothing operator,
 `(ω x)_i = x_i − Σ_k g(d_ik) x_k / Σ_k g(d_ik)` over the `k` nearest
 neighbours (excluding the node itself) with a Gaussian of standard deviation
 `σ_reg`. Neighbours farther than `cutoff · σ_reg` (default 3) are dropped
@@ -183,7 +212,7 @@ neighbours (excluding the node itself) with a Gaussian of standard deviation
 
 **Note on scale.** With `k` nearest neighbours the operator acts over the
 radius they cover, `≈ √(k/π) · node spacing`. At HR-pQCT node spacing (~60 µm),
-`k = 500` covers ~0.76 mm, so with `σ_reg = 1.924 mm` the Gaussian weights are
+`k = 500` covers ~0.76 mm, so with `σ_reg = 1.9424 mm` the Gaussian weights are
 nearly uniform and the effective length scale is set by `k`, not by
 `σ_reg`. The implementation is faithful to the paper in this respect; the
 curvature Laplacian below avoids it by sampling.
@@ -219,7 +248,7 @@ modes:
 
 `ℓ` (default: the globally fitted thickness `t0`) makes curvature
 dimensionless so that `μ` plays the same role as `λ`. Either or both surfaces
-can be penalised. It can be combined with the Neeteson smoothing term or used
+can be penalised. It can be combined with the spatial smoothing term or used
 alone (`λ = 0`).
 
 Two Laplacians:
@@ -290,12 +319,12 @@ any single fit (`CbmResult.masks`, `cortical_masks`).
 
 ## Differences
 
-From the Bonelab reference implementation (Neeteson & Boyd), on purpose:
+From the original Python implementation in Bonelab, on purpose:
 
 | | Bonelab | this crate |
 |---|---|---|
 | optimiser | SciPy L-BFGS-B (global), TRF with numerical Jacobian (local) | bounded LM with analytic Jacobian (local), Gauss–Newton/LM + PCG (global) |
-| regularised loss | m/t penalty scaled by `ρc²/t0` in the loss but `ρc²/t0²` in the gradient; σ penalty only in the gradient | eq. 6.13 consistently (`ρc²/t0²`, `ρc²/σ0²`) in loss and gradient |
+| regularised loss | m/t penalty scaled by `ρc²/t0` in the loss but `ρc²/t0²` in the gradient; σ penalty only in the gradient | the smoothing penalty consistently (`ρc²/t0²`, `ρc²/σ0²`) in loss and gradient |
 | local residuals | `γ_j r_j` (weights effectively `γ²`) | `√γ_j r_j` (weights `γ`, consistent with the global methods) |
 | `ω` neighbours | `k` including the point itself | `k` excluding it, optional distance cut-off |
 | surface | PyVista contour + `smooth_taubin` (windowed sinc) | surface nets + Taubin λ\|μ |

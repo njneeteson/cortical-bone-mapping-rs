@@ -241,7 +241,8 @@ pub fn trusted_fits(result: &CbmResult, options: &Options) -> Vec<bool> {
         .params
         .iter()
         .zip(&result.residual)
-        .map(|(p, &r)| {
+        .enumerate()
+        .map(|(i, (p, &r))| {
             let edge = p[M] - 0.5 * p[T];
             let s = p[crate::model::SIGMA];
             edge > x0 + s
@@ -250,8 +251,8 @@ pub fn trusted_fits(result: &CbmResult, options: &Options) -> Vec<bool> {
                 && p[M] < hi[M] - eps(lo[M], hi[M])
                 && p[T] > lo[T] + eps(lo[T], hi[T])
                 && p[T] < hi[T] - eps(lo[T], hi[T])
-                && result.rho_c > p[crate::model::RHO_S]
-                && result.rho_c > p[crate::model::RHO_B]
+                && result.rho_c_at(i) > p[crate::model::RHO_S]
+                && result.rho_c_at(i) > p[crate::model::RHO_B]
                 && (!(med > 0.0) || r <= 3.0 * med)
         })
         .collect()

@@ -1,14 +1,14 @@
 //! Sparse linear operators used by the global solver:
 //!
 //! * [`SparseRows`]: a row-compressed sparse matrix (used for the multigrid
-//!   interpolation matrix `A`, eq. 6.6–6.8).
+//!   interpolation matrix `A`).
 //! * [`SmoothingOperator`]: the spatial regularisation matrix `ω` of
-//!   Neeteson & Boyd (eq. 6.14), `(ω x)_i = x_i − Σ_k g(d_ik) x_k / Σ_k g(d_ik)`
+//!   Neeteson & Boyd (2025), `(ω x)_i = x_i − Σ_k g(d_ik) x_k / Σ_k g(d_ik)`
 //!   over the k nearest neighbours.
 //! * [`CurvatureOperator`]: curvature penalties on the fitted periosteal and
 //!   endosteal surfaces (an extension in this crate).
 //! * [`select_control_points`]: random sequential selection of control points
-//!   with a minimum separation (§6.1.2.1).
+//!   with a minimum separation.
 //!
 //! Transposed products use one accumulation buffer per worker thread instead
 //! of storing the transpose, which halves the memory of the large
@@ -137,7 +137,7 @@ fn gaussian_weights(d2: &[f64], sigma: f64) -> Vec<f64> {
 
 /// The multigrid interpolation matrix `A` (N × Q): each point takes a
 /// Gaussian-weighted (σ = `spacing`) average of its `k` nearest control
-/// points (eq. 6.6–6.7).
+/// points.
 pub fn interpolation_matrix(points: &[V3], controls: &[V3], k: usize, spacing: f64) -> SparseRows<f64> {
     let tree = KdTree::new(controls);
     let k = k.max(1).min(controls.len());
@@ -155,7 +155,7 @@ pub fn interpolation_matrix(points: &[V3], controls: &[V3], k: usize, spacing: f
 
 /// Random sequential selection of control points such that no two are
 /// closer than `spacing` and every point is within `spacing` of a control
-/// point (§6.1.2.1). Returns indices into `points`. Deterministic for a seed.
+/// point. Returns indices into `points`. Deterministic for a seed.
 pub fn select_control_points(points: &[V3], spacing: f64, seed: u64) -> Vec<u32> {
     let mut order: Vec<u32> = (0..points.len() as u32).collect();
     Rng::new(seed).shuffle(&mut order);
@@ -193,7 +193,7 @@ pub fn select_control_points(points: &[V3], spacing: f64, seed: u64) -> Vec<u32>
     chosen
 }
 
-/// The spatial regularisation operator `ω` (eq. 6.14) with the off-diagonal
+/// The spatial regularisation operator `ω` with the off-diagonal
 /// weights stored as `f32`: `(ω x)_i = x_i − Σ_k w_ik x_k`, `Σ_k w_ik = 1`.
 pub struct SmoothingOperator {
     pub rows: SparseRows<f32>,

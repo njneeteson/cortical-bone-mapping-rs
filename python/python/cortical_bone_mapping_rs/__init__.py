@@ -51,6 +51,7 @@ __all__ = [
     "RefineResult",
     "Phantom",
     "BonePhantom",
+    "JointPhantom",
     "BuieOptions",
     "buie_segmentation",
     "cortical_bone_mapping",
@@ -77,7 +78,7 @@ class Options:
     """All options of the cortical bone mapping pipeline.
 
     Lengths are in the physical units of ``spacing`` (e.g. mm), densities in
-    image units. Defaults for the model follow Table 6.1 of Neeteson & Boyd.
+    image units. Defaults for the model follow Table 1 of Neeteson & Boyd (2025).
 
     **Geometry**
 
@@ -110,7 +111,12 @@ class Options:
     **Model**
 
     rho_c
-        Fixed cortical density.
+        Cortical density (not fitted): a number, ``"estimate"`` (one value for
+        all nodes: the median cortical plateau level of nodes whose locally
+        fitted cortex has samples more than 2 sigma from both edges) or ``"profile_max"`` (per node: the maximum of
+        its smoothed profile, as the original Python implementation does when
+        no density is given; a thin or blurred cortex never reaches the tissue
+        density, so its thickness is overestimated).
     residual_boost
         ``gamma_0``: weight of residuals at the surface relative to the inner
         end of the profile (Treece et al. 2010).
@@ -192,7 +198,7 @@ class Options:
     normal_constraint: Literal["none", "in_plane", "along_axis"] = "none"
     normal_axis: int = 0
     # model
-    rho_c: float = 1000.0
+    rho_c: Union[float, Literal["estimate", "profile_max"]] = 1000.0
     residual_boost: float = 10.0
     init: Quint = (0.0, 1.0, 0.1, 0.0, 0.0)
     lower: Quint = (-3.0, 0.0607, 0.01, -200.0, -200.0)
@@ -212,11 +218,11 @@ class Options:
     cg_tolerance: float = 1e-3
     # method
     method: Literal["local", "multigrid", "regularized"] = "local"
-    multigrid_spacings: Sequence[float] = (7.77, 3.885, 1.942, 0.971)
+    multigrid_spacings: Sequence[float] = (7.7696, 3.8848, 1.9424, 0.9712)
     multigrid_neighbours: int = 5
     seed: int = 0
     reg_lambda: float = 1.0
-    reg_sigma: float = 1.924
+    reg_sigma: float = 1.9424
     reg_neighbours: int = 500
     reg_cutoff: float = 3.0
     init_from_local: bool = False
@@ -244,9 +250,54 @@ class Options:
                 raise ValueError(f"{k} must have 5 values (m, t, sigma, rho_s, rho_b)")
             d[k] = v
         d["multigrid_spacings"] = [float(s) for s in self.multigrid_spacings]
+        if isinstance(self.rho_c, str):
+            if self.rho_c not in ("estimate", "profile_max"):
+                raise ValueError('rho_c must be a number, "estimate" or "profile_max"')
+            d["rho_c_mode"], d["rho_c"] = self.rho_c, 1000.0
+        else:
+            d["rho_c_mode"], d["rho_c"] = "fixed", float(self.rho_c)
         if self.threads is not None and (not isinstance(self.threads, int) or self.threads < 1):
             raise ValueError("threads must be a positive integer or None")
         return d
+
+    @classmethod
+    def preset(cls, site: Literal["radius_tibia", "knee"], voxel: float = 0.0607, **overrides) -> "Options":
+        """The parameters of Table 1 of Neeteson & Boyd (2025) for ``site``.
+
+        Isotropic voxels of size ``voxel`` (mm), array axis 0 the scan axis,
+        regularised method. Taubin smoothing 100 iterations (pass-band 0.1,
+        knee 0.01); sampling 5 mm outside and 15 mm inside at the voxel size;
+        profile smoothing sigma = 3 samples; normals in the transverse plane
+        (radius & tibia) or along the scan axis (knee); multigrid spacings
+        128...16 (knee 256...16) voxels; regularisation lambda = 1,
+        sigma_reg = 1.942 mm, 500 (knee 1000) neighbours. Table 1's L-BFGS-B
+        tolerances do not apply to this solver. ``overrides`` replace any
+        field.
+        """
+        if site not in ("radius_tibia", "knee"):
+            raise ValueError('site must be "radius_tibia" or "knee"')
+        knee = site == "knee"
+        coarsest = 256 if knee else 128
+        spacings = []
+        s = coarsest
+        while s >= 16:
+            spacings.append(s * voxel)
+            s //= 2
+        base = cls(
+            spacing=(voxel,) * 3,
+            taubin_iterations=100,
+            taubin_passband=0.01 if knee else 0.1,
+            outside=5.0,
+            inside=15.0,
+            resolution=voxel,
+            profile_smoothing=3.0,
+            normal_constraint="along_axis" if knee else "in_plane",
+            normal_axis=0,
+            method="regularized",
+            multigrid_spacings=tuple(spacings),
+            reg_neighbours=1000 if knee else 500,
+        )
+        return replace(base, **overrides)
 
 
 @dataclass
@@ -370,6 +421,7 @@ class CbmResult:
     options: Options
     profile_x: Optional[np.ndarray] = None
     profiles: Optional[np.ndarray] = None
+    rho_c_node: Optional[np.ndarray] = None
 
     @classmethod
     def _from_core(cls, d: dict, options: Options) -> "CbmResult":
@@ -389,6 +441,7 @@ class CbmResult:
             options=options,
             profile_x=d.get("profile_x"),
             profiles=d.get("profiles"),
+            rho_c_node=d.get("rho_c_node"),
         )
 
     @property
@@ -432,7 +485,8 @@ class CbmResult:
             if self.profile_x is None:
                 raise ValueError("pass x or run with keep_profiles=True")
             x = self.profile_x
-        return profile_model(x, self.params[i], self.rho_c)
+        rc = self.rho_c if self.rho_c_node is None else float(self.rho_c_node[i])
+        return profile_model(x, self.params[i], rc)
 
     def displaced_surface(self, side: Literal["periosteal", "endosteal"]) -> np.ndarray:
         """Full-surface vertices with fitted nodes moved to the fitted edge."""
@@ -753,8 +807,20 @@ class BonePhantom:
     * voxel integration (``supersample``), Gaussian PSF ``blur`` (physical
       SD per axis) and Gaussian ``noise``.
 
+    * optionally a ``neighbour`` bone (fibula / ulna) given as
+      ``(radius, cortical thickness, gap, angle)``: circular, solid cortex,
+      same trabecular pattern, placed so that the gap between the periosteal
+      surfaces along direction ``angle`` (radians, 0 = array axis 1) is
+      ``gap`` in every slice;
+    * optionally cortical ``breaks``, each ``(angle, width, z_center, length)``:
+      the full cortical depth replaced by soft tissue over a periosteal arc of
+      length ``width`` for ``|z - z_center| < length / 2``. The true
+      periosteal surface spans the break.
+
     Densities: ``rho_soft`` outside, ``rho_bone`` for cortical and
-    trabecular tissue, ``rho_marrow`` in marrow and pores.
+    trabecular tissue, ``rho_marrow`` in marrow and pores. The truth masks
+    are of the main bone only; :meth:`labels` marks the neighbour and the
+    breaks.
     """
 
     dims: Tuple[int, int, int] = (32, 192, 192)
@@ -782,18 +848,27 @@ class BonePhantom:
     noise: float = 40.0
     seed: int = 1
     supersample: int = 2
+    neighbour: Optional[Tuple[float, float, float, float]] = None
+    breaks: Sequence[Tuple[float, float, float, float]] = ()
 
     def _spec(self) -> dict:
         d = asdict(self)
         d["dims"] = tuple(int(x) for x in self.dims)
         d["spacing"] = _triple(self.spacing, "spacing")
         d["blur"] = _triple(self.blur, "blur")
+        d["neighbour"] = None if self.neighbour is None else tuple(float(v) for v in self.neighbour)
+        d["breaks"] = [tuple(float(v) for v in b) for b in self.breaks]
         return d
 
     def generate(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """``(image float32, periosteal mask, endosteal mask)``; the true
         cortical mask is ``periosteal & ~endosteal``."""
         return _core.bone_phantom(self._spec())
+
+    def labels(self) -> np.ndarray:
+        """uint8 labels at voxel centres: 1 = neighbouring bone, 2 = cortical
+        break (soft tissue inside the cortex shell), 0 otherwise."""
+        return _core.bone_phantom_labels(self._spec())
 
     def edges_along(self, points, normals, x0: float, x1: float) -> np.ndarray:
         """True ``(x_periosteal, x_endosteal)`` crossings along each line
@@ -807,6 +882,99 @@ class BonePhantom:
         o = result.options
         e = self.edges_along(result.points, result.normals, -o.outside, o.inside)
         return e[:, 1] - e[:, 0]
+
+
+@dataclass
+class JointPhantom:
+    """A knee-joint phantom: the articular ends of the tibia (below) and the
+    femur (above, along array axis 0) across a narrow joint space.
+
+    Each bone is a star-shaped cylinder (footprint ``radius``, femur
+    ``femur_scale`` larger) cut by its articular surface, with the rim
+    rounded over ``rim_rounding``. The tibial plateau is a shallow dish
+    (curvature radius ``tibia_curvature``) with random bumps; the femoral
+    condyle is more curved (``femur_curvature``), so the joint space is
+    ``joint_space`` at the contact point (``contact_offset`` from the axis)
+    and widens towards the rim. The cortex is a subchondral plate
+    (``plate_thickness``, random relative variation ``plate_variation``,
+    minimum ``plate_min``) and a thin side shell (``shell_thickness``);
+    trabecular BV/TV rises from ``bvtv`` to ``endo_bvtv`` towards the plate;
+    the plate has pores. The joint space holds cartilage / fluid
+    (``rho_cartilage``).
+
+    This is a scaled-down joint (a real tibial plateau is ~70 mm wide): it
+    reproduces the local geometry of the contact region in a small volume.
+    """
+
+    dims: Tuple[int, int, int] = (100, 200, 200)
+    spacing: Triple = (0.0607, 0.0607, 0.0607)
+    radius: float = 5.0
+    femur_scale: float = 1.05
+    shape_harmonics: int = 5
+    shape_amplitude: float = 0.08
+    joint_level: float = 0.45
+    joint_space: float = 0.4
+    contact_offset: Tuple[float, float] = (0.8, -0.5)
+    tibia_curvature: float = 20.0
+    femur_curvature: float = 9.0
+    bump_amplitude: float = 0.08
+    bump_wavelength: float = 4.0
+    plate_thickness: float = 0.45
+    plate_variation: float = 0.3
+    plate_min: float = 0.15
+    shell_thickness: float = 0.3
+    rim_rounding: float = 0.4
+    bvtv: float = 0.22
+    endo_bvtv: float = 0.4
+    transition_width: float = 0.4
+    trabecular_wavelength: float = 1.0
+    porosity: float = 0.03
+    pore_wavelength: float = 0.35
+    rho_soft: float = 50.0
+    rho_cartilage: float = 80.0
+    rho_bone: float = 1000.0
+    rho_marrow: float = 30.0
+    blur: Triple = (0.08, 0.08, 0.08)
+    noise: float = 40.0
+    seed: int = 1
+    supersample: int = 2
+
+    TIBIA = 1
+    FEMUR = 2
+
+    def _spec(self) -> dict:
+        d = asdict(self)
+        d["dims"] = tuple(int(x) for x in self.dims)
+        d["spacing"] = _triple(self.spacing, "spacing")
+        d["blur"] = _triple(self.blur, "blur")
+        d["contact_offset"] = tuple(float(v) for v in self.contact_offset)
+        return d
+
+    def joint_height(self) -> float:
+        """Height of the tibial plateau at the contact point (physical, axis 0)."""
+        return self.joint_level * (self.dims[0] - 1) * _triple(self.spacing, "spacing")[0]
+
+    def generate(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """``(image float32, periosteal labels, endosteal labels)``: uint8,
+        0 outside, 1 tibia, 2 femur."""
+        return _core.joint_phantom(self._spec())
+
+    def edges_along(self, points, normals, x0: float, x1: float) -> np.ndarray:
+        """True ``(x_periosteal, x_endosteal, bone)`` along each line ``p + x n``
+        (first entry into either bone, then into its marrow space), shape (N, 3)."""
+        p = np.ascontiguousarray(points, dtype=np.float64)
+        n = np.ascontiguousarray(normals, dtype=np.float64)
+        return _core.joint_phantom_edges(self._spec(), p, n, float(x0), float(x1))
+
+    def true_thickness(self, result: "CbmResult", bone: Optional[int] = None) -> np.ndarray:
+        """Reference thickness along each sampling line of a result (NaN where
+        the line first enters a bone other than ``bone``, if given)."""
+        o = result.options
+        e = self.edges_along(result.points, result.normals, -o.outside, o.inside)
+        t = e[:, 1] - e[:, 0]
+        if bone is not None:
+            t[e[:, 2] != bone] = np.nan
+        return t
 
 
 @dataclass

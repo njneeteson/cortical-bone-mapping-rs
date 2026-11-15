@@ -153,7 +153,7 @@ def main():
         t_rust_reg = time.perf_counter() - t
         tracemalloc.start()
         t = time.perf_counter()
-        t_sp, cost_sp, nit = scipy_regularized(reg.points, prof, x, w, reg.global_params, 1.0, 1.924, k)
+        t_sp, cost_sp, nit = scipy_regularized(reg.points, prof, x, w, reg.global_params, 1.0, 1.9424, k)
         t_sp_reg = time.perf_counter() - t
         peak = tracemalloc.get_traced_memory()[1]
         tracemalloc.stop()

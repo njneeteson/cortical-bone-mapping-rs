@@ -144,6 +144,12 @@ fn parse_options(d: &Bound<'_, PyDict>) -> PyResult<cbm::Options> {
         },
         model: cbm::ModelOptions {
             rho_c: req(d, "rho_c")?,
+            rho_c_mode: match req::<String>(d, "rho_c_mode")?.as_str() {
+                "fixed" => cbm::RhoCMode::Fixed,
+                "estimate" => cbm::RhoCMode::Estimate,
+                "profile_max" => cbm::RhoCMode::ProfileMax,
+                m => return Err(PyValueError::new_err(format!("unknown rho_c mode {m:?}"))),
+            },
             residual_boost: req(d, "residual_boost")?,
             init: req(d, "init")?,
             lower: req(d, "lower")?,
@@ -200,6 +206,9 @@ fn result_dict<'py>(py: Python<'py>, r: &cbm::CbmResult) -> PyResult<Bound<'py, 
     d.set_item("global_params", r.global_params.to_vec())?;
     d.set_item("psf", r.psf.map(|p| p.to_vec()))?;
     d.set_item("rho_c", r.rho_c)?;
+    if let Some(v) = &r.rho_c_node {
+        d.set_item("rho_c_node", v.clone().into_pyarray(py))?;
+    }
     let info = PyDict::new(py);
     info.set_item("method", &r.info.method)?;
     info.set_item("converged", r.info.converged)?;
@@ -525,6 +534,24 @@ fn bone_phantom_from(spec: &Bound<'_, PyDict>) -> PyResult<cbm::bone_phantom::Bo
         noise: req(spec, "noise")?,
         seed: req(spec, "seed")?,
         supersample: req(spec, "supersample")?,
+        neighbour: opt::<(f64, f64, f64, f64)>(spec, "neighbour")?.map(|(radius, thickness, gap, angle)| {
+            cbm::bone_phantom::NeighbourBone {
+                radius,
+                thickness,
+                gap,
+                angle,
+            }
+        }),
+        breaks: opt::<Vec<(f64, f64, f64, f64)>>(spec, "breaks")?
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(angle, width, z_center, length)| cbm::bone_phantom::CorticalBreak {
+                angle,
+                width,
+                z_center,
+                length,
+            })
+            .collect(),
     };
     let (d0, d1, d2) = ph.dims;
     if d0 < 2 || d1 < 2 || d2 < 2 || ph.spacing.iter().any(|s| s.is_nan() || *s <= 0.0) {
@@ -574,6 +601,97 @@ fn bone_phantom_edges<'py>(
     Ok(Array2::from_shape_vec((e.len(), 2), flat).unwrap().into_pyarray(py))
 }
 
+/// Feature labels of a bone phantom: 1 = neighbouring bone, 2 = cortical break.
+#[pyfunction]
+#[pyo3(signature = (spec))]
+fn bone_phantom_labels<'py>(py: Python<'py>, spec: &Bound<'py, PyDict>) -> PyResult<Bound<'py, numpy::PyArray3<u8>>> {
+    let ph = bone_phantom_from(spec)?;
+    Ok(py.detach(|| ph.labels()).into_pyarray(py))
+}
+
+fn joint_phantom_from(spec: &Bound<'_, PyDict>) -> PyResult<cbm::joint_phantom::JointPhantom> {
+    let ph = cbm::joint_phantom::JointPhantom {
+        dims: req(spec, "dims")?,
+        spacing: req(spec, "spacing")?,
+        radius: req(spec, "radius")?,
+        femur_scale: req(spec, "femur_scale")?,
+        shape_harmonics: req(spec, "shape_harmonics")?,
+        shape_amplitude: req(spec, "shape_amplitude")?,
+        joint_level: req(spec, "joint_level")?,
+        joint_space: req(spec, "joint_space")?,
+        contact_offset: req(spec, "contact_offset")?,
+        tibia_curvature: req(spec, "tibia_curvature")?,
+        femur_curvature: req(spec, "femur_curvature")?,
+        bump_amplitude: req(spec, "bump_amplitude")?,
+        bump_wavelength: req(spec, "bump_wavelength")?,
+        plate_thickness: req(spec, "plate_thickness")?,
+        plate_variation: req(spec, "plate_variation")?,
+        plate_min: req(spec, "plate_min")?,
+        shell_thickness: req(spec, "shell_thickness")?,
+        rim_rounding: req(spec, "rim_rounding")?,
+        bvtv: req(spec, "bvtv")?,
+        endo_bvtv: req(spec, "endo_bvtv")?,
+        transition_width: req(spec, "transition_width")?,
+        trabecular_wavelength: req(spec, "trabecular_wavelength")?,
+        porosity: req(spec, "porosity")?,
+        pore_wavelength: req(spec, "pore_wavelength")?,
+        rho_soft: req(spec, "rho_soft")?,
+        rho_cartilage: req(spec, "rho_cartilage")?,
+        rho_bone: req(spec, "rho_bone")?,
+        rho_marrow: req(spec, "rho_marrow")?,
+        blur: req(spec, "blur")?,
+        noise: req(spec, "noise")?,
+        seed: req(spec, "seed")?,
+        supersample: req(spec, "supersample")?,
+    };
+    let (d0, d1, d2) = ph.dims;
+    if d0 < 2 || d1 < 2 || d2 < 2 || ph.spacing.iter().any(|s| s.is_nan() || *s <= 0.0) {
+        return Err(PyValueError::new_err("phantom dims must be >= 2 and spacing positive"));
+    }
+    Ok(ph)
+}
+
+/// Generate a knee-joint phantom: (image, periosteal labels, endosteal labels).
+#[pyfunction]
+#[pyo3(signature = (spec))]
+#[allow(clippy::type_complexity)]
+fn joint_phantom<'py>(
+    py: Python<'py>,
+    spec: &Bound<'py, PyDict>,
+) -> PyResult<(
+    Bound<'py, numpy::PyArray3<f32>>,
+    Bound<'py, numpy::PyArray3<u8>>,
+    Bound<'py, numpy::PyArray3<u8>>,
+)> {
+    let ph = joint_phantom_from(spec)?;
+    let (img, p, e) = py.detach(|| ph.generate());
+    Ok((img.into_pyarray(py), p.into_pyarray(py), e.into_pyarray(py)))
+}
+
+/// True (periosteal, endosteal, bone) crossings along lines p + x n.
+#[pyfunction]
+#[pyo3(signature = (spec, points, normals, x0, x1))]
+fn joint_phantom_edges<'py>(
+    py: Python<'py>,
+    spec: &Bound<'py, PyDict>,
+    points: PyReadonlyArray2<'py, f64>,
+    normals: PyReadonlyArray2<'py, f64>,
+    x0: f64,
+    x1: f64,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let ph = joint_phantom_from(spec)?;
+    let p = points.as_array();
+    let n = normals.as_array();
+    if p.ncols() != 3 || n.dim() != p.dim() {
+        return Err(PyValueError::new_err("points and normals must both be (N, 3)"));
+    }
+    let pv: Vec<V3> = p.rows().into_iter().map(|r| [r[0], r[1], r[2]]).collect();
+    let nv: Vec<V3> = n.rows().into_iter().map(|r| [r[0], r[1], r[2]]).collect();
+    let e = py.detach(|| ph.edges_along(&pv, &nv, x0, x1));
+    let flat: Vec<f64> = e.iter().flat_map(|(a, b, c)| [*a, *b, *c as f64]).collect();
+    Ok(Array2::from_shape_vec((e.len(), 3), flat).unwrap().into_pyarray(py))
+}
+
 /// Buie et al. (2007) dual-threshold segmentation: (periosteal, cortical, trabecular).
 #[pyfunction]
 #[pyo3(signature = (image, opts))]
@@ -619,6 +737,9 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fit_profiles, m)?)?;
     m.add_function(wrap_pyfunction!(bone_phantom, m)?)?;
     m.add_function(wrap_pyfunction!(bone_phantom_edges, m)?)?;
+    m.add_function(wrap_pyfunction!(bone_phantom_labels, m)?)?;
+    m.add_function(wrap_pyfunction!(joint_phantom, m)?)?;
+    m.add_function(wrap_pyfunction!(joint_phantom_edges, m)?)?;
     m.add_function(wrap_pyfunction!(buie, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())

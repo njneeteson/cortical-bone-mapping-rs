@@ -35,7 +35,7 @@ import cortical_bone_mapping_rs as cbm
 
 OUT = Path(__file__).resolve().parents[1] / "bonelab_comparison.json"
 
-# Table 6.1 (radius & tibia) of Neeteson & Boyd, except the trabecular initial
+# Table 1 (radius & tibia) of Neeteson & Boyd (2025), except the trabecular initial
 # guess: Bonelab's CLI default of 200 (with 0, its L-BFGS-B initial global fit
 # stalls at the bounds m = 6, sigma = 2 on these phantoms; see performance.md)
 COMMON = dict(
@@ -129,11 +129,11 @@ def main(root):
         for k in (64, 500):
             if k == 500 and n > 10000:
                 continue  # Bonelab's dense (n, k) intermediates get large; see docs
-            bl = Regularization(points=pts, neighbours_regularization=k, sigma_regularization=1.924,
+            bl = Regularization(points=pts, neighbours_regularization=k, sigma_regularization=1.9424,
                                 lambda_regularization=1.0, f_ij=f_ij, x_j=x_j, **COMMON)
             (m, t, *_), dt, peak = timed(bl.fit)
             rr, t_rr, _ = timed(lambda: cbm.cortical_bone_mapping(
-                img, mask, ph.spacing, method="regularized", reg_neighbours=k, reg_sigma=1.924, **RUST))
+                img, mask, ph.spacing, method="regularized", reg_neighbours=k, reg_sigma=1.9424, **RUST))
             rows.append(dict(method=f"regularized k={k}", nodes=n, bonelab_time=dt, bonelab_peak_bytes=peak,
                              bonelab_rmse=rmse(t, truth), rust_fit_time=fit_time(rr), rust_total_time=t_rr,
                              rust_rmse=rmse(rr.thickness, truth)))
