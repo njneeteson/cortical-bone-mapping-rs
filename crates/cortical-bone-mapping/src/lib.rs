@@ -43,6 +43,7 @@
 // `!(x > 0.0)` is used deliberately: unlike `x <= 0.0` it also rejects NaN.
 #![allow(clippy::neg_cmp_op_on_partial_ord)]
 
+pub mod bone_phantom;
 pub mod global;
 pub mod kdtree;
 pub mod local;
@@ -53,6 +54,7 @@ pub mod pipeline;
 pub mod profiles;
 pub mod psf;
 pub mod refine;
+pub mod segmentation;
 pub mod surface;
 pub mod synthetic;
 pub mod util;

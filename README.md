@@ -46,6 +46,10 @@ Further documentation:
   phantoms, noise sweeps, the curvature penalty, and segmentation refinement.
 * **[docs/performance.md](docs/performance.md)**: run time and memory, and
   comparisons with the Bonelab reference implementation and with SciPy.
+* **[docs/buie.md](docs/buie.md)**: Buie's dual-threshold segmentation
+  (implemented from the 2007 paper), and an experiment on realistic bone
+  phantoms: CBM fitted to a Buie segmentation cuts the endosteal error of a
+  thin porous cortex from 134 to 39 µm (cortex Dice 0.78 → 0.94).
 
 ## Features
 
@@ -61,6 +65,11 @@ Further documentation:
   uniform offsets free), or absolute curvature above a threshold
   (`"excess"`). It uses a scale-controlled point-cloud Laplacian or the
   cotangent Laplacian, and can be used alone or with the Neeteson term.
+* **Buie dual threshold.** Segmentation after Buie et al. (2007), usable as
+  the starting segmentation (`cbm.buie_segmentation`).
+* **Realistic phantoms.** `cbm.BonePhantom` has an irregular, axially
+  varying shape and thickness, trabeculae, cortical pores and an
+  endocortical transition zone, with exact ground truth along any line.
 * **Segmentation refinement (new).** An under-relaxed fixed-point iteration
   that moves the surface to the fitted periosteal edge and refits until it
   stabilises. It returns refined periosteal, endosteal and cortical masks.
@@ -71,8 +80,9 @@ Further documentation:
   * `f32` profiles, and compact sparse operators built without temporary
     copies.
   * Against the Bonelab reference implementation on the same profiles: the
-    local fit is ~440× faster, multigrid ~50× and regularised ~12× (which
-    Bonelab stops early), with equal or better accuracy. The regularised fit
+    local fit is ~440× faster, multigrid ~50× and regularised ~12× against
+    Bonelab's defaults, which stop early (~10–20× against a converged
+    Bonelab solve), with equal or better accuracy. The regularised fit
     is ~70× faster than a converged SciPy L-BFGS-B solve of the same
     objective and reaches the same optimum (see
     [performance](docs/performance.md)).

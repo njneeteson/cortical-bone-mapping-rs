@@ -91,13 +91,24 @@ Notes:
   the SciPy check below, to a median of 4e-8 mm. The speed-up comes from
   analytic Jacobians, 5×5 normal equations instead of SciPy's TRF machinery
   with finite-difference Jacobians, compiled code, and all cores.
-* **Global methods.** This crate is both faster and more accurate. Bonelab's
-  L-BFGS-B runs stop early. A likely contributor is that the regularised loss
-  and its gradient disagree (the loss scales the m/t penalty by `ρc²/t0`, the
-  gradient by `ρc²/t0²`, and the σ penalty is missing from the loss). The
-  speed-ups for the regularised method are therefore *against an
-  unconverged solve*. Against a converged L-BFGS-B solve of the same
-  objective (SciPy, below) the factor is ~70×.
+* **Global methods.** This crate is both faster and more accurate, because
+  Bonelab's L-BFGS-B runs stop before convergence. At 7,392 nodes
+  (regularised, k = 64), the thickness RMSE is:
+
+  | Bonelab configuration | RMSE | time |
+  |---|---|---|
+  | default tolerances (1e-6) | 18.65 µm | 2.6 s |
+  | tight tolerances (`f_tol = 1e-14`, `g_tol = 1e-12`) | 16.30 µm | 4.4 s |
+  | tight tolerances + consistent loss | 15.70 µm | 10.7 s |
+  | this crate | 15.18 µm | 0.47 s |
+
+  The regularised loss and gradient also disagree: the loss scales the m/t
+  penalty by `ρc²/t0` and the gradient by `ρc²/t0²`, and the σ penalty is
+  missing from the loss. Fixing that only matters once the solve runs to
+  convergence. The regularised speed-ups in the table above are therefore
+  against an *unconverged* solve. Against converged solves the factor is
+  ~10–20× (Bonelab, tight tolerances) and ~70× (SciPy L-BFGS-B on the
+  identical objective, below).
 * **Robustness.** With the trabecular initial guess at 0, Bonelab's initial
   one-model L-BFGS-B fit stalls on the bounds (`m = 6`, `σ = 2`, `t ≈ 11 mm`)
   on these phantoms, and every global method inherits that (RMSE ≈ 8–9 mm).

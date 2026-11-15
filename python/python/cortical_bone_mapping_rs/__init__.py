@@ -50,6 +50,9 @@ __all__ = [
     "CbmResult",
     "RefineResult",
     "Phantom",
+    "BonePhantom",
+    "BuieOptions",
+    "buie_segmentation",
     "cortical_bone_mapping",
     "refine_segmentation",
     "voxelize",
@@ -725,3 +728,130 @@ class Phantom:
     def true_mask(self) -> np.ndarray:
         """The unperturbed segmentation."""
         return replace(self, mask_offset=0.0, mask_bump=0.0, noise=0.0, supersample=1).generate()[1]
+
+
+@dataclass
+class BonePhantom:
+    """A realistic long-bone phantom (shaft along axis 0) with known geometry.
+
+    * periosteal cross-section: random star-shaped curve
+      ``R(theta, z) = radius * (1 + sum_k a_k cos(k theta + phi_k + w_k z))``
+      (``shape_harmonics`` terms from k = 2, first amplitude ~``shape_amplitude``,
+      decaying as k^-1.5, phases drifting over ``axial_wavelength``), centre
+      wandering by ``center_wander``;
+    * radial cortical thickness: independent random harmonics
+      (``thickness_variation``) plus an axial modulation, clipped at
+      ``thickness_min``;
+    * trabecular network in the marrow space (thin level-set shell of a
+      random field, bone volume fraction ``bvtv``, pattern wavelength
+      ``trabecular_wavelength``, elongated along the axis);
+    * cortical pores (volume fraction ``porosity``);
+    * an endocortical transition zone: porosity rising by ``endo_porosity``
+      towards the endosteum and trabecular BV/TV rising to ``endo_bvtv``
+      within ~``transition_width`` of it (the true endosteal surface stays the
+      smooth ``r = R - t``);
+    * voxel integration (``supersample``), Gaussian PSF ``blur`` (physical
+      SD per axis) and Gaussian ``noise``.
+
+    Densities: ``rho_soft`` outside, ``rho_bone`` for cortical and
+    trabecular tissue, ``rho_marrow`` in marrow and pores.
+    """
+
+    dims: Tuple[int, int, int] = (32, 192, 192)
+    spacing: Triple = (0.0607, 0.0607, 0.0607)
+    radius: float = 4.5
+    shape_harmonics: int = 6
+    shape_amplitude: float = 0.12
+    axial_wavelength: float = 8.0
+    center_wander: float = 0.2
+    thickness_mean: float = 0.8
+    thickness_harmonics: int = 6
+    thickness_variation: float = 0.35
+    thickness_min: float = 0.15
+    bvtv: float = 0.2
+    trabecular_wavelength: float = 1.0
+    porosity: float = 0.03
+    pore_wavelength: float = 0.35
+    endo_porosity: float = 0.15
+    endo_bvtv: float = 0.4
+    transition_width: float = 0.3
+    rho_soft: float = 50.0
+    rho_bone: float = 1000.0
+    rho_marrow: float = 30.0
+    blur: Triple = (0.08, 0.08, 0.08)
+    noise: float = 40.0
+    seed: int = 1
+    supersample: int = 2
+
+    def _spec(self) -> dict:
+        d = asdict(self)
+        d["dims"] = tuple(int(x) for x in self.dims)
+        d["spacing"] = _triple(self.spacing, "spacing")
+        d["blur"] = _triple(self.blur, "blur")
+        return d
+
+    def generate(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """``(image float32, periosteal mask, endosteal mask)``; the true
+        cortical mask is ``periosteal & ~endosteal``."""
+        return _core.bone_phantom(self._spec())
+
+    def edges_along(self, points, normals, x0: float, x1: float) -> np.ndarray:
+        """True ``(x_periosteal, x_endosteal)`` crossings along each line
+        ``p + x n`` for ``x`` in ``[x0, x1]`` (NaN where missed), shape (N, 2)."""
+        p = np.ascontiguousarray(points, dtype=np.float64)
+        n = np.ascontiguousarray(normals, dtype=np.float64)
+        return _core.bone_phantom_edges(self._spec(), p, n, float(x0), float(x1))
+
+    def true_thickness(self, result: "CbmResult") -> np.ndarray:
+        """Reference thickness along each sampling line of a result."""
+        o = result.options
+        e = self.edges_along(result.points, result.normals, -o.outside, o.inside)
+        return e[:, 1] - e[:, 0]
+
+
+@dataclass
+class BuieOptions:
+    """Options of :func:`buie_segmentation`, with the filter parameters of
+    Buie et al. (2007), Fig. 1. Kernels are in voxels per array axis
+    ``(z, y, x)`` (the paper's VTK ``(3,3,1)`` is ``(1, 3, 3)`` here) and, as in
+    the paper, are not rescaled with resolution.
+
+    periosteal_threshold, endosteal_threshold
+        User inputs 1 and 2, in image units. The paper used native scanner
+        units (human XtremeCT: 3000 / 5000); 450 / 320 mg HA/cm^3 are commonly
+        used for density-calibrated HR-pQCT (Burghardt et al. 2010).
+    gaussian_sigma, gaussian_support
+        Step 12: sigma = 3 voxels, support (radius factors) (3,3,1).
+    smoothed_threshold
+        Step 13 "threshold by lower = 100" on 0/127 masks.
+    connectivity_2d
+        Per-slice connectivity (the paper: usually identical, faster).
+    largest_bone_only
+        Pre-processing: keep only the largest bone (removes fibula/ulna).
+    """
+
+    periosteal_threshold: float = 450.0
+    endosteal_threshold: float = 320.0
+    median_kernel: Tuple[int, int, int] = (1, 3, 3)
+    periosteal_kernel: Tuple[int, int, int] = (1, 15, 15)
+    endosteal_kernel: Tuple[int, int, int] = (1, 10, 10)
+    gaussian_sigma: float = 3.0
+    gaussian_support: Triple = (1.0, 3.0, 3.0)
+    smoothed_threshold: float = 100.0 / 127.0
+    connectivity_2d: bool = False
+    largest_bone_only: bool = True
+
+
+def buie_segmentation(image, options: Optional[BuieOptions] = None, **kwargs):
+    """Dual-threshold cortical/trabecular segmentation of Buie et al. (2007),
+    Bone 41:505-515, doi:10.1016/j.bone.2007.07.007. Returns boolean
+    ``(periosteal, cortical, trabecular)`` masks. See ``docs/method.md`` for
+    how each step of the paper's Fig. 1 is implemented.
+    """
+    o = replace(options or BuieOptions(), **kwargs)
+    d = asdict(o)
+    d["median_kernel"] = tuple(int(v) for v in o.median_kernel)
+    d["periosteal_kernel"] = tuple(int(v) for v in o.periosteal_kernel)
+    d["endosteal_kernel"] = tuple(int(v) for v in o.endosteal_kernel)
+    d["gaussian_support"] = tuple(float(v) for v in o.gaussian_support)
+    return _core.buie(_as_image(image), d)

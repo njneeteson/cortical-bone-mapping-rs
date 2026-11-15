@@ -498,6 +498,117 @@ fn fit_profiles<'py>(
     ))
 }
 
+fn bone_phantom_from(spec: &Bound<'_, PyDict>) -> PyResult<cbm::bone_phantom::BonePhantom> {
+    let ph = cbm::bone_phantom::BonePhantom {
+        dims: req(spec, "dims")?,
+        spacing: req(spec, "spacing")?,
+        radius: req(spec, "radius")?,
+        shape_harmonics: req(spec, "shape_harmonics")?,
+        shape_amplitude: req(spec, "shape_amplitude")?,
+        axial_wavelength: req(spec, "axial_wavelength")?,
+        center_wander: req(spec, "center_wander")?,
+        thickness_mean: req(spec, "thickness_mean")?,
+        thickness_harmonics: req(spec, "thickness_harmonics")?,
+        thickness_variation: req(spec, "thickness_variation")?,
+        thickness_min: req(spec, "thickness_min")?,
+        bvtv: req(spec, "bvtv")?,
+        trabecular_wavelength: req(spec, "trabecular_wavelength")?,
+        porosity: req(spec, "porosity")?,
+        pore_wavelength: req(spec, "pore_wavelength")?,
+        endo_porosity: req(spec, "endo_porosity")?,
+        endo_bvtv: req(spec, "endo_bvtv")?,
+        transition_width: req(spec, "transition_width")?,
+        rho_soft: req(spec, "rho_soft")?,
+        rho_bone: req(spec, "rho_bone")?,
+        rho_marrow: req(spec, "rho_marrow")?,
+        blur: req(spec, "blur")?,
+        noise: req(spec, "noise")?,
+        seed: req(spec, "seed")?,
+        supersample: req(spec, "supersample")?,
+    };
+    let (d0, d1, d2) = ph.dims;
+    if d0 < 2 || d1 < 2 || d2 < 2 || ph.spacing.iter().any(|s| s.is_nan() || *s <= 0.0) {
+        return Err(PyValueError::new_err("phantom dims must be >= 2 and spacing positive"));
+    }
+    Ok(ph)
+}
+
+/// Generate a realistic bone phantom: (image, periosteal mask, endosteal mask).
+#[pyfunction]
+#[pyo3(signature = (spec))]
+#[allow(clippy::type_complexity)]
+fn bone_phantom<'py>(
+    py: Python<'py>,
+    spec: &Bound<'py, PyDict>,
+) -> PyResult<(
+    Bound<'py, numpy::PyArray3<f32>>,
+    Bound<'py, numpy::PyArray3<bool>>,
+    Bound<'py, numpy::PyArray3<bool>>,
+)> {
+    let ph = bone_phantom_from(spec)?;
+    let (img, p, e) = py.detach(|| ph.generate());
+    Ok((img.into_pyarray(py), p.into_pyarray(py), e.into_pyarray(py)))
+}
+
+/// True (periosteal, endosteal) crossings along lines p + x n, x in [x0, x1].
+#[pyfunction]
+#[pyo3(signature = (spec, points, normals, x0, x1))]
+fn bone_phantom_edges<'py>(
+    py: Python<'py>,
+    spec: &Bound<'py, PyDict>,
+    points: PyReadonlyArray2<'py, f64>,
+    normals: PyReadonlyArray2<'py, f64>,
+    x0: f64,
+    x1: f64,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let ph = bone_phantom_from(spec)?;
+    let p = points.as_array();
+    let n = normals.as_array();
+    if p.ncols() != 3 || n.dim() != p.dim() {
+        return Err(PyValueError::new_err("points and normals must both be (N, 3)"));
+    }
+    let pv: Vec<V3> = p.rows().into_iter().map(|r| [r[0], r[1], r[2]]).collect();
+    let nv: Vec<V3> = n.rows().into_iter().map(|r| [r[0], r[1], r[2]]).collect();
+    let e = py.detach(|| ph.edges_along(&pv, &nv, x0, x1));
+    let flat: Vec<f64> = e.iter().flat_map(|(a, b)| [*a, *b]).collect();
+    Ok(Array2::from_shape_vec((e.len(), 2), flat).unwrap().into_pyarray(py))
+}
+
+/// Buie et al. (2007) dual-threshold segmentation: (periosteal, cortical, trabecular).
+#[pyfunction]
+#[pyo3(signature = (image, opts))]
+#[allow(clippy::type_complexity)]
+fn buie<'py>(
+    py: Python<'py>,
+    image: &Bound<'py, PyAny>,
+    opts: &Bound<'py, PyDict>,
+) -> PyResult<(
+    Bound<'py, numpy::PyArray3<bool>>,
+    Bound<'py, numpy::PyArray3<bool>>,
+    Bound<'py, numpy::PyArray3<bool>>,
+)> {
+    let o = cbm::segmentation::BuieOptions {
+        periosteal_threshold: req(opts, "periosteal_threshold")?,
+        endosteal_threshold: req(opts, "endosteal_threshold")?,
+        median_kernel: req(opts, "median_kernel")?,
+        periosteal_kernel: req(opts, "periosteal_kernel")?,
+        endosteal_kernel: req(opts, "endosteal_kernel")?,
+        gaussian_sigma: req(opts, "gaussian_sigma")?,
+        gaussian_support: req(opts, "gaussian_support")?,
+        smoothed_threshold: req(opts, "smoothed_threshold")?,
+        connectivity_2d: req(opts, "connectivity_2d")?,
+        largest_bone_only: req(opts, "largest_bone_only")?,
+    };
+    let r = with_image!(image, |img| Ok::<_, PyErr>(
+        py.detach(|| cbm::segmentation::buie(img, &o))
+    ))?;
+    Ok((
+        r.periosteal.into_pyarray(py),
+        r.cortical.into_pyarray(py),
+        r.trabecular.into_pyarray(py),
+    ))
+}
+
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(run, m)?)?;
@@ -506,6 +617,9 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(write_vtk, m)?)?;
     m.add_function(wrap_pyfunction!(phantom, m)?)?;
     m.add_function(wrap_pyfunction!(fit_profiles, m)?)?;
+    m.add_function(wrap_pyfunction!(bone_phantom, m)?)?;
+    m.add_function(wrap_pyfunction!(bone_phantom_edges, m)?)?;
+    m.add_function(wrap_pyfunction!(buie, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
