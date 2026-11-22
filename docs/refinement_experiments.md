@@ -27,7 +27,8 @@ why. They lead to six changes in the library:
 * [4. Where the time goes](#4-where-the-time-goes)
 * [5. The hull bridges the notch](#5-the-hull-bridges-the-notch)
 * [6. A local convex hull and regional convergence](#6-a-local-convex-hull-and-regional-convergence)
-* [7. Pitfalls met along the way](#7-pitfalls-met-along-the-way)
+* [7. The whole knee: missed bone, other bones, cortical density](#7-the-whole-knee-missed-bone-other-bones-cortical-density)
+* [8. Pitfalls met along the way](#8-pitfalls-met-along-the-way)
 * [Open questions](#open-questions)
 * [Reproducing](#reproducing)
 
@@ -326,7 +327,120 @@ the surface (39,500 of 69,300 nodes still moving), or five-sixths with a
 global σ (11,700 nodes). It will matter more for slower cases, and for the
 whole knee.
 
-## 7. Pitfalls met along the way
+## 7. The whole knee: missed bone, other bones, cortical density
+
+These runs are on the whole knee, all four bones
+([clinical_ct.md](clinical_ct.md)), with the setup above.
+
+**Missed bone: hysteresis thresholding.** At the Otsu threshold (267 HU),
+thin cortices that partial volume pushes below it drop out. These are the
+anterior proximal tibia, the lateral femoral condylar rim and parts of the
+tibial plateau. Over stretches longer than the 4 mm closing can bridge, the
+start cuts through the bone, and refinement cannot move a surface out to
+bone up to a centimetre away. `grow_bones` grows each bone, seeded at
+267 HU, into the voxels connected to it above a low threshold
+([segmentation.rs](../crates/cortical-bone-mapping/src/segmentation.rs)).
+A voxel several bones can reach goes to the nearest along the connected
+path, so the bones stay apart. `soft_tissue_threshold` sets the low
+threshold from the histogram: the soft-tissue peak (57 HU) plus 4 standard
+deviations of soft tissue (22 HU, from the peak's lower half-width), which
+gives 146 HU.
+
+Missed bone is the volume above 150 HU, connected to a bone, more than 1 mm
+outside the refined surface:
+
+| | femur | tibia | patella | fibula | time |
+|---|---:|---:|---:|---:|---:|
+| no hysteresis | 5.1 cm³ | 8.4 | 1.8 | 0.8 | 162 s |
+| hysteresis (150 HU) | 2.2 | 3.5 | 1.2 | 0.5 | 139 s |
+| 8 mm outside profiles, no hysteresis | 4.9 | 7.4 | 1.4 | 0.8 | 158 s |
+| both | 2.1 | 3.7 | 1.2 | 0.5 | 170 s |
+
+Longer outside profiles hardly help. Where the start cut through the bone it
+lies inside trabecular bone. The outer part of the profile then shows bone,
+the faint cortex and soft tissue, not the soft-tissue-then-cortex step of
+the model, so seeing further does not produce an outward move. Most of what
+remains after hysteresis is the blurred edge itself: the low-threshold
+surface lies 1–2 voxels outside the fitted periosteum all round. The tibial
+spines are not lost. The refined tibia follows both of them, and in an axial
+slice through their very tips it lies about a voxel lower, the inward
+offset discussed below.
+
+**Other bones are excluded.** While a bone is refined
+(`refine_bones(exclude_others=True)`, the default), the other bones'
+regions are excluded
+([refine.rs](../crates/cortical-bone-mapping/src/refine.rs)). Profile
+samples inside them get zero weight, so a femoral profile crossing the joint
+does not fit the tibia. No surface ever moves into another bone: the level
+set keeps those voxels outside, and in the same-nodes mode a move into one is
+shortened until it stays out. `rounds` repeats the pass over all bones,
+each starting from its refined region and excluding the others' refined
+regions. A second round changed no bone by more than 0.7% of its voxels,
+and a third by at most 0.2%. On this knee the bones do not affect each
+other's fits once they are excluded.
+
+**The inside profiles stop at half the bone's width**
+(`Options(half_width_inside=True)`). Each profile's inside part stops at half
+the distance to where its line leaves the bone, but not below one voxel. At
+thin tips and plates it then stops at the middle instead of running out
+through the far side. On this knee that touches no node of the femur or
+tibia, 1.6% of the patella's and 0.8% of the fibula's: only there is a bone
+narrower than twice the 8 mm inside length along the normal. The results
+are unchanged, so the limit is an option, off by default.
+
+**The cortical density sweep.** `ρc` is estimated per bone (1380–1535 HU).
+Fixing it at 1000, 1250 and 1500 HU instead, all with the half-width limit:
+
+| ρc | bone | median thickness (5–95%) (mm) | depth below the 267 HU surface (mm) | edge − steepest rise (mm) | missed bone (cm³) | moves | time |
+|---|---|---|---:|---:|---:|---:|---:|
+| 1000 HU | femur | 0.92 (0.30–3.33) | +0.31 | +0.16 | 1.04 | 6 | 48 s |
+| | tibia | 1.32 (0.21–3.98) | +0.34 | +0.03 | 1.83 | 11 | 102 s |
+| | patella | 1.74 (0.31–4.93) | +0.42 | +0.01 | 0.69 | 6 | 12 s |
+| | fibula | 1.42 (0.47–3.58) | +0.35 | +0.12 | 0.21 | 6 | 14 s |
+| 1250 HU | femur | 0.69 (0.25–2.95) | +0.42 | +0.27 | 1.62 | 5 | 46 s |
+| | tibia | 1.12 (0.18–3.98) | +0.50 | +0.21 | 3.08 | 8 | 66 s |
+| | patella | 1.32 (0.33–3.92) | +0.58 | +0.23 | 1.10 | 5 | 11 s |
+| | fibula | 1.07 (0.37–3.12) | +0.49 | +0.26 | 0.31 | 5 | 10 s |
+| 1500 HU | femur | 0.55 (0.21–2.60) | +0.51 | +0.33 | 2.29 | 5 | 51 s |
+| | tibia | 0.90 (0.15–3.17) | +0.61 | +0.27 | 3.88 | 6 | 69 s |
+| | patella | 1.08 (0.29–3.10) | +0.74 | +0.37 | 1.62 | 5 | 12 s |
+| | fibula | 0.86 (0.31–2.73) | +0.60 | +0.38 | 0.55 | 5 | 12 s |
+| estimated | femur | 0.53 (0.21–2.55), ρc 1535 | +0.52 | +0.36 | 2.41 | 5 | 54 s |
+| | tibia | 0.91 (0.15–3.19), ρc 1492 | +0.61 | +0.26 | 4.06 | 7 | 76 s |
+| | patella | 1.19 (0.30–3.47), ρc 1380 | +0.67 | +0.28 | 1.38 | 5 | 13 s |
+| | fibula | 0.88 (0.31–2.77), ρc 1473 | +0.59 | +0.37 | 0.52 | 5 | 12 s |
+
+![Cortical density sweep](images/knee_sweep_rho_c.png)
+
+*Median thickness, and depth of the refined surface below the 267 HU
+surface, against `ρc` (stars: `ρc` estimated per bone).*
+
+![Sections](images/knee_sweep_sections.png)
+
+*The patella, the anterior tibia and the tibial spines for each run.*
+
+* **Every run converges.** All bones converge at every `ρc`, in 5–11 moves.
+* **`ρc` sets the balance between thickness and where the periosteum
+  is.** From 1500 to 1000 HU:
+  - the median thickness rises by 50–70% (femur 0.55 → 0.92 mm, patella
+    1.08 → 1.74 mm);
+  - the periosteum moves out by 0.2–0.3 mm, toward the threshold surface;
+  - the missed bone halves.
+
+  The cortex's mass in the image is fixed. A lower assumed density
+  explains it as a thicker cortex, whose outer edge lies further out.
+* **The fitted edge meets the steepest rise near 1000 HU.** At 1000 HU it
+  lies on the steepest rise of the profiles (+0.01 to +0.16 mm). At the
+  estimated `ρc` (≈ 1500 HU) it is 0.3 mm inside. The estimate comes from the
+  thick diaphyseal cortex. These subchondral shells peak at only 600–700 HU,
+  through partial volume.
+* **Which `ρc` is right cannot be settled from one image.** Thickness
+  depends on `ρc` as strongly as on anything else in the pipeline. Settling
+  it needs a density reference in the scan (calibration), or repeat scans
+  and more subjects. With those, the reproducibility of thickness can be
+  compared across `ρc` modes, which is what matters for statistics.
+
+## 8. Pitfalls met along the way
 
 * **The masks were not the meshes.** With a tangled mesh, masks voxelised by
   the even-odd rule are noise. The figures here therefore cut the meshes
@@ -351,10 +465,9 @@ whole knee.
   outside that rise. For a cortex thinner than the blur, the model places
   the periosteum inside a threshold surface, by up to `σ − t/2` (≈ 0.5 mm
   here). That is the thresholding bias of Treece et al. (2010). How far
-  inside depends directly on `ρc`. The estimate here is 1200–1260 HU,
-  while these subchondral shells peak at 600–700 HU. A lower true density
-  would mean a thicker cortex, with its edge further out. Real data cannot
-  settle this.
+  inside depends directly on `ρc`: section 7 measures it, from 0.3 mm at
+  1000 HU to 0.6 mm at 1500 HU. Which `ρc` is right needs a density
+  reference or more data.
 * **The whole knee** ([clinical_ct.md](clinical_ct.md)) has been redone with
   the closing start, per-node densities, the level set and regional
   convergence. All four bones converge, in 5–7 moves and 138 s in all. The
@@ -378,4 +491,11 @@ python docs/scripts/notch_experiment.py knee.pkl --out results figures \
 python docs/scripts/notch_experiment.py knee.pkl --out results figures \
     closing_freeze closing_freeze_global_sigma closing_freeze_inside_15 \
     closing_freeze_lambda_0.1 --figure notch_variants.png
+# section 7: whole-knee runs, then their comparison
+python docs/scripts/ct_example.py /path/to/DICOM ... --cache runs/base.pkl
+python docs/scripts/ct_example.py /path/to/DICOM ... --half-width --cache runs/half_width.pkl
+python docs/scripts/ct_example.py /path/to/DICOM ... --half-width --rho-c 1000 --cache runs/half_width_rc1000.pkl
+python docs/scripts/ct_example.py /path/to/DICOM ... --half-width --rho-c 1250 --cache runs/half_width_rc1250.pkl
+python docs/scripts/ct_example.py /path/to/DICOM ... --half-width --rho-c 1500 --cache runs/half_width_rc1500.pkl
+python docs/scripts/knee_sweep.py runs/*.pkl --figures docs/images/knee_sweep
 ```

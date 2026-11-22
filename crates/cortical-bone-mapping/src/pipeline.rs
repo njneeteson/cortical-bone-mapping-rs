@@ -88,6 +88,13 @@ pub struct SamplingOptions {
     /// 1D Gaussian smoothing of each profile (standard deviation in samples).
     pub smoothing: f64,
     pub normal_constraint: NormalConstraint,
+    /// Limit each profile's inside part to half the object's width along
+    /// its normal (the distance to where the line leaves the region enclosed
+    /// by the surface), but not below one voxel. Samples beyond get zero
+    /// weight. At thin tips and plates the profile then stops at the
+    /// object's middle instead of running out through the far side, where
+    /// the model's trabecular plateau does not exist (extension).
+    pub half_width_inside: bool,
 }
 
 impl Default for SamplingOptions {
@@ -98,6 +105,7 @@ impl Default for SamplingOptions {
             resolution: None,
             smoothing: 0.0,
             normal_constraint: NormalConstraint::None,
+            half_width_inside: false,
         }
     }
 }
@@ -405,6 +413,7 @@ impl Options {
                 resolution: Some(voxel),
                 smoothing: 3.0,
                 normal_constraint: constraint,
+                half_width_inside: false,
             },
             method: Method::regularized_for(site),
             ..Default::default()
@@ -777,6 +786,17 @@ pub fn fit_surface_constrained<T: Voxel>(
     let mut profiles = Profiles::sample(image, &o.geometry, &points, &normals, &line, o.sampling.smoothing);
     if let Some(ex) = constraints.exclude {
         profiles.exclude(&ex, &o.geometry, &points, &normals, &line);
+    }
+    if o.sampling.half_width_inside {
+        let region = surface.voxelize(image.dim(), &o.geometry);
+        profiles.limit_inside(
+            &region.view(),
+            &o.geometry,
+            &points,
+            &normals,
+            &line,
+            o.geometry.min_spacing(),
+        );
     }
     let x = line.x.clone();
     let weights = residual_weights(&x, o.model.residual_boost);

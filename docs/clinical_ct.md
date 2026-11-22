@@ -189,7 +189,16 @@ over the notch.
     fibula.
 * **`ρc`** is estimated per bone, at 1380–1530 HU, from the thick
   diaphyseal cortex where there is one. It is an apparent density at this
-  resolution.
+  resolution. The thickness depends on it strongly. With `ρc` fixed at
+  1000 HU instead, the median thicknesses are 50–70% larger, and the
+  periosteum lies 0.2–0.3 mm further out, on the steepest rise of the
+  profiles (see the sweep in
+  [refinement_experiments.md](refinement_experiments.md#7-the-whole-knee-missed-bone-other-bones-cortical-density)).
+  Which value is right needs a density reference or more data.
+* **The inside profiles can stop at half the bone's width** (`--half-width`).
+  That stops profiles at thin tips and plates from running out through the
+  far side. On this knee it affects under 2% of the nodes, all on the
+  patella and the fibula, and it changes no result.
 
 There is no ground truth here: the thickness of a cortex thinner than the
 in-plane resolution (0.65 mm) is a model-based estimate (Treece et al. 2010),

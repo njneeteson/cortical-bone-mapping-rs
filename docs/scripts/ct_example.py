@@ -151,7 +151,9 @@ def run(a):
         print(f"hysteresis: bones grown into connected voxels >= {low:.1f}", flush=True)
     hulls = cbm.bone_hulls(labels, spacing)  # per-slice convex hulls (kept for comparison)
     starts = cbm.bone_hulls(labels, spacing, closing_radius=a.closing) if a.closing > 0 else hulls
-    o = replace(OPTIONS, outside=a.outside, lower=(-a.outside,) + tuple(OPTIONS.lower[1:]))
+    o = replace(OPTIONS, outside=a.outside, lower=(-a.outside,) + tuple(OPTIONS.lower[1:]),
+                half_width_inside=a.half_width,
+                rho_c=a.rho_c if a.rho_c == "estimate" else float(a.rho_c))
     t0 = time.perf_counter()
     results = cbm.refine_bones(img, starts, spacing, options=o, refine=REFINE, names=names,
                                progress_every=a.progress, origin=origin, exclude_others=not a.no_exclude,
@@ -165,7 +167,7 @@ def run(a):
     body = img[img >= a.otsu_floor]
     hist = np.histogram(body, bins=np.linspace(a.otsu_floor, float(body.max()), 440))
     return dict(img=img, spacing=spacing, origin=origin, threshold=thr, labels=labels, hulls=hulls, seeds=seeds,
-                low_threshold=low, outside=a.outside, rounds=a.rounds, exclude=not a.no_exclude,
+                low_threshold=low, outside=a.outside, half_width=a.half_width, rho_c_option=a.rho_c, rounds=a.rounds, exclude=not a.no_exclude,
                 starts=starts, closing=a.closing,
                 names=names, used=used, results=results, hist=hist)
 
@@ -354,6 +356,10 @@ def main(argv=None):
                          "'auto' (default: the soft-tissue peak + 4 sd of the histogram), a value in image "
                          "units, or 'off'")
     ap.add_argument("--outside", type=float, default=4.0, help="profile length outside the surface, mm (default 4)")
+    ap.add_argument("--half-width", action="store_true",
+                    help="limit each profile inside the bone to half the bone's width along its normal")
+    ap.add_argument("--rho-c", default="estimate",
+                    help="cortical density: 'estimate' (default, per bone) or a value in image units")
     ap.add_argument("--rounds", type=int, default=1, help="passes over all bones (default 1)")
     ap.add_argument("--no-exclude", action="store_true",
                     help="do not exclude the other bones' regions while refining a bone")

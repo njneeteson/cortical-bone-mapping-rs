@@ -141,6 +141,7 @@ fn parse_options(d: &Bound<'_, PyDict>) -> PyResult<cbm::Options> {
             resolution: opt(d, "resolution")?,
             smoothing: req(d, "profile_smoothing")?,
             normal_constraint,
+            half_width_inside: req(d, "half_width_inside")?,
         },
         model: cbm::ModelOptions {
             rho_c: req(d, "rho_c")?,

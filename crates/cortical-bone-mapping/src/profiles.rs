@@ -105,6 +105,58 @@ impl Profiles {
         }
     }
 
+    /// Ignore the inside samples beyond half the object's width along each
+    /// normal: the line leaves `region` (the object's interior) at `x_exit`,
+    /// and samples with `x > max(x_exit / 2, min_inside)` get zero weight.
+    /// Lines that do not leave the region within the profile are unchanged.
+    pub fn limit_inside<V: Voxel>(
+        &mut self,
+        region: &ArrayView3<V>,
+        geom: &Geometry,
+        points: &[V3],
+        normals: &[V3],
+        line: &SampleLine,
+        min_inside: f64,
+    ) {
+        let m = self.m;
+        let (d0, d1, d2) = region.dim();
+        let inside = |p: V3| -> bool {
+            let r = geom.to_index(p).map(|v| v.round());
+            if r[0] < 0.0 || r[1] < 0.0 || r[2] < 0.0 {
+                return false;
+            }
+            let (a, b, c) = (r[0] as usize, r[1] as usize, r[2] as usize);
+            a < d0 && b < d1 && c < d2 && region[[a, b, c]].to_f64() != 0.0
+        };
+        let mut used = self.used.take().unwrap_or_else(|| vec![true; self.n * m]);
+        used.par_chunks_mut(m)
+            .zip(points.par_iter().zip(normals.par_iter()))
+            .for_each(|(u, (&p, &nrm))| {
+                // first inside sample (x > 0) that is outside the region,
+                // after the line has entered it
+                let mut entered = false;
+                let mut exit = None;
+                for &x in line.x.iter().filter(|&&x| x > 0.0) {
+                    let ins = inside(add(p, scale(nrm, x)));
+                    if ins {
+                        entered = true;
+                    } else if entered {
+                        exit = Some(x);
+                        break;
+                    }
+                }
+                if let Some(xe) = exit {
+                    let limit = (0.5 * xe).max(min_inside);
+                    for (j, &x) in line.x.iter().enumerate() {
+                        if x > limit {
+                            u[j] = false;
+                        }
+                    }
+                }
+            });
+        self.used = Some(used);
+    }
+
     /// Ignore the samples that fall in voxels marked in `excluded` (nearest
     /// voxel; outside the image counts as not excluded).
     pub fn exclude<V: Voxel>(
@@ -218,6 +270,34 @@ mod tests {
             let q = add(p[0], scale(n[0], x));
             let want = (q[0] + 2.0 * q[1] + 3.0 * q[2]) / 0.5;
             assert!((prof.row(0)[j] as f64 - want).abs() < 1e-3);
+        }
+    }
+
+    #[test]
+    fn inside_samples_stop_at_half_the_width() {
+        // a 2-voxel-thick plate (axis 1 in 10..12) and a 20-voxel slab
+        let geom = Geometry::new([1.0, 1.0, 1.0]);
+        let line = SampleLine::new(1.0, 8.0, 0.5);
+        let img = Array3::<f32>::zeros((30, 40, 30));
+        for (lo, hi, want_last) in [(10usize, 12usize, Some(1.0)), (10, 30, None)] {
+            let region = Array3::from_shape_fn((30, 40, 30), |(_, j, _)| (lo..hi).contains(&j) as u8);
+            let p = [[15.0, lo as f64 - 0.5, 15.0]];
+            let n = [[0.0, 1.0, 0.0]];
+            let mut prof = Profiles::sample(&img.view(), &geom, &p, &n, &line, 0.0);
+            prof.limit_inside(&region.view(), &geom, &p, &n, &line, 1.0);
+            let used = prof.used_row(0).unwrap();
+            let last = line
+                .x
+                .iter()
+                .zip(used)
+                .filter(|(_, &u)| u)
+                .map(|(&x, _)| x)
+                .fold(f64::MIN, f64::max);
+            match want_last {
+                // exits at x = 2.5 (index 12 rounds out): limit max(1.25, 1) = 1.25 -> last sample 1.0
+                Some(w) => assert_eq!(last, w, "plate"),
+                None => assert_eq!(last, 8.0, "thick slab: unchanged"),
+            }
         }
     }
 

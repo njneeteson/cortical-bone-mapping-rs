@@ -110,6 +110,11 @@ class Options:
         Profile extent outside and inside the surface.
     resolution
         Sample spacing (``None`` = the smallest voxel spacing).
+    half_width_inside
+        Limit each profile's inside part to half the object's width along its
+        normal (where the line leaves the region enclosed by the surface),
+        and at least one voxel: at thin tips and plates the profile stops at
+        the middle instead of running out through the far side.
     profile_smoothing
         1D Gaussian smoothing of each profile (standard deviation in samples).
     normal_constraint, normal_axis
@@ -222,6 +227,7 @@ class Options:
     inside: float = 4.0
     resolution: Optional[float] = None
     profile_smoothing: float = 0.0
+    half_width_inside: bool = False
     normal_constraint: Literal["none", "in_plane", "along_axis"] = "none"
     normal_axis: int = 0
     # model
