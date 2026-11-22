@@ -59,7 +59,9 @@ def test_refinement_snaps_bad_segmentation():
     assert dice(bad, truth) < 0.92 < 0.995 < dice(rr.periosteal_mask, truth)
     rms = [h["rms_displacement"] for h in rr.history]
     assert all(b < a for a, b in zip(rms, rms[1:]))
-    assert len(rr.surfaces) == len(rr.history) + 1
+    # one history entry per fit (on the input surface and on every moved one)
+    assert len(rr.surfaces) == len(rr.history) == len(rr.surfaces_faces)
+    assert rr.history[0]["full_fit"] and rr.history[-1]["full_fit"]
     assert all(s.shape == rr.result.surface_vertices.shape for s in rr.surfaces)
     assert (rr.cortical_mask == (rr.periosteal_mask & ~rr.endosteal_mask)).all()
     with pytest.raises(ValueError, match="relaxation"):

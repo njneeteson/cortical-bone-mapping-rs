@@ -112,6 +112,72 @@ impl<V: Copy + Into<f64> + Send + Sync> SparseRows<V> {
         });
     }
 
+    /// `out[c] = M x[c]` for several vectors in one pass over the matrix
+    /// (the matrix is read once instead of once per vector; each result is
+    /// bitwise identical to [`Self::apply`]).
+    pub fn apply_many(&self, xs: &[&[f64]], outs: &mut [Vec<f64>]) {
+        let nc = xs.len();
+        let n = self.nrows();
+        let rows: Vec<[f64; 8]> = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let mut s = [0.0; 8];
+                for e in self.offsets[i]..self.offsets[i + 1] {
+                    let w: f64 = self.vals[e].into();
+                    let j = self.cols[e] as usize;
+                    for c in 0..nc {
+                        s[c] += w * xs[c][j];
+                    }
+                }
+                s
+            })
+            .collect();
+        for (c, o) in outs.iter_mut().enumerate().take(nc) {
+            o.par_iter_mut().zip(rows.par_iter()).for_each(|(v, r)| *v = r[c]);
+        }
+    }
+
+    /// `out[c] = Mᵀ y[c]` for several vectors in one pass (bitwise identical
+    /// to [`Self::apply_t`] per vector).
+    pub fn apply_t_many(&self, ys: &[&[f64]], outs: &mut [Vec<f64>]) {
+        let nc = ys.len();
+        let n = self.nrows();
+        let m = self.ncols;
+        let chunk = n.div_ceil(16).max(4096);
+        let nchunks = n.div_ceil(chunk).max(1);
+        if nchunks == 1 {
+            for (c, o) in outs.iter_mut().enumerate().take(nc) {
+                self.apply_t(ys[c], o);
+            }
+            return;
+        }
+        // one interleaved accumulator per chunk: acc[k * nc + c]
+        let parts: Vec<Vec<f64>> = (0..nchunks)
+            .into_par_iter()
+            .map(|ch| {
+                let mut acc = vec![0.0; m * nc];
+                for i in ch * chunk..((ch + 1) * chunk).min(n) {
+                    for e in self.offsets[i]..self.offsets[i + 1] {
+                        let w: f64 = self.vals[e].into();
+                        let k = self.cols[e] as usize * nc;
+                        for c in 0..nc {
+                            let yi = ys[c][i];
+                            if yi != 0.0 {
+                                acc[k + c] += w * yi;
+                            }
+                        }
+                    }
+                }
+                acc
+            })
+            .collect();
+        for (c, o) in outs.iter_mut().enumerate().take(nc) {
+            o.par_iter_mut().enumerate().for_each(|(k, v)| {
+                *v = parts.iter().map(|p| p[k * nc + c]).sum();
+            });
+        }
+    }
+
     /// `Σ_i M_ik² w_i` for every column `k`.
     pub fn col_sq_weighted(&self, w: &[f64]) -> Vec<f64> {
         let mut out = vec![0.0; self.ncols];
@@ -276,6 +342,24 @@ impl SmoothingOperator {
     pub fn apply_t(&self, y: &[f64], out: &mut [f64]) {
         self.rows.apply_t(y, out);
         out.par_iter_mut().zip(y.par_iter()).for_each(|(o, &yi)| *o = yi - *o);
+    }
+
+    /// [`Self::apply`] for up to 8 vectors in one pass over the operator.
+    pub fn apply_many(&self, xs: &[&[f64]], outs: &mut [Vec<f64>]) {
+        assert!(xs.len() <= 8 && outs.len() >= xs.len());
+        self.rows.apply_many(xs, outs);
+        for (o, x) in outs.iter_mut().zip(xs) {
+            o.par_iter_mut().zip(x.par_iter()).for_each(|(o, &xi)| *o = xi - *o);
+        }
+    }
+
+    /// [`Self::apply_t`] for up to 8 vectors in one pass over the operator.
+    pub fn apply_t_many(&self, ys: &[&[f64]], outs: &mut [Vec<f64>]) {
+        assert!(ys.len() <= 8 && outs.len() >= ys.len());
+        self.rows.apply_t_many(ys, outs);
+        for (o, y) in outs.iter_mut().zip(ys) {
+            o.par_iter_mut().zip(y.par_iter()).for_each(|(o, &yi)| *o = yi - *o);
+        }
     }
 
     /// Diagonal of `ωᵀω`: `1 + Σ_l w_li²` (the cross term `−2 w_ii` is zero
@@ -680,6 +764,34 @@ impl CurvatureOperator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn many_vector_products_match_single_ones_bitwise() {
+        let mut rng = Rng::new(3);
+        let pts: Vec<V3> = (0..20000)
+            .map(|_| [rng.uniform() * 50.0, rng.uniform() * 50.0, rng.uniform() * 5.0])
+            .collect();
+        let op = SmoothingOperator::new(&pts, 40, 2.0, 3.0);
+        let xs: Vec<Vec<f64>> = (0..3)
+            .map(|_| {
+                (0..pts.len())
+                    .map(|i| if i % 7 == 0 { 0.0 } else { rng.normal() })
+                    .collect()
+            })
+            .collect();
+        let refs: Vec<&[f64]> = xs.iter().map(|x| x.as_slice()).collect();
+        let mut many = vec![vec![0.0; pts.len()]; 3];
+        let mut many_t = vec![vec![0.0; pts.len()]; 3];
+        op.apply_many(&refs, &mut many);
+        op.apply_t_many(&refs, &mut many_t);
+        for c in 0..3 {
+            let mut one = vec![0.0; pts.len()];
+            op.apply(&xs[c], &mut one);
+            assert_eq!(one, many[c]);
+            op.apply_t(&xs[c], &mut one);
+            assert_eq!(one, many_t[c]);
+        }
+    }
 
     fn grid_points(n: usize, h: f64) -> Vec<V3> {
         let mut v = Vec::new();

@@ -51,6 +51,20 @@ rr.periosteal_mask, rr.endosteal_mask, rr.cortical_mask
 rr.result.thickness
 ```
 
+Several bones in one image (e.g. a clinical knee CT; see
+[docs/clinical_ct.md](docs/clinical_ct.md)). Each bone is its own closed
+surface and its own fit:
+
+```python
+labels, sizes = cbm.label_bones(image, threshold="otsu", otsu_floor=-500)  # or a threshold in image units
+# optional: name bones by landmarks; bones the threshold joined are split
+labels, names, used = cbm.separate_bones(image, 300.0, {"femur": p1, "tibia": p2}, spacing)
+starts = cbm.bone_hulls(labels, spacing, closing_radius=4.0)  # per-bone "local convex hulls", kept apart
+options = cbm.Options(..., global_params=())         # per-node densities for a large field of view
+refine = cbm.RefineOptions(level_set=True, freeze=True)  # remeshing, regional convergence
+results = cbm.refine_bones(image, starts, spacing, options=options, refine=refine, names=names)  # smallest first
+```
+
 Thickness on a given segmentation (1 inside the periosteal surface):
 
 ```python
@@ -136,6 +150,12 @@ See [method](docs/method.md#cortical-density).
   cortex. Still hard: a neighbouring bone within the outside sampling range
   (0.5 mm gap) and the knee's subchondral plate
   ([segmentation](docs/segmentation.md)).
+* **Real data.** On a clinical knee CT, all four bones (femur, tibia,
+  patella, fibula) are segmented and mapped from the image alone in 141 s.
+  Each converges in 4–6 moves, with the femoral notch followed
+  ([clinical CT](docs/clinical_ct.md)). Getting there took a local convex
+  hull start, per-node densities, remeshing and regional convergence
+  ([refinement experiments](docs/refinement_experiments.md)).
 * **Speed and memory.** Against the original Python implementation (Bonelab)
   on the same profiles, the local fit is ~420× faster, multigrid ~45× and the
   regularised fit ~10–20× (against a converged solve), with equal or better
@@ -155,6 +175,15 @@ See [method](docs/method.md#cortical-density).
 * **[docs/segmentation.md](docs/segmentation.md)**: automatic segmentation
   from the image alone; Buie's method as implemented; the experiment on
   realistic phantoms.
+* **[docs/clinical_ct.md](docs/clinical_ct.md)**: real data, a clinical
+  knee CT: threshold from the histogram, bone separation, closing starts and
+  refinement one bone at a time.
+* **[docs/refinement_experiments.md](docs/refinement_experiments.md)**: what
+  the knee's femoral notch taught us about refinement on real data:
+  remeshing, per-node densities, inexact inner fits, closing starts and
+  regional convergence.
+* **[docs/volumetric_model.md](docs/volumetric_model.md)**: a design note on
+  a volumetric (voxel-wise) cortical model, to run alongside the 1D one.
 * **[docs/performance.md](docs/performance.md)**: run time and memory, and
   comparisons with the original Python implementation and with SciPy.
 
@@ -205,6 +234,8 @@ cargo test --workspace && cargo clippy --all-targets -- -D warnings
 cd python && maturin develop --release && pytest tests
 python docs/scripts/make_figures.py                 # docs/images
 python docs/scripts/segmentation_experiment.py      # docs/segmentation.md results (~70 min)
+python docs/scripts/ct_example.py DICOM_DIR ...     # docs/clinical_ct.md (image not included)
+python docs/scripts/notch_experiment.py knee.pkl --out results run  # docs/refinement_experiments.md
 cargo run --release --example benchmark -p cortical-bone-mapping -- --json docs/benchmark_results.json
 python docs/scripts/compare_scipy.py
 python docs/scripts/compare_bonelab.py /path/to/Bonelab

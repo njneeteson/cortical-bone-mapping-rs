@@ -416,6 +416,23 @@ pub fn outer_region(m: &Array3<bool>, two_d: bool) -> Array3<bool> {
     Array3::from_shape_vec(m.dim(), out).unwrap()
 }
 
+/// Fill the holes of every slice perpendicular to `axis`.
+fn fill_slice_holes(m: &Array3<bool>, axis: usize) -> Array3<bool> {
+    let order = match axis {
+        0 => [0, 1, 2],
+        1 => [1, 0, 2],
+        _ => [2, 0, 1],
+    };
+    let p = m.view().permuted_axes(order).as_standard_layout().to_owned();
+    let filled = outer_region(&p.mapv(|b| !b), true).mapv(|b| !b);
+    // undo the permutation
+    let mut inv = [0usize; 3];
+    for (i, &o) in order.iter().enumerate() {
+        inv[o] = i;
+    }
+    filled.permuted_axes(inv).as_standard_layout().to_owned()
+}
+
 fn per_slice(m: &Array3<bool>, f: impl Fn(&Array3<bool>) -> Array3<bool> + Sync) -> Array3<bool> {
     let mut out = Array3::from_elem(m.dim(), false);
     out.axis_iter_mut(Axis(0))
@@ -498,6 +515,11 @@ pub fn hull_segmentation<T: Voxel>(image: ArrayView3<T>, o: &HullOptions) -> Arr
     if o.largest_component {
         m = largest_component(&m, false);
     }
+    slice_hulls(&m)
+}
+
+/// The convex hull of every slice (along axis 0) of a binary mask.
+pub fn slice_hulls(m: &Array3<bool>) -> Array3<bool> {
     let mut out = Array3::from_elem(m.dim(), false);
     out.axis_iter_mut(Axis(0))
         .into_par_iter()
@@ -507,6 +529,337 @@ pub fn hull_segmentation<T: Voxel>(image: ArrayView3<T>, o: &HullOptions) -> Arr
             fill_convex(&hull, &mut o);
         });
     out
+}
+
+/// Options of [`otsu_thresholds`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct OtsuOptions {
+    /// Only voxels `≥ floor` enter the histogram (e.g. −500 HU to exclude the
+    /// air around the body); `None` uses every voxel.
+    pub floor: Option<f64>,
+    /// Number of classes: 2 (one threshold) or 3 (two thresholds).
+    pub classes: usize,
+    /// Number of histogram bins between the smallest and largest value.
+    pub bins: usize,
+}
+
+impl Default for OtsuOptions {
+    fn default() -> Self {
+        OtsuOptions {
+            floor: None,
+            classes: 2,
+            bins: 1024,
+        }
+    }
+}
+
+/// Thresholds from the image histogram by (multi-level) Otsu's method: the
+/// thresholds that maximise the between-class variance of the voxel values
+/// (Otsu 1979; exhaustive search for 3 classes). Returned in ascending order
+/// and placed at bin edges; empty if no voxel passes `floor`.
+///
+/// For a non-calibrated CT (Hounsfield units) the histogram has peaks for
+/// fat and soft tissue but none for bone, whose values form a long tail;
+/// with `floor` excluding the air, the two-class threshold separates soft
+/// tissue from bone, and is a reasonable starting threshold for
+/// [`label_bones`] and the hull. With three classes the upper threshold is
+/// higher (fat | soft tissue | bone, with the bone class dominated by cortex).
+pub fn otsu_thresholds<T: Voxel>(image: ArrayView3<T>, o: &OtsuOptions) -> Vec<f64> {
+    assert!(o.classes == 2 || o.classes == 3, "classes must be 2 or 3");
+    assert!(o.bins >= 4, "bins must be at least 4");
+    let floor = o.floor.unwrap_or(f64::NEG_INFINITY);
+    let (lo, hi) = image
+        .as_slice_memory_order()
+        .map(|s| {
+            s.par_iter()
+                .map(|v| v.to_f64())
+                .filter(|v| *v >= floor && v.is_finite())
+                .fold(|| (f64::INFINITY, f64::NEG_INFINITY), |a, v| (a.0.min(v), a.1.max(v)))
+                .reduce(
+                    || (f64::INFINITY, f64::NEG_INFINITY),
+                    |a, b| (a.0.min(b.0), a.1.max(b.1)),
+                )
+        })
+        .unwrap_or_else(|| {
+            image
+                .iter()
+                .map(|v| v.to_f64())
+                .filter(|v| *v >= floor && v.is_finite())
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |a, v| (a.0.min(v), a.1.max(v)))
+        });
+    if !(hi > lo) {
+        return Vec::new();
+    }
+    let n = o.bins;
+    let w = (hi - lo) / n as f64;
+    let bin = |v: f64| (((v - lo) / w) as usize).min(n - 1);
+    let add = |mut h: Vec<f64>, v: f64| {
+        if v >= floor && v.is_finite() {
+            h[bin(v)] += 1.0;
+        }
+        h
+    };
+    let merge = |a: Vec<f64>, b: Vec<f64>| a.iter().zip(&b).map(|(x, y)| x + y).collect::<Vec<f64>>();
+    let h = match image.as_slice_memory_order() {
+        Some(s) => s
+            .par_iter()
+            .map(|v| v.to_f64())
+            .fold(|| vec![0.0; n], add)
+            .reduce(|| vec![0.0; n], merge),
+        None => image.iter().map(|v| v.to_f64()).fold(vec![0.0; n], add),
+    };
+    let total: f64 = h.iter().sum();
+    // cumulative weight and first moment; classes are bin ranges [a, b)
+    let mut pc = vec![0.0; n + 1];
+    let mut mc = vec![0.0; n + 1];
+    for i in 0..n {
+        let c = lo + (i as f64 + 0.5) * w;
+        pc[i + 1] = pc[i] + h[i] / total;
+        mc[i + 1] = mc[i] + h[i] / total * c;
+    }
+    let mt = mc[n];
+    let term = |a: usize, b: usize| {
+        let wk = pc[b] - pc[a];
+        if wk <= 0.0 {
+            None
+        } else {
+            let mk = (mc[b] - mc[a]) / wk;
+            Some(wk * (mk - mt) * (mk - mt))
+        }
+    };
+    let edge = |i: f64| lo + i * w;
+    // all candidate splits with their between-class variance
+    let cands: Vec<(f64, Vec<usize>)> = if o.classes == 2 {
+        (1..n)
+            .filter_map(|i| Some((term(0, i)? + term(i, n)?, vec![i])))
+            .collect()
+    } else {
+        (1..n - 1)
+            .into_par_iter()
+            .flat_map_iter(|i| {
+                let t0 = term(0, i);
+                (i + 1..n).filter_map(move |j| Some((t0? + term(i, j)? + term(j, n)?, vec![i, j])))
+            })
+            .collect()
+    };
+    let Some(best) = cands.iter().map(|c| c.0).max_by(f64::total_cmp) else {
+        return Vec::new();
+    };
+    // a threshold anywhere in an empty stretch of the histogram scores the
+    // same: take the middle of the tied candidates
+    let tied: Vec<&Vec<usize>> = cands
+        .iter()
+        .filter(|c| c.0 >= best - 1e-12 * best.abs())
+        .map(|c| &c.1)
+        .collect();
+    (0..o.classes - 1)
+        .map(|a| {
+            let lo_i = tied.iter().map(|t| t[a]).min().unwrap();
+            let hi_i = tied.iter().map(|t| t[a]).max().unwrap();
+            edge(0.5 * (lo_i + hi_i) as f64)
+        })
+        .collect()
+}
+
+/// Options of [`label_bones`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct BoneLabelOptions {
+    /// Bone threshold (image units), e.g. from [`otsu_thresholds`].
+    pub threshold: f64,
+    /// Binary median kernel against noise speckle.
+    pub median_kernel: [usize; 3],
+    /// Components smaller than this (voxels) are dropped.
+    pub min_size: usize,
+    /// Keep at most this many bones (the largest).
+    pub max_bones: Option<usize>,
+}
+
+impl Default for BoneLabelOptions {
+    fn default() -> Self {
+        BoneLabelOptions {
+            threshold: 320.0,
+            median_kernel: [1, 3, 3],
+            min_size: 1000,
+            max_bones: None,
+        }
+    }
+}
+
+/// Bones labelled by [`label_bones`].
+#[derive(Clone, Debug)]
+pub struct BoneLabels {
+    /// 0 = background, `k` = the `k`-th largest bone.
+    pub labels: Array3<u16>,
+    /// Size (voxels) of bone `k` at index `k − 1`.
+    pub sizes: Vec<usize>,
+}
+
+/// Separate the bones of an image: threshold, binary median, 6-connected
+/// components, keep those of at least `min_size` voxels (at most
+/// `max_bones`), labelled 1, 2, … from the largest.
+///
+/// Bones that touch at the threshold (blur, noise or motion across a thin
+/// soft-tissue gap) become one component; raise the threshold, or separate
+/// them by other means, if that happens.
+pub fn label_bones<T: Voxel>(image: ArrayView3<T>, o: &BoneLabelOptions) -> BoneLabels {
+    let mut m = Array3::from_elem(image.dim(), false);
+    Zip::from(&mut m)
+        .and(&image)
+        .par_for_each(|b, &v| *b = v.to_f64() >= o.threshold);
+    if o.median_kernel.iter().any(|&k| k > 1) {
+        m = binary_median(&m, o.median_kernel);
+    }
+    let (label, sizes) = label_components(&m, false);
+    let mut order: Vec<usize> = (1..sizes.len()).filter(|&i| sizes[i] >= o.min_size.max(1)).collect();
+    order.sort_by(|&a, &b| sizes[b].cmp(&sizes[a]).then(a.cmp(&b)));
+    order.truncate(o.max_bones.unwrap_or(usize::MAX).min(u16::MAX as usize));
+    let mut map = vec![0u16; sizes.len()];
+    for (k, &c) in order.iter().enumerate() {
+        map[c] = (k + 1) as u16;
+    }
+    let out: Vec<u16> = label.par_iter().map(|&l| map[l as usize]).collect();
+    BoneLabels {
+        labels: Array3::from_shape_vec(m.dim(), out).unwrap(),
+        sizes: order.iter().map(|&c| sizes[c]).collect(),
+    }
+}
+
+/// Starting segmentations for several bones: the per-slice convex hull
+/// ([`slice_hulls`]) of every labelled bone, kept apart.
+///
+/// Hulls of neighbouring bones overlap where a concave surface faces
+/// another bone (the femoral trochlea and the patella, the intercondylar
+/// notch and the tibial eminence). Each voxel claimed by several hulls goes
+/// to the bone whose thresholded voxels are nearest (Euclidean distance in
+/// physical units, `spacing` per array axis); then hull voxels that touch
+/// (6-neighbourhood) another bone's region are cleared, unless they belong
+/// to their own thresholded bone, so that every bone is a separate closed
+/// surface. Each label still contains its thresholded bone.
+///
+/// With `max_distance` (physical units), each hull is first trimmed to the
+/// voxels within that distance of its bone and the holes of every slice are
+/// filled. The marrow cavity, and gaps narrower than twice the distance
+/// (cortical breaks), stay closed because the cortex encloses them; a wide,
+/// open concavity, such as the femoral intercondylar notch, opens up instead
+/// of being bridged by the hull. Use it when a concavity is deeper than the
+/// inward sampling range.
+///
+/// With `closing_radius` (physical units), each bone's start is its
+/// morphological closing by a ball of that radius instead of its per-slice
+/// convex hull (a "local convex hull"): concavities narrower than about twice
+/// the radius are filled, wider ones (e.g. the intercondylar notch with a
+/// radius of a few mm) are kept, and the start follows the curvature of the
+/// bone at larger scales. Slice holes (the marrow cavity) are then filled.
+pub fn bone_hulls(
+    labels: ArrayView3<u16>,
+    spacing: [f64; 3],
+    max_distance: Option<f64>,
+    closing_radius: Option<f64>,
+) -> Array3<u16> {
+    let dim = labels.dim();
+    let n = labels.iter().copied().max().unwrap_or(0);
+    let mut owner = Array3::<u16>::zeros(dim);
+    let mut best = Array3::from_elem(dim, f32::INFINITY);
+    let inv = spacing.map(|s| 1.0 / s);
+    for b in 1..=n {
+        let mb = labels.mapv(|l| l == b);
+        if !mb.iter().any(|&v| v) {
+            continue;
+        }
+        let d = scaled_sq_distance(&mb, inv);
+        let mut hull = match closing_radius {
+            Some(r) => closing(&mb, &d, inv, r),
+            None => slice_hulls(&mb),
+        };
+        if let Some(r) = max_distance {
+            let r2 = (r * r) as f32;
+            Zip::from(&mut hull).and(&d).par_for_each(|h, &dv| *h &= dv <= r2);
+            hull = outer_region(&hull.mapv(|b| !b), true).mapv(|b| !b);
+        }
+        Zip::from(&mut owner)
+            .and(&mut best)
+            .and(&hull)
+            .and(&d)
+            .par_for_each(|o, bst, &h, &dv| {
+                if h && dv < *bst {
+                    *bst = dv;
+                    *o = b;
+                }
+            });
+    }
+    let (d0, d1, d2) = dim;
+    let mut out = owner.clone();
+    Zip::indexed(&mut out).par_for_each(|(i, j, k), o| {
+        let b = owner[[i, j, k]];
+        if b == 0 || labels[[i, j, k]] == b {
+            return;
+        }
+        let other = |q: [usize; 3]| {
+            let c = owner[q];
+            c != 0 && c != b
+        };
+        let touches = (i > 0 && other([i - 1, j, k]))
+            || (i + 1 < d0 && other([i + 1, j, k]))
+            || (j > 0 && other([i, j - 1, k]))
+            || (j + 1 < d1 && other([i, j + 1, k]))
+            || (k > 0 && other([i, j, k - 1]))
+            || (k + 1 < d2 && other([i, j, k + 1]));
+        if touches {
+            *o = 0;
+        }
+    });
+    // keep, per bone, only the pieces that contain some of its thresholded
+    // bone (the assignment and the clearing can cut off small fragments)
+    for b in 1..=n {
+        let mb = out.mapv(|v| v == b);
+        let (comp, sizes) = label_components(&mb, false);
+        if sizes.len() <= 2 {
+            continue;
+        }
+        let mut has_bone = vec![false; sizes.len()];
+        for (c, &l) in comp.iter().zip(labels.iter()) {
+            if *c != 0 && l == b {
+                has_bone[*c as usize] = true;
+            }
+        }
+        for (o, c) in out.iter_mut().zip(comp.iter()) {
+            if *c != 0 && !has_bone[*c as usize] {
+                *o = 0;
+            }
+        }
+    }
+    out
+}
+
+/// Morphological closing of `m` by a ball of radius `r` (physical units)
+/// with its holes filled: dilate by `r`, fill every background region not
+/// connected to the in-plane faces of the volume (voids inside the bone,
+/// e.g. sparse trabecular or fatty marrow regions below the threshold), then
+/// erode by `r` (as in the periosteal mask of Buie et al. 2007). `d` is the
+/// squared distance map of `m` (physical units²; `inv` = 1 / spacing).
+/// Slice holes left after the erosion are filled too.
+fn closing(m: &Array3<bool>, d: &Array3<f32>, inv: [f64; 3], r: f64) -> Array3<bool> {
+    let r2 = (r * r) as f32;
+    // dilation, then fill enclosed background (the outside is the background
+    // connected to the in-plane faces, so a bone cut by the first or last
+    // slice still gets its marrow filled)
+    let dilated_bg = d.mapv(|v| v > r2);
+    let mut filled = outer_region(&dilated_bg, false).mapv(|b| !b);
+    // a void can reach the outside through a gap in a cortex the threshold
+    // missed that is wider than the closing; it is still enclosed in most
+    // slices through it, so fill slice holes in all three orientations
+    for _ in 0..2 {
+        for axis in 0..3 {
+            filled = fill_slice_holes(&filled, axis);
+        }
+    }
+    let outside = filled.mapv(|b| !b);
+    // erosion: voxels farther than r from the outside (the image border
+    // counts as inside)
+    let e = scaled_sq_distance(&outside, inv);
+    let mut c = e.mapv(|v| v > r2);
+    Zip::from(&mut c).and(m).par_for_each(|c, &b| *c |= b);
+    outer_region(&c.mapv(|b| !b), true).mapv(|b| !b)
 }
 
 /// The leftmost and rightmost set pixel of every row, as (row, column)
@@ -759,5 +1112,154 @@ mod tests {
         let mut out = Array2::from_elem((6, 6), false);
         fill_convex(&h, &mut out.view_mut());
         assert_eq!(out.iter().filter(|&&b| b).count(), 25);
+    }
+
+    #[test]
+    fn otsu_separates_a_trimodal_histogram() {
+        // air (excluded by the floor), soft tissue ~0, bone ~1000 (fewer voxels)
+        let mut r = crate::util::Rng::new(3);
+        let img = Array3::from_shape_fn((4, 60, 60), |(_, j, k)| {
+            let base = if j < 10 {
+                -1000.0
+            } else if k < 15 {
+                1000.0
+            } else if k < 35 {
+                -100.0
+            } else {
+                40.0
+            };
+            (base + 20.0 * r.normal()) as f32
+        });
+        let o = OtsuOptions {
+            floor: Some(-500.0),
+            ..OtsuOptions::default()
+        };
+        let t2 = otsu_thresholds(img.view(), &o);
+        assert_eq!(t2.len(), 1);
+        assert!(t2[0] > 100.0 && t2[0] < 900.0, "{t2:?}");
+        let t3 = otsu_thresholds(img.view(), &OtsuOptions { classes: 3, ..o });
+        assert_eq!(t3.len(), 2);
+        assert!(
+            t3[0] > -80.0 && t3[0] < 20.0 && t3[1] > 100.0 && t3[1] < 900.0,
+            "{t3:?}"
+        );
+        // nothing above the floor
+        let none = otsu_thresholds(
+            img.view(),
+            &OtsuOptions {
+                floor: Some(5000.0),
+                ..OtsuOptions::default()
+            },
+        );
+        assert!(none.is_empty());
+    }
+
+    /// Two "bones" facing each other: a C-shaped bone whose concavity holds
+    /// a small disc (as the trochlea holds the patella), and a speckle.
+    fn two_bones() -> Array3<f32> {
+        Array3::from_shape_fn((4, 80, 80), |(_, j, k)| {
+            let (y, x) = (j as f64 - 40.0, k as f64 - 35.0);
+            let r = (y * y + x * x).sqrt();
+            let c_shape = (15.0..22.0).contains(&r) && !(x > 5.0 && y.abs() < 12.0);
+            let disc = ((j as f64 - 40.0).powi(2) + (k as f64 - 50.0).powi(2)).sqrt() < 5.0;
+            let speckle = j == 3 && k == 3;
+            if c_shape || disc || speckle {
+                1000.0
+            } else {
+                0.0
+            }
+        })
+    }
+
+    #[test]
+    fn bones_are_labelled_by_size() {
+        let img = two_bones();
+        let b = label_bones(
+            img.view(),
+            &BoneLabelOptions {
+                threshold: 500.0,
+                min_size: 20,
+                ..BoneLabelOptions::default()
+            },
+        );
+        assert_eq!(b.sizes.len(), 2);
+        assert!(b.sizes[0] > b.sizes[1]);
+        assert_eq!(b.labels[[1, 40, 50]], 2); // the disc
+        assert_eq!(b.labels[[1, 40, 15]], 1); // the C
+        assert_eq!(b.labels[[1, 3, 3]], 0); // speckle removed (median and size)
+        let one = label_bones(
+            img.view(),
+            &BoneLabelOptions {
+                threshold: 500.0,
+                min_size: 20,
+                max_bones: Some(1),
+                ..BoneLabelOptions::default()
+            },
+        );
+        assert_eq!(one.sizes.len(), 1);
+        assert_eq!(one.labels[[1, 40, 50]], 0);
+    }
+
+    #[test]
+    fn bone_hulls_contain_their_bones_and_stay_apart() {
+        let img = two_bones();
+        let b = label_bones(
+            img.view(),
+            &BoneLabelOptions {
+                threshold: 500.0,
+                min_size: 20,
+                ..BoneLabelOptions::default()
+            },
+        );
+        let h = bone_hulls(b.labels.view(), [1.0, 1.0, 1.0], None, None);
+        // every bone voxel is in its own hull
+        assert!(b.labels.iter().zip(h.iter()).all(|(&l, &hv)| l == 0 || hv == l));
+        // the C's hull would cover the disc; the disc keeps it, and the C's
+        // hull still closes the C's own marrow
+        assert_eq!(h[[1, 40, 35]], 1);
+        assert_eq!(h[[1, 40, 50]], 2);
+        // trimmed to 3 voxels from the bone: the C's wide mouth (24 voxels) is
+        // an open concavity, so its inside opens up; the bone stays in
+        let t = bone_hulls(b.labels.view(), [1.0, 1.0, 1.0], Some(3.0), None);
+        assert!(b.labels.iter().zip(t.iter()).all(|(&l, &hv)| l == 0 || hv == l));
+        assert_eq!(t[[1, 40, 35]], 0);
+        // a ring with a narrow (4 voxel) break keeps its marrow
+        let ring = Array3::from_shape_fn((4, 60, 60), |(_, j, k)| {
+            let (y, x) = (j as f64 - 30.0, k as f64 - 30.0);
+            let r = (y * y + x * x).sqrt();
+            ((15.0..20.0).contains(&r) && !(x > 5.0 && y.abs() < 2.0)) as u16
+        });
+        let tr = bone_hulls(ring.view(), [1.0, 1.0, 1.0], Some(3.0), None);
+        assert_eq!(tr[[1, 30, 30]], 1);
+        assert_eq!(tr[[1, 30, 47]], 1); // the break is closed
+        assert_eq!(tr[[1, 2, 2]], 0);
+        // closing by a 3-voxel ball: the C's 24-voxel mouth stays open, the
+        // ring's 4-voxel break closes and its marrow is filled
+        let c = bone_hulls(b.labels.view(), [1.0, 1.0, 1.0], None, Some(3.0));
+        assert!(b.labels.iter().zip(c.iter()).all(|(&l, &cv)| l == 0 || cv == l));
+        assert_eq!(c[[1, 40, 35]], 0);
+        let cr = bone_hulls(ring.view(), [1.0, 1.0, 1.0], None, Some(3.0));
+        assert_eq!(cr[[1, 30, 47]], 1);
+        assert_eq!(cr[[1, 30, 30]], 1);
+        assert_eq!(cr[[1, 2, 2]], 0);
+        // no voxel of one hull (or closing; a 6-voxel closing of the C would
+        // reach the disc) 6-touches another
+        let wide = bone_hulls(b.labels.view(), [1.0, 1.0, 1.0], None, Some(6.0));
+        assert!(b.labels.iter().zip(wide.iter()).all(|(&l, &cv)| l == 0 || cv == l));
+        for h in [&h, &c, &wide] {
+            let (d0, d1, d2) = h.dim();
+            for ((i, j, k), &v) in h.indexed_iter() {
+                if v == 0 {
+                    continue;
+                }
+                for (di, dj, dk) in [(1, 0, 0), (0, 1, 0), (0, 0, 1)] {
+                    let (a, bb, cc) = (i + di, j + dj, k + dk);
+                    if a < d0 && bb < d1 && cc < d2 {
+                        let w = h[[a, bb, cc]];
+                        assert!(w == 0 || w == v, "labels {v} and {w} touch at ({i},{j},{k})");
+                    }
+                }
+            }
+        }
     }
 }

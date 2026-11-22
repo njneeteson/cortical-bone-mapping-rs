@@ -115,6 +115,70 @@ def test_neighbour_and_breaks_phantom():
     assert cbm.hull_segmentation(img)[lab == 2].all()
 
 
+def test_otsu_label_and_hull_two_bones():
+    ph = cbm.BonePhantom(dims=(12, 240, 240), noise=40.0, neighbour=(1.5, 0.5, 0.5, np.pi / 4))
+    img, peri, _ = ph.generate()
+    t = cbm.otsu_thresholds(img)
+    assert len(t) == 1 and 100 < t[0] < 900
+    t3 = cbm.otsu_thresholds(img, classes=3)
+    assert len(t3) == 2 and t3[0] < t3[1]
+    lab, sizes = cbm.label_bones(img, t[0], min_size=5000)
+    lab2, _ = cbm.label_bones(img, "otsu", min_size=5000)
+    assert (lab2 == lab).all()
+    assert lab.dtype == np.uint16 and len(sizes) == 2 and sizes[0] > sizes[1]
+    truth = ph.labels()
+    nb = lab[truth == 1]
+    assert (nb[nb > 0] == 2).mean() > 0.99  # the neighbour (bone voxels) is the smaller bone
+    hulls = cbm.bone_hulls(lab, ph.spacing)
+    # names from landmarks: a point in the main marrow (inside the hull, not the bone) and one on the neighbour
+    sp = np.asarray(ph.spacing)
+    centre = (np.array(img.shape) - 1) / 2 * sp
+    on_nb = np.argwhere(lab == 2)[0] * sp
+    assert cbm.name_bones(hulls, {"radius": centre, "ulna": on_nb}, ph.spacing) == {1: "radius", 2: "ulna"}
+    far = centre + np.array([0.0, 100.0, 0.0])  # outside the image: nearest bone
+    assert cbm.name_bones(lab, {"x": far}, ph.spacing) in ({1: "x"}, {2: "x"})
+    with pytest.raises(ValueError):
+        cbm.name_bones(lab, {"a": centre, "b": centre}, ph.spacing)
+    assert ((lab == 0) | (hulls == lab)).all()  # each hull contains its bone
+    assert (hulls[peri] == 1).mean() > 0.97  # and the main hull is the main bone
+    # per-bone fits: cropping to each bone gives the same result as the full image
+    o = cbm.Options(spacing=ph.spacing, outside=0.4, inside=1.5, method="regularized", reg_neighbours=64,
+                    rho_c="estimate")
+    full = cbm.map_bones(img, hulls, options=o, crop=False)
+    crop = cbm.map_bones(img, hulls, options=o)
+    assert set(full) == set(crop) == {1, 2}
+    for b in (1, 2):
+        d = np.abs(crop[b].thickness - full[b].thickness)  # same surface; float rounding + solver tolerance
+        assert crop[b].n == full[b].n and np.median(d) < 1e-4 and d.mean() < 2e-3
+        assert crop[b].options.origin == o.origin
+    assert full[1].n > full[2].n
+    # refinement per bone, with a per-bone override; masks at the full shape
+    rr = cbm.refine_bones(img, hulls, options=o, bones=[2], refine_iterations=2,
+                          per_bone={2: dict(rho_c=1000.0)})
+    assert list(rr) == [2] and rr[2].periosteal_mask.shape == img.shape
+    assert rr[2].result.rho_c == 1000.0
+    assert not rr[2].periosteal_mask[peri].any()
+
+
+def test_separate_bones_raises_the_threshold_locally():
+    # a neighbour 0.15 mm away, blurred: the two bones join at a low threshold
+    ph = cbm.BonePhantom(dims=(8, 240, 240), noise=20.0, neighbour=(1.5, 0.5, 0.15, np.pi / 4), blur=(0.12,) * 3)
+    img, peri, _ = ph.generate()
+    sp = np.asarray(ph.spacing)
+    truth = ph.labels()
+    marks = {"main": np.argwhere(peri & (img > 600))[0] * sp, "neighbour": np.argwhere((truth == 1) & (img > 600))[0] * sp}
+    lab, sizes = cbm.label_bones(img, 150.0, min_size=500)
+    with pytest.raises(ValueError, match="joined two bones"):
+        cbm.name_bones(lab, marks, ph.spacing)
+    lab, names, used = cbm.separate_bones(img, 150.0, marks, ph.spacing, min_size=500, verbose=False)
+    assert sorted(names.values()) == ["main", "neighbour"]
+    assert used["main"] == used["neighbour"] > 150.0
+    inv = {v: k for k, v in names.items()}
+    assert inv["main"] == 1 and (lab[truth == 1] == inv["main"]).mean() < 0.01
+    with pytest.raises(ValueError, match="could not be separated"):
+        cbm.separate_bones(img, 150.0, marks, ph.spacing, min_size=500, max_threshold=160.0, verbose=False)
+
+
 def test_joint_phantom_truth():
     ph = cbm.JointPhantom(dims=(100, 120, 120), radius=3.0, joint_space=2.0, joint_level=0.4, noise=0.0)
     img, peri, endo = ph.generate()

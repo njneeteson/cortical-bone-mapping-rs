@@ -155,6 +155,8 @@ fn parse_options(d: &Bound<'_, PyDict>) -> PyResult<cbm::Options> {
             lower: req(d, "lower")?,
             upper: req(d, "upper")?,
             sigma,
+            global: req(d, "global")?,
+            density_smoothing: req(d, "density_smoothing")?,
         },
         solver: cbm::SolverOptions {
             max_iterations: req(d, "max_iterations")?,
@@ -164,6 +166,7 @@ fn parse_options(d: &Bound<'_, PyDict>) -> PyResult<cbm::Options> {
             cg_max_iterations: req(d, "cg_max_iterations")?,
             cg_tolerance: req(d, "cg_tolerance")?,
             cg_max_total: req(d, "cg_max_total")?,
+            progress_every: req(d, "progress_every")?,
         },
         method,
         init_from_global: req(d, "init_from_global")?,
@@ -306,6 +309,25 @@ fn refine<'py>(
         smoothing_iterations: req(refine, "smoothing_iterations")?,
         max_step: opt(refine, "max_step")?,
         keep_history: req(refine, "keep_history")?,
+        verbose: req(refine, "verbose")?,
+        label: req(refine, "label")?,
+        level_set: req(refine, "level_set")?,
+        edge_ratio: req(refine, "edge_ratio")?,
+        stall_iterations: req(refine, "stall_iterations")?,
+        region_radius: opt(refine, "region_radius")?,
+        region_tolerance: opt(refine, "region_tolerance")?,
+        freeze: if req::<bool>(refine, "freeze")? {
+            Some(cbm::FreezeOptions {
+                patience: req(refine, "freeze_patience")?,
+                displacement: opt(refine, "freeze_displacement")?,
+                thickness: opt(refine, "freeze_thickness")?,
+                radius: opt(refine, "freeze_radius")?,
+                halo: opt(refine, "freeze_halo")?,
+                thaw: opt(refine, "freeze_thaw")?,
+            })
+        } else {
+            None
+        },
     };
     let m = mask.as_array();
     let s: Option<ArrayView3<'_, u8>> = sub_mask.as_ref().map(|s| s.as_array());
@@ -325,15 +347,27 @@ fn refine<'py>(
         e.set_item("max_displacement", h.max_displacement)?;
         e.set_item("mean_thickness", h.mean_thickness)?;
         e.set_item("mean_residual", h.mean_residual)?;
+        e.set_item("nodes", h.nodes)?;
+        e.set_item("moving_nodes", h.moving_nodes)?;
+        e.set_item("full_fit", h.full_fit)?;
+        e.set_item("fit_converged", h.fit_converged)?;
+        e.set_item("untrusted", h.untrusted)?;
+        e.set_item("max_regional_rms", h.max_regional_rms)?;
         hist.append(e)?;
     }
     d.set_item("history", hist)?;
     let surfs = PyList::empty(py);
+    let sfaces = PyList::empty(py);
     for s in &r.surfaces {
         surfs.append(v3_array(py, &s.vertices))?;
+        sfaces.append(faces_array(py, &s.faces))?;
     }
     d.set_item("surfaces", surfs)?;
+    d.set_item("surfaces_faces", sfaces)?;
     d.set_item("converged", r.converged)?;
+    d.set_item("stalled", r.stalled)?;
+    d.set_item("message", &r.message)?;
+    d.set_item("timings", r.timings.clone())?;
     Ok(d)
 }
 
@@ -750,8 +784,66 @@ fn hull_segmentation<'py>(
     Ok(r.into_pyarray(py))
 }
 
+/// Histogram thresholds by (multi-level) Otsu's method.
+#[pyfunction]
+#[pyo3(signature = (image, floor, classes, bins))]
+fn otsu_thresholds(image: &Bound<'_, PyAny>, floor: Option<f64>, classes: usize, bins: usize) -> PyResult<Vec<f64>> {
+    if !(classes == 2 || classes == 3) {
+        return Err(PyValueError::new_err("classes must be 2 or 3"));
+    }
+    if bins < 4 {
+        return Err(PyValueError::new_err("bins must be at least 4"));
+    }
+    let o = cbm::segmentation::OtsuOptions { floor, classes, bins };
+    let py = image.py();
+    with_image!(image, |img| Ok::<_, PyErr>(
+        py.detach(|| cbm::segmentation::otsu_thresholds(img, &o))
+    ))
+}
+
+/// Threshold, median, connected components → bones labelled by size.
+#[pyfunction]
+#[pyo3(signature = (image, threshold, median_kernel, min_size, max_bones))]
+fn label_bones<'py>(
+    py: Python<'py>,
+    image: &Bound<'py, PyAny>,
+    threshold: f64,
+    median_kernel: [usize; 3],
+    min_size: usize,
+    max_bones: Option<usize>,
+) -> PyResult<(Bound<'py, numpy::PyArray3<u16>>, Vec<usize>)> {
+    let o = cbm::segmentation::BoneLabelOptions {
+        threshold,
+        median_kernel,
+        min_size,
+        max_bones,
+    };
+    let r = with_image!(image, |img| Ok::<_, PyErr>(
+        py.detach(|| cbm::segmentation::label_bones(img, &o))
+    ))?;
+    Ok((r.labels.into_pyarray(py), r.sizes))
+}
+
+/// Per-bone per-slice convex hulls (or closings), kept apart.
+#[pyfunction]
+#[pyo3(signature = (labels, spacing, max_distance, closing_radius))]
+fn bone_hulls<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray3<'py, u16>,
+    spacing: [f64; 3],
+    max_distance: Option<f64>,
+    closing_radius: Option<f64>,
+) -> PyResult<Bound<'py, numpy::PyArray3<u16>>> {
+    let l = labels.as_array();
+    let r = py.detach(|| cbm::segmentation::bone_hulls(l, spacing, max_distance, closing_radius));
+    Ok(r.into_pyarray(py))
+}
+
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(otsu_thresholds, m)?)?;
+    m.add_function(wrap_pyfunction!(label_bones, m)?)?;
+    m.add_function(wrap_pyfunction!(bone_hulls, m)?)?;
     m.add_function(wrap_pyfunction!(run, m)?)?;
     m.add_function(wrap_pyfunction!(refine, m)?)?;
     m.add_function(wrap_pyfunction!(voxelize, m)?)?;

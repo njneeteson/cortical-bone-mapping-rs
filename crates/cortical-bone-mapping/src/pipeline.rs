@@ -150,6 +150,16 @@ pub struct ModelOptions {
     pub lower: Params,
     pub upper: Params,
     pub sigma: SigmaMode,
+    /// Global methods: which of `[m, t, σ, ρs, ρb]` take one value for the
+    /// whole surface; the others are fields (per node, regularised in the
+    /// regularised method). Neeteson & Boyd: `ρs`, `ρb` global. Per-node
+    /// densities (all `false`) are needed where the trabecular density
+    /// varies over the bone, e.g. dense epiphyses and fatty diaphyseal
+    /// marrow in a clinical CT (extension).
+    pub global: [bool; NPARAM],
+    /// Weight of the smoothing of density fields relative to that of `m`
+    /// and `t` (regularised method).
+    pub density_smoothing: f64,
 }
 
 impl Default for ModelOptions {
@@ -163,6 +173,8 @@ impl Default for ModelOptions {
             lower: [-3.0, 0.0607, 0.01, -200.0, -200.0],
             upper: [6.0, 12.0, 2.0, 400.0, 400.0],
             sigma: SigmaMode::Free,
+            global: [false, false, false, true, true],
+            density_smoothing: 1.0,
         }
     }
 }
@@ -180,6 +192,9 @@ pub struct SolverOptions {
     /// badly posed problem; the fit is then flagged in
     /// [`FitInfo::budget_exhausted`]).
     pub cg_max_total: usize,
+    /// Print the state of the global (multigrid / regularised) solver to
+    /// stderr every this many iterations; 0 = never.
+    pub progress_every: usize,
 }
 
 impl Default for SolverOptions {
@@ -192,6 +207,7 @@ impl Default for SolverOptions {
             cg_max_iterations: 200,
             cg_tolerance: 1e-3,
             cg_max_total: 2000,
+            progress_every: 1,
         }
     }
 }
@@ -410,6 +426,9 @@ pub struct FitInfo {
     pub curvature_cost: f64,
     /// A global solve stopped on its iteration or CG budget.
     pub budget_exhausted: bool,
+    /// A global solve stopped early because the fitted edges had settled
+    /// ([`FitConstraints::edge_tol`]).
+    pub edge_stop: bool,
     /// Wall time per stage (seconds).
     pub timings: Vec<(String, f64)>,
 }
@@ -684,6 +703,8 @@ fn global_settings(o: &Options) -> global::Settings {
         cg_max_iterations: o.solver.cg_max_iterations,
         cg_tolerance: o.solver.cg_tolerance,
         cg_max_total: o.solver.cg_max_total,
+        progress_every: o.solver.progress_every,
+        edge_tol: 0.0,
     }
 }
 
@@ -696,6 +717,44 @@ pub fn fit_surface<T: Voxel>(
     keep: &[bool],
     options: &Options,
     warm_start: Option<&[Option<Params>]>,
+) -> Result<CbmResult, Error> {
+    fit_surface_constrained(image, surface, keep, options, warm_start, &FitConstraints::default())
+}
+
+/// Constraints for a partial refit of a surface (used by refinement with
+/// regional convergence).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FitConstraints<'a> {
+    /// Per surface vertex: hold the node at its warm start (which must be
+    /// given). With the regularised method such nodes are boundary
+    /// conditions for their free neighbours; other methods simply keep the
+    /// warm-start values.
+    pub fixed: Option<&'a [bool]>,
+    /// Cortical density to use instead of estimating it (modes `Fixed` and
+    /// `Estimate`).
+    pub rho_c: Option<f64>,
+    /// Hold `(ρs, ρb)` at these values (regularised method).
+    pub densities: Option<[f64; 2]>,
+    /// Start `(ρs, ρb)` from these values instead of the global fit
+    /// (regularised method; a warm start).
+    pub density_start: Option<[f64; 2]>,
+    /// Stop the global solve once its steps change the fitted periosteal
+    /// edges by less than this (RMS, physical units; 0 = solve fully).
+    pub edge_tol: f64,
+    /// Hold a global `σ` at this value.
+    pub sigma: Option<f64>,
+    /// Start a global `σ` from this value (a warm start).
+    pub sigma_start: Option<f64>,
+}
+
+/// [`fit_surface`] with [`FitConstraints`].
+pub fn fit_surface_constrained<T: Voxel>(
+    image: &ArrayView3<T>,
+    surface: Mesh,
+    keep: &[bool],
+    options: &Options,
+    warm_start: Option<&[Option<Params>]>,
+    constraints: &FitConstraints,
 ) -> Result<CbmResult, Error> {
     let o = options;
     let mut timings = Vec::new();
@@ -726,8 +785,11 @@ pub fn fit_surface<T: Voxel>(
             .collect()
     };
     let (rho_c, rho_c_node) = match o.model.rho_c_mode {
-        RhoCMode::Fixed => (o.model.rho_c, None),
-        RhoCMode::Estimate => (estimate_rho_c(&profiles, &x, &weights, maxima(), o), None),
+        RhoCMode::Fixed => (constraints.rho_c.unwrap_or(o.model.rho_c), None),
+        RhoCMode::Estimate => match constraints.rho_c {
+            Some(rc) => (rc, None),
+            None => (estimate_rho_c(&profiles, &x, &weights, maxima(), o), None),
+        },
         RhoCMode::ProfileMax => {
             let mx = maxima();
             let rc = quantile_of(mx.clone(), 0.5);
@@ -744,6 +806,10 @@ pub fn fit_surface<T: Voxel>(
         }
     };
     timings.push(("sampling".to_string(), t0.elapsed().as_secs_f64()));
+    let gsettings = global::Settings {
+        edge_tol: constraints.edge_tol,
+        ..global_settings(o)
+    };
     let mut info = FitInfo {
         method: o.method.name().to_string(),
         ..Default::default()
@@ -774,6 +840,20 @@ pub fn fit_surface<T: Voxel>(
     } else {
         init
     };
+    if let Some([rs, rb]) = constraints.densities {
+        global_params[RHO_S] = rs;
+        global_params[RHO_B] = rb;
+    }
+    // fixed nodes (subset indices) and their held parameters
+    let fixed_sub: Option<Vec<bool>> = constraints
+        .fixed
+        .map(|f| vertex_ids.iter().map(|&v| f[v as usize]).collect());
+    if let Some(fs) = &fixed_sub {
+        let has_warm = |k: usize| warm_start.is_some_and(|w| w[vertex_ids[k] as usize].is_some());
+        if fs.iter().enumerate().any(|(k, &f)| f && !has_warm(k)) {
+            return Err(Error::InvalidOption("fixed nodes need a warm start".into()));
+        }
+    }
     timings.push(("global fit".to_string(), t1.elapsed().as_secs_f64()));
 
     let per_node_init = |gp: &Params, sigma_fixed: &Option<Vec<f64>>| -> Vec<Params> {
@@ -842,7 +922,7 @@ pub fn fit_surface<T: Voxel>(
             seed,
         } => {
             let mut node_params = per_node_init(&global_params, &sigma_fixed);
-            let mut roles = [Role::Field, Role::Field, Role::Field, Role::Global, Role::Global];
+            let mut roles = base_roles(o);
             let mut fixed: [Option<&[f64]>; NPARAM] = [None; NPARAM];
             if let Some(sf) = &sigma_fixed {
                 roles[SIGMA] = Role::Fixed;
@@ -862,6 +942,7 @@ pub fn fit_surface<T: Voxel>(
                     roles,
                     fixed_per_node: fixed,
                     interp: Some(&a),
+                    frozen: None,
                     smoothing: None,
                     curvature: None,
                     lower: o.model.lower,
@@ -874,7 +955,7 @@ pub fn fit_surface<T: Voxel>(
                         .collect(),
                     scalars,
                 };
-                let si = global::solve(&pr, &mut st, &global_settings(o));
+                let si = global::solve(&pr, &mut st, &gsettings);
                 accumulate(&mut info, &si);
                 node_params = pr.node_params(&st);
                 scalars = st.scalars;
@@ -904,7 +985,26 @@ pub fn fit_surface<T: Voxel>(
             } else {
                 per_node_init(&global_params, &sigma_fixed)
             };
-            let mut roles = [Role::Field, Role::Field, Role::Field, Role::Global, Role::Global];
+            let mut start = start;
+            if let Some(fs) = &fixed_sub {
+                let held = per_node_init(&global_params, &sigma_fixed);
+                for (k, &f) in fs.iter().enumerate() {
+                    if f {
+                        start[k] = held[k];
+                    }
+                }
+            }
+            let mut roles = base_roles(o);
+            if constraints.densities.is_some() {
+                for c in [RHO_S, RHO_B] {
+                    if roles[c] == Role::Global {
+                        roles[c] = Role::Fixed;
+                    }
+                }
+            }
+            if constraints.sigma.is_some() && roles[SIGMA] == Role::Global {
+                roles[SIGMA] = Role::Fixed;
+            }
             let mut fixed: [Option<&[f64]>; NPARAM] = [None; NPARAM];
             if let Some(sf) = &sigma_fixed {
                 roles[SIGMA] = Role::Fixed;
@@ -913,13 +1013,19 @@ pub fn fit_surface<T: Voxel>(
             let t0g = global_params[T].max(1e-6);
             let s0g = global_params[SIGMA].max(1e-6);
             let base = lambda * rho_c * rho_c / n as f64;
+            let t_op = Instant::now();
             let op = (*lambda > 0.0).then(|| SmoothingOperator::new(&points, *neighbours, *sigma, *cutoff));
+            timings.push(("smoothing operator".to_string(), t_op.elapsed().as_secs_f64()));
             let mut coef = [0.0; NPARAM];
             coef[M] = base / (t0g * t0g);
             coef[T] = base / (t0g * t0g);
-            if free_sigma {
+            if free_sigma && roles[SIGMA] == Role::Field {
                 coef[SIGMA] = base / (s0g * s0g);
             }
+            // density variation relative to the cortical density
+            let cd = o.model.density_smoothing * base / (rho_c * rho_c);
+            coef[RHO_S] = cd;
+            coef[RHO_B] = cd;
             let curv = curvature.as_ref().map(|c| {
                 let ell = c.length.unwrap_or(t0g);
                 let cc = (c.weight / n as f64).sqrt() * rho_c * ell;
@@ -938,13 +1044,25 @@ pub fn fit_surface<T: Voxel>(
                 roles,
                 fixed_per_node: fixed,
                 interp: None,
+                frozen: fixed_sub.as_deref(),
                 smoothing: op.as_ref().map(|op| Smoothing { op, coef }),
                 curvature: curv.as_ref(),
                 lower: o.model.lower,
                 upper: o.model.upper,
             };
             let mut scalars = global_params;
-            if *init_from_local {
+            if let Some([rs, rb]) = constraints.density_start {
+                if constraints.densities.is_none() {
+                    scalars[RHO_S] = rs;
+                    scalars[RHO_B] = rb;
+                }
+            }
+            if let Some(sg) = constraints.sigma.or(constraints.sigma_start) {
+                if sigma_fixed.is_none() {
+                    scalars[SIGMA] = sg;
+                }
+            }
+            if *init_from_local && constraints.densities.is_none() && constraints.density_start.is_none() {
                 scalars[RHO_S] = start.iter().map(|p| p[RHO_S]).sum::<f64>() / n as f64;
                 scalars[RHO_B] = start.iter().map(|p| p[RHO_B]).sum::<f64>() / n as f64;
             }
@@ -952,11 +1070,20 @@ pub fn fit_surface<T: Voxel>(
                 field: fields.iter().map(|&c| start.iter().map(|p| p[c]).collect()).collect(),
                 scalars,
             };
-            let si = global::solve(&pr, &mut st, &global_settings(o));
+            let si = global::solve(&pr, &mut st, &gsettings);
             accumulate(&mut info, &si);
             pr.node_params(&st)
         }
     };
+    let mut params = params;
+    if let Some(fs) = &fixed_sub {
+        let held = per_node_init(&global_params, &sigma_fixed);
+        for (k, &f) in fs.iter().enumerate() {
+            if f {
+                params[k] = held[k];
+            }
+        }
+    }
     timings.push((format!("{} fit", o.method.name()), t3.elapsed().as_secs_f64()));
 
     // ---- residuals
@@ -975,7 +1102,6 @@ pub fn fit_surface<T: Voxel>(
             (s / wsum).sqrt()
         })
         .collect();
-    let mut params = params;
     if let Some(node) = &rho_c_node {
         let m = profiles.m;
         for (i, &rn) in node.iter().enumerate() {
@@ -990,6 +1116,7 @@ pub fn fit_surface<T: Voxel>(
             }
         }
     }
+    timings.append(&mut info.timings);
     info.timings = timings;
     Ok(CbmResult {
         surface,
@@ -1006,6 +1133,11 @@ pub fn fit_surface<T: Voxel>(
         info,
         profiles: o.keep_profiles.then_some((x, profiles)),
     })
+}
+
+/// Roles of `[m, t, σ, ρs, ρb]` in the global methods.
+fn base_roles(o: &Options) -> [Role; NPARAM] {
+    o.model.global.map(|g| if g { Role::Global } else { Role::Field })
 }
 
 /// One model `[m, t, σ, ρs, ρb]` fitted to all profiles.
@@ -1032,6 +1164,7 @@ fn fit_one_model(
         roles,
         fixed_per_node: fixed,
         interp: None,
+        frozen: None,
         smoothing: None,
         curvature: None,
         lower: o.model.lower,
@@ -1099,4 +1232,19 @@ fn accumulate(info: &mut FitInfo, si: &global::SolveInfo) {
     info.curvature_cost = si.curvature_cost;
     info.converged = if si.status == Status::MaxIterations { 0.0 } else { 1.0 };
     info.budget_exhausted |= si.status == Status::MaxIterations;
+    info.edge_stop |= si.edge_stop;
+    for (name, t) in [
+        ("solver: evaluation", si.time_evaluate),
+        ("solver: Gauss-Newton products", si.time_hessian),
+        ("solver: preconditioner", si.time_precond),
+        (
+            "solver: other",
+            si.time_total - si.time_evaluate - si.time_hessian - si.time_precond,
+        ),
+    ] {
+        match info.timings.iter_mut().find(|(n, _)| n == name) {
+            Some(e) => e.1 += t,
+            None => info.timings.push((name.to_string(), t)),
+        }
+    }
 }

@@ -89,6 +89,32 @@ pub fn extract_surface<T: Voxel>(mask: &ArrayView3<T>, geom: &Geometry, smoothin
 
 const ISO: f64 = 0.5;
 
+/// Extract the zero level of a signed distance `phi` (negative inside),
+/// stored for the image voxels `lo + index`, as a closed outward-oriented
+/// mesh. Voxels outside `phi` or the image (`dims`) count as outside;
+/// `border` flags vertices whose cell touches the outside of the image.
+pub fn extract_level_set(phi: &ArrayView3<f32>, lo: [usize; 3], dims: [usize; 3], geom: &Geometry) -> Extracted {
+    let (s0, s1, s2) = phi.dim();
+    if s0 == 0 || s1 == 0 || s2 == 0 {
+        return Extracted {
+            mesh: Mesh::default(),
+            border: Vec::new(),
+        };
+    }
+    let shape = [s0 as isize, s1 as isize, s2 as isize];
+    let lo_i = lo.map(|v| v as isize);
+    let field = |i: isize, j: isize, k: isize| -> f64 {
+        let l = [i - lo_i[0], j - lo_i[1], k - lo_i[2]];
+        if (0..3).all(|a| l[a] >= 0 && l[a] < shape[a]) {
+            ISO - phi[[l[0] as usize, l[1] as usize, l[2] as usize]] as f64
+        } else {
+            0.0
+        }
+    };
+    let hi = [lo[0] + s0 - 1, lo[1] + s1 - 1, lo[2] + s2 - 1];
+    nets(field, lo, hi, dims.map(|v| v as isize), geom)
+}
+
 fn nets<F: Fn(isize, isize, isize) -> f64>(
     f: F,
     lo: [usize; 3],

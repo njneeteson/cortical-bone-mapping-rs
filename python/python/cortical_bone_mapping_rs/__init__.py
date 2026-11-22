@@ -55,8 +55,15 @@ __all__ = [
     "BuieOptions",
     "buie_segmentation",
     "hull_segmentation",
+    "otsu_thresholds",
+    "label_bones",
+    "bone_hulls",
+    "name_bones",
+    "separate_bones",
     "cortical_bone_mapping",
     "refine_segmentation",
+    "map_bones",
+    "refine_bones",
     "voxelize",
     "write_vtk",
     "fit_profiles",
@@ -130,6 +137,16 @@ class Options:
         ``sigma`` using nodes with ``t >= psf_min_ratio * sigma``, then fix it;
         Treece-style). ``psf_model`` is ``"isotropic"``, ``"axial"`` (in-plane
         + along ``psf_axis``) or ``"anisotropic"``.
+    global_params
+        Global methods: the parameters (names from ``PARAM_NAMES``) that take
+        one value for the whole surface; the others are per-node fields,
+        regularised in the regularised method. Default ``("rho_s",
+        "rho_b")`` (Neeteson & Boyd). ``()`` fits the densities per node too,
+        needed where the trabecular density varies over the bone (dense
+        epiphyses, fatty diaphyseal marrow in clinical CT).
+    density_smoothing
+        Weight of the smoothing of density fields relative to that of ``m``
+        and ``t``.
 
     **Solver**
 
@@ -141,6 +158,10 @@ class Options:
     cg_max_total
         CG iterations allowed over one global solve; a fit that exhausts it is
         flagged (``info["budget_exhausted"]``) and stops refinement.
+    progress_every
+        Print the state of the global (multigrid / regularised) solver to
+        stderr every this many iterations (cost, gradient, CG work, time);
+        0 = never.
 
     **Method**
 
@@ -208,6 +229,8 @@ class Options:
     lower: Quint = (-3.0, 0.0607, 0.01, -200.0, -200.0)
     upper: Quint = (6.0, 12.0, 2.0, 400.0, 400.0)
     sigma: Literal["free", "fixed", "psf", "estimate_psf"] = "free"
+    global_params: Tuple[str, ...] = ("rho_s", "rho_b")
+    density_smoothing: float = 1.0
     sigma_value: float = 0.1
     psf: Triple = (0.1, 0.1, 0.1)
     psf_model: Literal["isotropic", "axial", "anisotropic"] = "axial"
@@ -221,6 +244,7 @@ class Options:
     cg_max_iterations: int = 200
     cg_tolerance: float = 1e-3
     cg_max_total: int = 2000
+    progress_every: int = 1
     # method
     method: Literal["local", "multigrid", "regularized"] = "local"
     multigrid_spacings: Sequence[float] = (7.7696, 3.8848, 1.9424, 0.9712)
@@ -255,6 +279,11 @@ class Options:
                 raise ValueError(f"{k} must have 5 values (m, t, sigma, rho_s, rho_b)")
             d[k] = v
         d["multigrid_spacings"] = [float(s) for s in self.multigrid_spacings]
+        bad = set(self.global_params) - set(PARAM_NAMES)
+        if bad:
+            raise ValueError(f"unknown global_params {sorted(bad)}; use names from {PARAM_NAMES}")
+        d["global"] = [n in self.global_params for n in PARAM_NAMES]
+        del d["global_params"]
         if isinstance(self.rho_c, str):
             if self.rho_c not in ("estimate", "profile_max"):
                 raise ValueError('rho_c must be a number, "estimate" or "profile_max"')
@@ -323,6 +352,50 @@ class RefineOptions:
         Optional cap on the displacement per iteration.
     keep_history
         Keep the surface of every iteration (:attr:`RefineResult.surfaces`).
+    verbose
+        Print one line to stderr after the initial fit and after every
+        iteration (displacement, mean thickness, fit iterations, elapsed time).
+    label
+        Prefix of the progress lines (``refine_bones`` uses the bone's label).
+    edge_ratio
+        Inexact inner fits: while the surface still moves, each global solve
+        stops once its steps change the fitted edges (``m - t/2``) by less
+        than ``edge_ratio`` times the last displacement (RMS); 0 solves
+        fully. The initial fit and the verifying fit are always full solves:
+        refinement has converged only when a full, converged solve moves the
+        surface by less than ``tolerance``.
+    stall_iterations
+        Stop as stalled (``RefineResult.stalled``, with a diagnosis in
+        ``message``) when for this many fits the displacement has not fallen
+        below 95% of its best and no further region has converged.
+    region_radius, region_tolerance
+        Regional convergence test: the displacement RMS over the nodes
+        within ``region_radius`` of each node (default 5 voxels) must be
+        below ``region_tolerance`` everywhere (default 2 x ``tolerance``;
+        ``float("inf")`` disables it). A narrow band still moving (a surface
+        zipping into a concavity) hardly changes the RMS over the whole
+        surface but stands out regionally.
+    level_set
+        Carry the surface as a level set (signed distance on the image grid)
+        and extract a new mesh every iteration, instead of moving the same
+        vertices: the node spacing stays even and the surface cannot fold,
+        however far it moves. ``smoothing_iterations`` is then unused.
+    freeze
+        Regional convergence: a node is *still* once, for
+        ``freeze_patience`` consecutive iterations, it moved less than
+        ``freeze_displacement`` and its thickness changed by less than
+        ``freeze_thickness`` (both default to the tolerance). It freezes
+        when every node within ``freeze_radius`` (default 3 voxels) is
+        still. Frozen nodes are no longer moved or refitted, except those
+        within ``freeze_halo`` of a moving node (default: the reach of the
+        regularisation, ``cutoff * sigma_reg``), which are refitted as fixed
+        values: boundary conditions for the regularisation. A node whose fit
+        fails (cannot locate an edge) is never still. A frozen node thaws
+        when the moving nodes within ``freeze_radius`` have moved
+        ``freeze_thaw`` in total (largest nearby move summed over iterations;
+        default 1 voxel). ``rho_c`` and the
+        densities are fixed after the initial fit, and the whole surface is
+        fitted once more at the end.
     """
 
     refine_iterations: int = 20
@@ -331,6 +404,20 @@ class RefineOptions:
     smoothing_iterations: int = 2
     max_step: Optional[float] = None
     keep_history: bool = False
+    verbose: bool = True
+    label: str = ""
+    edge_ratio: float = 0.1
+    stall_iterations: int = 5
+    region_radius: Optional[float] = None
+    region_tolerance: Optional[float] = None
+    level_set: bool = False
+    freeze: bool = False
+    freeze_patience: int = 3
+    freeze_displacement: Optional[float] = None
+    freeze_thickness: Optional[float] = None
+    freeze_radius: Optional[float] = None
+    freeze_halo: Optional[float] = None
+    freeze_thaw: Optional[float] = None
 
     def _to_core(self) -> dict:
         d = asdict(self)
@@ -539,12 +626,25 @@ class RefineResult:
     endosteal_vertices
         The fitted endosteal surface (faces: ``result.surface_faces``).
     history
-        Per-iteration RMS/max displacement, mean thickness and residual.
+        One dict per fit (``history[k]`` is the fit on ``surfaces[k]``): the
+        RMS/max displacement it implies, mean thickness and residual, the
+        number of fittable and still-moving (not frozen) nodes, untrusted
+        fits, whether it was a full fit and whether its solve converged.
     surfaces
-        Surface vertices before and after every iteration (``keep_history``);
-        all share ``result.surface_faces``.
+        The input surface and the surface after every move
+        (``keep_history``).
     converged
-        Whether the displacement fell below the tolerance.
+        Whether a full, converged fit moved the surface by less than the
+        tolerance.
+    surfaces_faces
+        The faces of each of ``surfaces`` (all the same unless
+        ``level_set``, which extracts a new mesh every iteration).
+    stalled
+        Refinement stopped because the surface stopped making progress.
+    message
+        Why refinement stopped (with a diagnosis if it stalled).
+    timings
+        Wall time per stage, summed over all fits, as (name, seconds).
     """
 
     result: CbmResult
@@ -555,6 +655,10 @@ class RefineResult:
     history: list
     surfaces: list
     converged: bool
+    surfaces_faces: list = field(default_factory=list)
+    stalled: bool = False
+    message: str = ""
+    timings: list = field(default_factory=list)
 
     @property
     def periosteal_vertices(self) -> np.ndarray:
@@ -638,6 +742,10 @@ def refine_segmentation(
         history=d["history"],
         surfaces=d["surfaces"],
         converged=d["converged"],
+        surfaces_faces=d["surfaces_faces"],
+        stalled=d["stalled"],
+        message=d["message"],
+        timings=d["timings"],
     )
 
 
@@ -1051,3 +1159,317 @@ def hull_segmentation(image, threshold: float = 320.0, median_kernel=(1, 3, 3),
     """
     return _core.hull_segmentation(_as_image(image), float(threshold),
                                    tuple(int(k) for k in median_kernel), bool(largest_component))
+
+
+def otsu_thresholds(image, floor: Optional[float] = None, classes: int = 2, bins: int = 1024) -> list:
+    """Thresholds from the image histogram by (multi-level) Otsu's method.
+
+    Only voxels ``>= floor`` enter the histogram (e.g. ``floor=-500`` to
+    exclude the air around the body in Hounsfield units). ``classes`` is 2
+    (one threshold) or 3 (two). Returns the thresholds in ascending order.
+
+    For non-calibrated CT, the two-class threshold of the body voxels
+    separates soft tissue from bone and is a reasonable bone threshold for
+    :func:`label_bones` (the histogram has fat and soft-tissue peaks but no
+    bone peak, only a long tail).
+    """
+    return _core.otsu_thresholds(_as_image(image), None if floor is None else float(floor), int(classes), int(bins))
+
+
+def label_bones(image, threshold: Union[float, Literal["otsu"]], median_kernel=(1, 3, 3), min_size: int = 1000,
+                max_bones: Optional[int] = None, otsu_floor: Optional[float] = None) -> Tuple[np.ndarray, list]:
+    """Separate the bones of an image: ``image >= threshold``, binary median
+    (``median_kernel``), 6-connected components of at least ``min_size``
+    voxels, at most ``max_bones``.
+
+    ``threshold`` is in the image's units (e.g. 320 mg HA/cm^3 for calibrated
+    HR-pQCT, or a Hounsfield value), or ``"otsu"`` for the two-class
+    :func:`otsu_thresholds` of the voxels ``>= otsu_floor`` (for images
+    without a known bone threshold, such as non-calibrated clinical CT).
+
+    Returns ``(labels, sizes)``: uint16 labels (0 background, ``k`` the
+    ``k``-th largest bone) and the size in voxels of each bone. Bones joined
+    at the threshold (blur, noise or motion across a thin gap) become one
+    label.
+    """
+    img = _as_image(image)
+    if isinstance(threshold, str):
+        if threshold != "otsu":
+            raise ValueError('threshold must be a number or "otsu"')
+        t = otsu_thresholds(img, floor=otsu_floor)
+        if not t:
+            raise ValueError("no voxels above otsu_floor")
+        threshold = t[0]
+    return _core.label_bones(img, float(threshold), tuple(int(k) for k in median_kernel),
+                             int(min_size), None if max_bones is None else int(max_bones))
+
+
+def bone_hulls(labels, spacing: Union[float, Sequence[float]] = 1.0,
+               max_distance: Optional[float] = None,
+               closing_radius: Optional[float] = None) -> np.ndarray:
+    """Per-bone starting segmentations from :func:`label_bones`: the convex
+    hull of every slice (axis 0) of each bone, kept apart.
+
+    Where hulls overlap (a concave surface facing another bone, e.g. the
+    femoral trochlea and the patella), each voxel goes to the nearest bone
+    (physical distance, ``spacing`` per axis); hull voxels touching another
+    bone's region are then cleared, so every label is its own closed surface
+    and still contains its thresholded bone.
+
+    ``max_distance`` (physical units) first trims each hull to within that
+    distance of its bone and fills the holes of every slice: the marrow and
+    gaps narrower than twice the distance (cortical breaks) stay closed,
+    while a wide open concavity deeper than the profiles reach (the femoral
+    intercondylar notch) is no longer bridged.
+
+    ``closing_radius`` (physical units) replaces each bone's per-slice hull
+    by its morphological closing with a ball of that radius, with slice holes
+    filled: a "local convex hull" that fills concavities narrower than about
+    twice the radius (pits, small cortical gaps) and keeps wider ones (the
+    notch, with a few mm), following the bone's curvature at larger scales.
+    Returns uint16 labels.
+    """
+    lab = np.ascontiguousarray(labels, dtype=np.uint16)
+    if lab.ndim != 3:
+        raise ValueError("labels must be 3D")
+    return _core.bone_hulls(lab, _triple(spacing, "spacing"),
+                            None if max_distance is None else float(max_distance),
+                            None if closing_radius is None else float(closing_radius))
+
+
+def name_bones(labels, landmarks: dict, spacing: Union[float, Sequence[float]] = 1.0,
+               origin: Union[float, Sequence[float]] = 0.0) -> dict:
+    """Name labelled bones from landmarks.
+
+    ``landmarks`` maps a name to a point (physical coordinates, array-axis
+    order, as everywhere in this package) in or near that bone, e.g.
+    ``{"femur": (120, 60, 40), "patella": (140, 25, 45)}``. Each name goes to
+    the bone containing its point, or else to the bone nearest to it.
+    Returns ``{label: name}``. Two names on one bone means the segmentation
+    has joined two distinct bones, and is an error (see
+    :func:`separate_bones`, which splits them).
+    """
+    lab = np.asarray(labels)
+    if not (lab > 0).any():
+        raise ValueError("no labelled bones")
+    where = _landmark_bones(lab, landmarks, np.asarray(_triple(spacing, "spacing")),
+                            np.asarray(_triple(origin, "origin")))
+    out = {}
+    for name, b in where.items():
+        if b in out:
+            raise ValueError(f"landmarks {out[b]!r} and {name!r} both fall on bone {b}: the threshold has "
+                             "joined two bones (separate_bones raises it locally until they split)")
+        out[b] = str(name)
+    return out
+
+
+def _landmark_bones(lab, landmarks, sp, org):
+    """{name: label} for each landmark: the bone containing it, else the
+    nearest bone (0 if there are none)."""
+    idx = None
+    out = {}
+    for name, pt in landmarks.items():
+        q = (np.asarray(pt, float) - org) / sp
+        i = tuple(int(round(v)) for v in q)
+        b = int(lab[i]) if all(0 <= a < n for a, n in zip(i, lab.shape)) else 0
+        if b == 0:
+            if idx is None:
+                idx = np.argwhere(lab > 0)
+            b = 0 if len(idx) == 0 else int(lab[tuple(idx[np.argmin((((idx - q) * sp) ** 2).sum(1))])])
+        out[name] = b
+    return out
+
+
+def _relabel_by_size(lab):
+    counts = np.bincount(lab.ravel().astype(np.int64))
+    ids = [k for k in np.argsort(-counts[1:], kind="stable") + 1 if counts[k] > 0]
+    lut = np.zeros(len(counts), np.uint16)
+    lut[ids] = np.arange(1, len(ids) + 1)
+    return lut[lab], [int(counts[k]) for k in ids]
+
+
+def separate_bones(image, threshold: Union[float, Literal["otsu"]], landmarks: dict,
+                   spacing: Union[float, Sequence[float]] = 1.0, origin: Union[float, Sequence[float]] = 0.0, *,
+                   median_kernel=(1, 3, 3), min_size: int = 1000, max_bones: Optional[int] = None,
+                   otsu_floor: Optional[float] = None, step: Optional[float] = None,
+                   max_threshold: Optional[float] = None, verbose: bool = True):
+    """:func:`label_bones` checked against landmarks, splitting bones that
+    the threshold has joined.
+
+    ``landmarks`` maps a bone name to a point in it (physical coordinates,
+    array-axis order). If two landmarks fall on one labelled bone, the
+    threshold did not separate two distinct bones (blur, noise or motion
+    across a thin soft-tissue gap): within that bone only, the threshold is
+    raised by ``step`` (default 5% of the threshold) until the landmarks fall
+    on different pieces, up to ``max_threshold`` (default: the 99th
+    percentile of that bone's values), which is an error. Bones that were already separate keep the original
+    threshold; pieces of a split bone smaller than ``min_size`` are dropped.
+
+    Returns ``(labels, names, thresholds)``: uint16 labels ordered by size
+    (1 = largest), ``{label: name}`` for the landmarked bones, and
+    ``{name: threshold}`` used for each landmarked bone.
+    """
+    import sys
+
+    img = _as_image(image)
+    sp = np.asarray(_triple(spacing, "spacing"))
+    org = np.asarray(_triple(origin, "origin"))
+    if isinstance(threshold, str):
+        if threshold != "otsu":
+            raise ValueError('threshold must be a number or "otsu"')
+        threshold = otsu_thresholds(img, floor=otsu_floor)[0]
+    t0 = float(threshold)
+    step = float(step) if step is not None else 0.05 * abs(t0)
+    if not step > 0:
+        raise ValueError("step must be positive")
+    lab, _ = label_bones(img, t0, median_kernel, min_size)
+    lab = lab.astype(np.uint32)
+    used = {name: t0 for name in landmarks}
+    next_id = int(lab.max()) + 1
+    while True:
+        where = _landmark_bones(lab, landmarks, sp, org)
+        shared = {}
+        for name, b in where.items():
+            shared.setdefault(b, []).append(name)
+        merged = [(b, ns) for b, ns in shared.items() if b > 0 and len(ns) > 1]
+        if not merged:
+            break
+        b, ns = merged[0]
+        comp = lab == b
+        box = tuple(slice(int(a), int(c) + 1) for a, c in zip(np.argwhere(comp).min(0), np.argwhere(comp).max(0)))
+        sub_img = np.where(comp[box], img[box], -np.inf).astype(np.float32)
+        sub_org = org + np.array([s.start for s in box]) * sp
+        tmax = float(max_threshold) if max_threshold is not None else float(np.percentile(img[comp], 99))
+        t = t0
+        while True:
+            t += step
+            if t > tmax:
+                raise ValueError(f"landmarks {ns} stay on one bone up to threshold {tmax:g}; "
+                                 "the bones could not be separated")
+            pieces, _ = label_bones(sub_img, t, median_kernel, min_size)
+            w = _landmark_bones(pieces, {n: landmarks[n] for n in ns}, sp, sub_org)
+            if len(set(w.values())) == len(ns) and 0 not in w.values():
+                break
+        if verbose:
+            print(f"separate_bones: {', '.join(ns)} shared one bone at {t0:g}; separated at {t:g}", file=sys.stderr)
+        region = lab[box]
+        region[comp[box]] = 0
+        for k in range(1, int(pieces.max()) + 1):
+            region[pieces == k] = next_id
+            next_id += 1
+        for n in ns:
+            used[n] = t
+    lab, sizes = _relabel_by_size(lab)
+    if max_bones is not None and len(sizes) > max_bones:
+        lab[lab > max_bones] = 0
+        sizes = sizes[:max_bones]
+    names = name_bones(lab, landmarks, sp, org)
+    if verbose:
+        print(f"separate_bones: {len(sizes)} bone(s): " + ", ".join(
+            f"{k}{' (' + names[k] + ')' if k in names else ''} {s} voxels" for k, s in enumerate(sizes, 1)),
+            file=sys.stderr)
+    return lab, names, used
+
+
+def _per_bone(fn, image, labels, spacing, bones, options, per_bone, crop, verbose, kwargs, names=None):
+    lab = np.asarray(labels)
+    img = np.asarray(image)
+    if img.shape != lab.shape:
+        raise ValueError(f"image {img.shape} and labels {lab.shape} shapes differ")
+    counts = np.bincount(lab.ravel().astype(np.int64))
+    ids = [int(b) for b in (bones if bones is not None else np.flatnonzero(counts[1:]) + 1)]
+    for b in ids:
+        if b <= 0 or b >= len(counts) or counts[b] == 0:
+            raise ValueError(f"no voxels with label {b}")
+    # smallest bone first: small bones are quick, and problems show early
+    ids.sort(key=lambda b: (counts[b], b))
+    sp0 = np.asarray(_make_options(options, spacing, {}).spacing, float)
+    if verbose:
+        import sys
+
+        print(f"{len(ids)} bone(s), fitted from smallest to largest:", file=sys.stderr)
+        for b in ids:
+            nm = f" ({names[b]})" if names and b in names else ""
+            print(f"  bone {b}{nm}: {counts[b]} voxels, {counts[b] * sp0.prod():.0f} mm^3", file=sys.stderr)
+        sys.stderr.flush()
+    out = {}
+    for b in ids:
+        kw = dict(kwargs)
+        kw.update((per_bone or {}).get(b, {}))
+        m = lab == b
+        o = _make_options(options, spacing, {k: v for k, v in kw.items() if k in _OPTION_FIELDS})
+        rest = {k: v for k, v in kw.items() if k not in _OPTION_FIELDS}
+        if fn is refine_segmentation:
+            if "label" not in rest and not (rest.get("refine") and rest["refine"].label):
+                rest["label"] = names[b] if names and b in names else f"bone {b}"  # progress prefix
+            rest.setdefault("verbose", verbose)
+        if crop:
+            sp = np.asarray(o.spacing, float)
+            margin = np.ceil((o.outside + o.inside) / sp).astype(int) + 2
+            idx = np.argwhere(m)
+            lo = np.maximum(idx.min(0) - margin, 0)
+            hi = np.minimum(idx.max(0) + margin + 1, lab.shape)
+            sl = tuple(slice(int(a), int(c)) for a, c in zip(lo, hi))
+            oc = replace(o, origin=tuple(float(v) for v in np.asarray(o.origin, float) + lo * sp))
+            r = fn(np.ascontiguousarray(img[sl]), m[sl], options=oc, **rest)
+            out[b] = _uncrop(r, sl, lab.shape, o)
+        else:
+            out[b] = fn(img, m, options=o, **rest)
+    return out
+
+
+def _uncrop(r, sl, shape, options):
+    """Results of a cropped fit in the full image: masks pasted back at the
+    full shape, options with the full image's origin (points are physical
+    and unaffected)."""
+    if isinstance(r, RefineResult):
+        def full(a):
+            f = np.zeros(shape, dtype=a.dtype)
+            f[sl] = a
+            return f
+
+        return replace(r, result=replace(r.result, options=options), periosteal_mask=full(r.periosteal_mask),
+                       endosteal_mask=full(r.endosteal_mask), cortical_mask=full(r.cortical_mask))
+    return replace(r, options=options)
+
+
+_OPTION_FIELDS = {f.name for f in fields(Options)}
+
+
+def map_bones(image, labels, spacing: Union[float, Sequence[float], None] = None, *, bones=None,
+              options: Optional[Options] = None, per_bone: Optional[dict] = None, crop: bool = True,
+              verbose: bool = True, names: Optional[dict] = None, **kwargs) -> dict:
+    """:func:`cortical_bone_mapping` on each labelled bone separately.
+
+    Every bone is its own closed surface and its own fit, with its own global
+    initialisation and cortical density estimate: bones differ in size,
+    cortex and convergence. ``labels`` is e.g. :func:`bone_hulls`; ``bones``
+    selects labels (default all); ``per_bone`` maps a label to option
+    overrides for that bone; ``crop`` fits each bone in its bounding box plus
+    the sampling range (results are in the full image's coordinates).
+    Bones are fitted from the smallest to the largest; with ``verbose`` the
+    bones found are listed first (stderr), with ``names`` ({label: name},
+    e.g. from :func:`name_bones`) if given. Returns ``{label: CbmResult}``.
+    """
+    return _per_bone(cortical_bone_mapping, image, labels, spacing, bones, options, per_bone, crop, verbose,
+                     kwargs, names)
+
+
+def refine_bones(image, labels, spacing: Union[float, Sequence[float], None] = None, *, bones=None,
+                 options: Optional[Options] = None, refine: Optional[RefineOptions] = None,
+                 per_bone: Optional[dict] = None, crop: bool = True, verbose: bool = True,
+                 names: Optional[dict] = None, **kwargs) -> dict:
+    """:func:`refine_segmentation` on each labelled bone separately (see
+    :func:`map_bones`); each bone converges at its own rate. Keyword arguments
+    may be fields of :class:`Options` or :class:`RefineOptions`. Masks are
+    returned at the full image shape. Bones are refined from the smallest to
+    the largest; with ``verbose`` the bones found are listed first and every
+    refinement iteration prints a line, prefixed by the bone's name in
+    ``names`` ({label: name}, e.g. from :func:`name_bones`) or ``bone <label>``.
+    Returns ``{label: RefineResult}``.
+    """
+    kw = dict(kwargs)
+    if refine is not None:
+        kw["refine"] = refine
+    return _per_bone(refine_segmentation, image, labels, spacing, bones, options, per_bone, crop, verbose, kw,
+                     names)

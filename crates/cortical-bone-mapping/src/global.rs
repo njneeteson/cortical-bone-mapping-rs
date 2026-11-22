@@ -63,6 +63,10 @@ pub struct Problem<'a> {
     pub fixed_per_node: [Option<&'a [f64]>; NPARAM],
     /// `A` (N × Q) for multigrid; `None` means one dof per node.
     pub interp: Option<&'a SparseRows<f64>>,
+    /// Nodes whose field values are held at their value in the state:
+    /// boundary conditions for the smoothing and curvature penalties of
+    /// their free neighbours. Only with one dof per node (`interp = None`).
+    pub frozen: Option<&'a [bool]>,
     pub smoothing: Option<Smoothing<'a>>,
     pub curvature: Option<&'a CurvatureOperator>,
     pub lower: Params,
@@ -95,6 +99,14 @@ pub struct Settings {
     /// Maximum CG iterations over the whole solve: bounds the work when the
     /// problem is badly posed (status `MaxIterations`).
     pub cg_max_total: usize,
+    /// Print the solver's state to stderr every this many iterations
+    /// (trial steps; 0 = never).
+    pub progress_every: usize,
+    /// Stop once an accepted step changes the fitted periosteal edges
+    /// `m − t/2` of the free nodes by less than this, in RMS (physical
+    /// units; 0 = never). For refinement, where the surface moves on anyway
+    /// and only the edges matter.
+    pub edge_tol: f64,
 }
 
 impl Default for Settings {
@@ -107,6 +119,8 @@ impl Default for Settings {
             cg_max_iterations: 200,
             cg_max_total: 2000,
             cg_tolerance: 1e-3,
+            progress_every: 0,
+            edge_tol: 0.0,
         }
     }
 }
@@ -121,6 +135,32 @@ pub struct SolveInfo {
     pub data_cost: f64,
     pub smoothing_cost: f64,
     pub curvature_cost: f64,
+    /// Stopped on [`Settings::edge_tol`].
+    pub edge_stop: bool,
+    /// Wall time (s) in cost/gradient evaluations, Gauss–Newton
+    /// products, the preconditioner (set-up and solves) and the rest.
+    pub time_evaluate: f64,
+    pub time_hessian: f64,
+    pub time_precond: f64,
+    pub time_total: f64,
+}
+
+#[derive(Default)]
+struct Clock {
+    evaluate: f64,
+    hessian: f64,
+    precond: f64,
+    edge_stop: bool,
+    start: Option<std::time::Instant>,
+}
+
+macro_rules! timed {
+    ($acc:expr, $e:expr) => {{
+        let t = std::time::Instant::now();
+        let r = $e;
+        $acc += t.elapsed().as_secs_f64();
+        r
+    }};
 }
 
 struct Layout {
@@ -282,19 +322,28 @@ impl<'a> Problem<'a> {
         };
         let mut smoothing_cost = 0.0;
         if let Some(sm) = &self.smoothing {
-            let mut u = vec![0.0; n];
-            let mut tmp = vec![0.0; n];
-            for (fi, &c) in lay.fields.iter().enumerate() {
-                if sm.coef[c] == 0.0 {
-                    continue;
-                }
-                sm.op.apply(&nf[fi], &mut u);
+            // all smoothed channels in one pass over the operator
+            let ch: Vec<(usize, usize)> = lay
+                .fields
+                .iter()
+                .enumerate()
+                .filter(|(_, &c)| sm.coef[c] != 0.0)
+                .map(|(fi, &c)| (fi, c))
+                .collect();
+            let xs: Vec<&[f64]> = ch.iter().map(|&(fi, _)| nf[fi].as_slice()).collect();
+            let mut us = vec![vec![0.0; n]; ch.len()];
+            sm.op.apply_many(&xs, &mut us);
+            for (u, &(_, c)) in us.iter().zip(&ch) {
                 smoothing_cost += 0.5 * sm.coef[c] * det_sum(n, |i| u[i] * u[i]);
-                if derivs {
-                    sm.op.apply_t(&u, &mut tmp);
+            }
+            if derivs {
+                let ys: Vec<&[f64]> = us.iter().map(|u| u.as_slice()).collect();
+                let mut ts = vec![vec![0.0; n]; ch.len()];
+                sm.op.apply_t_many(&ys, &mut ts);
+                for (t, &(fi, c)) in ts.iter().zip(&ch) {
                     gfield[fi]
                         .par_iter_mut()
-                        .zip(tmp.par_iter())
+                        .zip(t.par_iter())
                         .for_each(|(g, &t)| *g += sm.coef[c] * t);
                 }
             }
@@ -410,14 +459,20 @@ impl<'a> Problem<'a> {
         };
         // smoothing: κ ωᵀω δp
         if let Some(sm) = &self.smoothing {
-            let mut u = vec![0.0; n];
-            let mut t = vec![0.0; n];
-            for (fi, &c) in lay.fields.iter().enumerate() {
-                if sm.coef[c] == 0.0 {
-                    continue;
-                }
-                sm.op.apply(&dp[fi], &mut u);
-                sm.op.apply_t(&u, &mut t);
+            let ch: Vec<(usize, usize)> = lay
+                .fields
+                .iter()
+                .enumerate()
+                .filter(|(_, &c)| sm.coef[c] != 0.0)
+                .map(|(fi, &c)| (fi, c))
+                .collect();
+            let xs: Vec<&[f64]> = ch.iter().map(|&(fi, _)| dp[fi].as_slice()).collect();
+            let mut us = vec![vec![0.0; n]; ch.len()];
+            sm.op.apply_many(&xs, &mut us);
+            let ys: Vec<&[f64]> = us.iter().map(|u| u.as_slice()).collect();
+            let mut ts = vec![vec![0.0; n]; ch.len()];
+            sm.op.apply_t_many(&ys, &mut ts);
+            for (t, &(fi, c)) in ts.iter().zip(&ch) {
                 y[fi]
                     .par_iter_mut()
                     .zip(t.par_iter())
@@ -663,7 +718,11 @@ pub fn solve(problem: &Problem, state: &mut State, settings: &Settings) -> Solve
     let smooth_diag = problem.smoothing.as_ref().map(|s| s.op.gram_diag());
     let curv_diag = problem.curvature.map(|c| c.gram_diag());
 
-    let mut ev = problem.evaluate(&lay, state, true);
+    let mut clock = Clock {
+        start: Some(std::time::Instant::now()),
+        ..Clock::default()
+    };
+    let mut ev = timed!(clock.evaluate, problem.evaluate(&lay, state, true));
     let mut mu = 1e-3;
     let mut nu = 2.0;
     let mut status = Status::MaxIterations;
@@ -674,10 +733,17 @@ pub fn solve(problem: &Problem, state: &mut State, settings: &Settings) -> Solve
     let mut hv = vec![0.0; nv];
     // costs after the last accepted steps, for the stall test
     let mut recent: std::collections::VecDeque<f64> = std::collections::VecDeque::from([ev.cost]);
+    let start = std::time::Instant::now();
+    let edge_of = |s: &State| -> Vec<f64> { problem.node_params(s).iter().map(|p| p[M] - 0.5 * p[T]).collect() };
+    let mut edges = if settings.edge_tol > 0.0 {
+        edge_of(state)
+    } else {
+        Vec::new()
+    };
 
     while iterations < settings.max_iterations {
         // Gauss–Newton diagonal for scaling, damping and the gradient test.
-        let (fblocks, gblock) = problem.diag_blocks(&lay, &ev, &smooth_diag, &curv_diag);
+        let (fblocks, gblock) = timed!(clock.precond, problem.diag_blocks(&lay, &ev, &smooth_diag, &curv_diag));
         let bs = nfc * nfc;
         let diag: Vec<f64> = (0..nv)
             .map(|v| {
@@ -696,7 +762,8 @@ pub fn solve(problem: &Problem, state: &mut State, settings: &Settings) -> Solve
         let mut gmax: f64 = 0.0;
         for v in 0..nv {
             let g = ev.grad[v];
-            let blocked = (xv[v] <= lower[v] && g > 0.0) || (xv[v] >= upper[v] && g < 0.0);
+            let held = v < off && problem.frozen.is_some_and(|fz| fz[v % ndof]);
+            let blocked = held || (xv[v] <= lower[v] && g > 0.0) || (xv[v] >= upper[v] && g < 0.0);
             free[v] = !blocked;
             if !blocked && diag[v] > 0.0 && rnorm > 0.0 {
                 gmax = gmax.max(g.abs() / (diag[v].sqrt() * rnorm));
@@ -715,7 +782,7 @@ pub fn solve(problem: &Problem, state: &mut State, settings: &Settings) -> Solve
         while !accepted {
             if iterations >= settings.max_iterations || cg_total >= settings.cg_max_total {
                 unpack(&xv, state);
-                return finish(iterations, cg_total, Status::MaxIterations, &ev);
+                return finish(iterations, cg_total, Status::MaxIterations, &ev, &clock);
             }
             iterations += 1;
             let damp: Vec<f64> = diag.iter().map(|&d| mu * d.max(dfloor)).collect();
@@ -742,15 +809,16 @@ pub fn solve(problem: &Problem, state: &mut State, settings: &Settings) -> Solve
             let mut r: Vec<f64> = (0..nv).map(|v| if free[v] { -ev.grad[v] } else { 0.0 }).collect();
             let bnorm = dotp(&r, &r).sqrt();
             let mut z = vec![0.0; nv];
-            pre.apply(&r, &free, &mut z);
+            timed!(clock.precond, pre.apply(&r, &free, &mut z));
             let mut p = z.clone();
             let mut rz = dotp(&r, &z);
+            let cg_before = cg_total;
             for _ in 0..settings.cg_max_iterations {
                 if cg_total >= settings.cg_max_total {
                     break;
                 }
                 cg_total += 1;
-                problem.hess_vec(&lay, &ev, &p, &mut hv);
+                timed!(clock.hessian, problem.hess_vec(&lay, &ev, &p, &mut hv));
                 hv.par_iter_mut()
                     .enumerate()
                     .for_each(|(v, h)| *h = if free[v] { *h + damp[v] * p[v] } else { 0.0 });
@@ -769,7 +837,7 @@ pub fn solve(problem: &Problem, state: &mut State, settings: &Settings) -> Solve
                 if dotp(&r, &r).sqrt() <= eta * bnorm {
                     break;
                 }
-                pre.apply(&r, &free, &mut z);
+                timed!(clock.precond, pre.apply(&r, &free, &mut z));
                 let rz_new = dotp(&r, &z);
                 let beta = rz_new / rz;
                 rz = rz_new;
@@ -791,24 +859,47 @@ pub fn solve(problem: &Problem, state: &mut State, settings: &Settings) -> Solve
             if snorm <= settings.xtol * (xnorm + settings.xtol) {
                 status = Status::Xtol;
                 unpack(&xv, state);
-                return finish(iterations, cg_total, status, &ev);
+                return finish(iterations, cg_total, status, &ev, &clock);
             }
-            problem.hess_vec(&lay, &ev, &step, &mut hv);
+            timed!(clock.hessian, problem.hess_vec(&lay, &ev, &step, &mut hv));
             let pred = -(dotp(&ev.grad, &step) + 0.5 * dotp(&step, &hv));
             unpack(&xt, &mut trial);
-            let ct = problem.evaluate(&lay, &trial, false).cost;
+            let ct = timed!(clock.evaluate, problem.evaluate(&lay, &trial, false)).cost;
             let actual = ev.cost - ct;
             let rho = if pred > 0.0 { actual / pred } else { -1.0 };
+            if settings.progress_every > 0 && iterations % settings.progress_every == 0 {
+                eprintln!(
+                    "  fit iteration {iterations}/{}: cost {:.6e} -> {ct:.6e} ({}), gradient {gmax:.2e}, CG {} \
+                     ({cg_total}/{} total), damping {mu:.1e}, {:.1} s",
+                    settings.max_iterations,
+                    ev.cost,
+                    if rho > 1e-4 { "accepted" } else { "rejected" },
+                    cg_total - cg_before,
+                    settings.cg_max_total,
+                    start.elapsed().as_secs_f64()
+                );
+            }
             if rho > 1e-4 {
                 accepted = true;
                 let prev = ev.cost;
                 xv = xt;
                 unpack(&xv, state);
-                ev = problem.evaluate(&lay, state, true);
+                ev = timed!(clock.evaluate, problem.evaluate(&lay, state, true));
                 mu *= (1.0 - (2.0 * rho - 1.0).powi(3)).max(1.0 / 3.0);
                 nu = 2.0;
                 if actual <= settings.ftol * prev {
-                    return finish(iterations, cg_total, Status::Ftol, &ev);
+                    return finish(iterations, cg_total, Status::Ftol, &ev, &clock);
+                }
+                if settings.edge_tol > 0.0 {
+                    let e = edge_of(state);
+                    let (s2, cnt) = (0..e.len())
+                        .filter(|&i| !problem.frozen.is_some_and(|fz| fz[i]))
+                        .fold((0.0, 0usize), |(a, c), i| (a + (e[i] - edges[i]).powi(2), c + 1));
+                    edges = e;
+                    if cnt == 0 || (s2 / cnt as f64).sqrt() < settings.edge_tol {
+                        clock.edge_stop = true;
+                        return finish(iterations, cg_total, Status::Ftol, &ev, &clock);
+                    }
                 }
                 // stall: the last STALL_WINDOW accepted steps together reduced
                 // the cost by less than STALL_DECREASE (relative). Happens when
@@ -817,23 +908,28 @@ pub fn solve(problem: &Problem, state: &mut State, settings: &Settings) -> Solve
                 if recent.len() > STALL_WINDOW {
                     let old = recent.pop_front().unwrap();
                     if old - ev.cost <= STALL_DECREASE * old {
-                        return finish(iterations, cg_total, Status::Ftol, &ev);
+                        return finish(iterations, cg_total, Status::Ftol, &ev, &clock);
                     }
                 }
             } else {
                 mu *= nu;
                 nu *= 2.0;
                 if mu > 1e16 {
-                    return finish(iterations, cg_total, Status::Xtol, &ev);
+                    return finish(iterations, cg_total, Status::Xtol, &ev, &clock);
                 }
             }
         }
     }
-    finish(iterations, cg_total, status, &ev)
+    finish(iterations, cg_total, status, &ev, &clock)
 }
 
-fn finish(iterations: usize, cg: usize, status: Status, ev: &Evaluation) -> SolveInfo {
+fn finish(iterations: usize, cg: usize, status: Status, ev: &Evaluation, clock: &Clock) -> SolveInfo {
     SolveInfo {
+        edge_stop: clock.edge_stop,
+        time_evaluate: clock.evaluate,
+        time_hessian: clock.hessian,
+        time_precond: clock.precond,
+        time_total: clock.start.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0),
         iterations,
         cg_iterations: cg,
         status,
@@ -898,6 +994,7 @@ mod tests {
             roles: [Role::Global; 5],
             fixed_per_node: [None; 5],
             interp: None,
+            frozen: None,
             smoothing: None,
             curvature: None,
             lower: lo,
@@ -927,6 +1024,7 @@ mod tests {
             roles: [Role::Field, Role::Field, Role::Field, Role::Global, Role::Global],
             fixed_per_node: [None; 5],
             interp: None,
+            frozen: None,
             smoothing: None,
             curvature: None,
             lower: lo,
@@ -1000,6 +1098,7 @@ mod tests {
                         roles: [Role::Field, Role::Field, Role::Field, Role::Global, Role::Global],
                         fixed_per_node: [None; 5],
                         interp: use_interp.then_some(&a),
+                        frozen: None,
                         smoothing: Some(Smoothing {
                             op: &sm,
                             coef: [3.0, 2.0, 1.0, 0.0, 0.0],
@@ -1059,6 +1158,7 @@ mod tests {
                 roles: [Role::Field, Role::Field, Role::Field, Role::Global, Role::Global],
                 fixed_per_node: [None; 5],
                 interp: None,
+                frozen: None,
                 smoothing: Some(Smoothing {
                     op: &sm,
                     coef: [coef, coef, coef * 16.0, 0.0, 0.0],

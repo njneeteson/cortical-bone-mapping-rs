@@ -71,6 +71,62 @@ fn snaps_dilated_and_bumpy_segmentation_to_the_periosteum() {
 }
 
 #[test]
+fn level_set_refinement_remeshes_and_snaps_to_the_periosteum() {
+    let (ph, img, bad, truth) = bad_phantom(0.35, 0.25);
+    let o = options(&ph, regularized(64, None));
+    let ro = RefineOptions {
+        level_set: true,
+        keep_history: true,
+        verbose: false,
+        ..RefineOptions::default()
+    };
+    let r = refine_segmentation(img.view(), bad.view(), NO_SUB, &o, &ro).unwrap();
+    assert!(r.converged, "{:?}", r.history);
+    let after = dice(&r.periosteal_mask, &truth);
+    assert!(after > 0.995, "dice {after}");
+    assert!(periosteal_error(&ph, &r.result) < 0.025);
+    assert!(thickness_error(&ph, &r.result).1 < 0.035);
+    // every iteration has its own closed mesh
+    for s in &r.surfaces {
+        assert!(s.is_closed_manifold());
+    }
+    let counts: std::collections::HashSet<usize> = r.surfaces.iter().map(|s| s.vertices.len()).collect();
+    assert!(counts.len() > 1, "the mesh was never re-extracted");
+}
+
+#[test]
+fn regional_convergence_freezes_still_regions_and_refits_all_at_the_end() {
+    let (ph, img, bad, truth) = bad_phantom(0.35, 0.25);
+    let o = options(&ph, regularized(64, None));
+    for level_set in [false, true] {
+        let ro = RefineOptions {
+            level_set,
+            verbose: false,
+            freeze: Some(FreezeOptions {
+                patience: 1,
+                displacement: Some(0.02),
+                thickness: Some(0.02),
+                ..FreezeOptions::default()
+            }),
+            ..RefineOptions::default()
+        };
+        let r = refine_segmentation(img.view(), bad.view(), NO_SUB, &o, &ro).unwrap();
+        assert!(r.converged, "{:?}", r.history);
+        assert!(
+            r.history.iter().any(|h| h.moving_nodes < h.nodes),
+            "nothing froze: {:?}",
+            r.history
+        );
+        // the final fit covers the whole surface
+        assert_eq!(r.result.n(), r.history.last().unwrap().nodes);
+        let after = dice(&r.periosteal_mask, &truth);
+        assert!(after > 0.99, "level set {level_set}: dice {after}");
+        assert!(periosteal_error(&ph, &r.result) < 0.03);
+        assert!(thickness_error(&ph, &r.result).1 < 0.04);
+    }
+}
+
+#[test]
 fn eroded_segmentation_grows_outward() {
     let (ph, img, bad, truth) = bad_phantom(-0.3, 0.0);
     let o = options(&ph, Method::Local);
@@ -84,12 +140,16 @@ fn history_is_kept_on_request_and_full_steps_also_work() {
     let o = options(&ph, Method::Local);
     let ro = RefineOptions {
         keep_history: true,
+        verbose: false,
         relaxation: 1.0,
         max_iterations: 8,
         ..Default::default()
     };
     let r = refine_segmentation(img.view(), bad.view(), NO_SUB, &o, &ro).unwrap();
-    assert_eq!(r.surfaces.len(), r.history.len() + 1);
+    // one history entry per fit: the input surface and every moved one
+    assert_eq!(r.surfaces.len(), r.history.len());
+    assert!(r.history[0].full_fit);
+    assert!(!r.converged || r.history.last().unwrap().full_fit);
     assert!(periosteal_error(&ph, &r.result) < 0.03);
     let bad_relax = RefineOptions {
         relaxation: 0.0,

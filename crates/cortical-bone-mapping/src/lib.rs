@@ -47,6 +47,7 @@ pub mod bone_phantom;
 pub mod global;
 pub mod joint_phantom;
 pub mod kdtree;
+pub mod levelset;
 pub mod local;
 pub mod mesh;
 pub mod model;
@@ -69,5 +70,5 @@ pub use pipeline::{
 };
 pub use profiles::NormalConstraint;
 pub use psf::PsfModel;
-pub use refine::{cortical_masks, refine_segmentation, IterationStats, RefineOptions, RefineResult};
+pub use refine::{cortical_masks, refine_segmentation, FreezeOptions, IterationStats, RefineOptions, RefineResult};
 pub use volume::{Geometry, Voxel};
