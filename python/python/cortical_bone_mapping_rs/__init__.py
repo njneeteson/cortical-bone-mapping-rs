@@ -58,6 +58,8 @@ __all__ = [
     "otsu_thresholds",
     "label_bones",
     "bone_hulls",
+    "grow_bones",
+    "soft_tissue_threshold",
     "name_bones",
     "separate_bones",
     "cortical_bone_mapping",
@@ -711,12 +713,17 @@ def refine_segmentation(
     spacing: Union[float, Sequence[float], None] = None,
     *,
     sub_mask=None,
+    exclude=None,
     options: Optional[Options] = None,
     refine: Optional[RefineOptions] = None,
     **kwargs,
 ) -> RefineResult:
     """Iteratively snap the segmentation's surface to the fitted periosteal
     surface, with under-relaxation, until it stabilises.
+
+    ``exclude`` (same shape, non-zero = excluded) marks voxels that belong
+    to something else, e.g. other bones: profile samples there get zero
+    weight, and the surface is never moved into them (a hard constraint).
 
     Keyword arguments may be fields of :class:`Options` or of
     :class:`RefineOptions`.
@@ -732,7 +739,10 @@ def refine_segmentation(
     if img.shape != m.shape:
         raise ValueError(f"image {img.shape} and mask {m.shape} shapes differ")
     s = None if sub_mask is None else _as_u8(sub_mask, "sub_mask")
-    d = _core.refine(img, m, s, o._to_core(), r._to_core())
+    e = None if exclude is None else _as_u8(exclude, "exclude")
+    if e is not None and e.shape != img.shape:
+        raise ValueError(f"image {img.shape} and exclude {e.shape} shapes differ")
+    d = _core.refine(img, m, s, o._to_core(), r._to_core(), e)
     return RefineResult(
         result=CbmResult._from_core(d["result"], o),
         periosteal_mask=d["periosteal_mask"],
@@ -1204,6 +1214,51 @@ def label_bones(image, threshold: Union[float, Literal["otsu"]], median_kernel=(
                              int(min_size), None if max_bones is None else int(max_bones))
 
 
+def soft_tissue_threshold(image, high: float, floor: float = -500.0, k: float = 4.0, bin_width: float = 2.0) -> float:
+    """A low threshold for :func:`grow_bones` from the histogram: the
+    soft-tissue peak plus ``k`` standard deviations of soft tissue.
+
+    The soft-tissue peak is the mode of the voxels between the lower
+    three-class Otsu threshold of the voxels above ``floor`` (which separates
+    fat from soft tissue) and the bone threshold ``high``. Its spread is
+    taken from the half-width at half maximum on its lower side, so the bone
+    tail does not inflate it (``sd = HWHM / 1.1774``). On a clinical knee CT:
+    peak 57 HU, sd 22 HU, threshold 146 HU (``k`` = 4).
+    """
+    img = _as_image(image)
+    t3 = otsu_thresholds(img, floor=floor, classes=3)
+    lo = t3[0] if t3 else floor
+    v = img[(img >= lo) & (img < high)]
+    if v.size == 0:
+        raise ValueError("no voxels between the fat/soft-tissue threshold and high")
+    h, e = np.histogram(v, bins=np.arange(lo, high + bin_width, bin_width))
+    c = 0.5 * (e[1:] + e[:-1])
+    i = int(np.argmax(h))
+    j = i
+    while j > 0 and h[j] > 0.5 * h[i]:
+        j -= 1
+    sd = max(c[i] - c[j], bin_width) / 1.1774
+    return float(min(c[i] + k * sd, high))
+
+
+def grow_bones(image, labels, low_threshold: float, median_kernel=(1, 3, 3)) -> np.ndarray:
+    """Hysteresis thresholding: grow the bones of ``labels`` (from
+    :func:`label_bones` or :func:`separate_bones` at a high threshold) into
+    the connected voxels ``>= low_threshold`` (after a binary median).
+
+    Thin cortices that partial volume pushes below the high threshold
+    (metaphyses, condylar rims, tibial spines in clinical CT) are recovered,
+    while the bones are still told apart at the high threshold: a voxel
+    reachable from several bones goes to the one fewest 6-connected steps
+    away. Labels are unchanged. Returns uint16 labels.
+    """
+    img = _as_image(image)
+    lab = np.ascontiguousarray(labels, dtype=np.uint16)
+    if lab.shape != img.shape:
+        raise ValueError(f"image {img.shape} and labels {lab.shape} shapes differ")
+    return _core.grow_bones(img, lab, float(low_threshold), tuple(int(k) for k in median_kernel))
+
+
 def bone_hulls(labels, spacing: Union[float, Sequence[float]] = 1.0,
                max_distance: Optional[float] = None,
                closing_radius: Optional[float] = None) -> np.ndarray:
@@ -1371,7 +1426,8 @@ def separate_bones(image, threshold: Union[float, Literal["otsu"]], landmarks: d
     return lab, names, used
 
 
-def _per_bone(fn, image, labels, spacing, bones, options, per_bone, crop, verbose, kwargs, names=None):
+def _per_bone(fn, image, labels, spacing, bones, options, per_bone, crop, verbose, kwargs, names=None,
+              exclude_of=None, mask_of=None, report=True):
     lab = np.asarray(labels)
     img = np.asarray(image)
     if img.shape != lab.shape:
@@ -1384,7 +1440,7 @@ def _per_bone(fn, image, labels, spacing, bones, options, per_bone, crop, verbos
     # smallest bone first: small bones are quick, and problems show early
     ids.sort(key=lambda b: (counts[b], b))
     sp0 = np.asarray(_make_options(options, spacing, {}).spacing, float)
-    if verbose:
+    if verbose and report:
         import sys
 
         print(f"{len(ids)} bone(s), fitted from smallest to largest:", file=sys.stderr)
@@ -1396,7 +1452,8 @@ def _per_bone(fn, image, labels, spacing, bones, options, per_bone, crop, verbos
     for b in ids:
         kw = dict(kwargs)
         kw.update((per_bone or {}).get(b, {}))
-        m = lab == b
+        m = lab == b if mask_of is None else mask_of(b)
+        ex = None if exclude_of is None else exclude_of(b)
         o = _make_options(options, spacing, {k: v for k, v in kw.items() if k in _OPTION_FIELDS})
         rest = {k: v for k, v in kw.items() if k not in _OPTION_FIELDS}
         if fn is refine_segmentation:
@@ -1411,9 +1468,13 @@ def _per_bone(fn, image, labels, spacing, bones, options, per_bone, crop, verbos
             hi = np.minimum(idx.max(0) + margin + 1, lab.shape)
             sl = tuple(slice(int(a), int(c)) for a, c in zip(lo, hi))
             oc = replace(o, origin=tuple(float(v) for v in np.asarray(o.origin, float) + lo * sp))
+            if ex is not None:
+                rest["exclude"] = np.ascontiguousarray(ex[sl])
             r = fn(np.ascontiguousarray(img[sl]), m[sl], options=oc, **rest)
             out[b] = _uncrop(r, sl, lab.shape, o)
         else:
+            if ex is not None:
+                rest["exclude"] = ex
             out[b] = fn(img, m, options=o, **rest)
     return out
 
@@ -1458,7 +1519,8 @@ def map_bones(image, labels, spacing: Union[float, Sequence[float], None] = None
 def refine_bones(image, labels, spacing: Union[float, Sequence[float], None] = None, *, bones=None,
                  options: Optional[Options] = None, refine: Optional[RefineOptions] = None,
                  per_bone: Optional[dict] = None, crop: bool = True, verbose: bool = True,
-                 names: Optional[dict] = None, **kwargs) -> dict:
+                 names: Optional[dict] = None, exclude_others: bool = True, rounds: int = 1,
+                 round_tolerance: float = 0.005, **kwargs) -> dict:
     """:func:`refine_segmentation` on each labelled bone separately (see
     :func:`map_bones`); each bone converges at its own rate. Keyword arguments
     may be fields of :class:`Options` or :class:`RefineOptions`. Masks are
@@ -1466,10 +1528,63 @@ def refine_bones(image, labels, spacing: Union[float, Sequence[float], None] = N
     the largest; with ``verbose`` the bones found are listed first and every
     refinement iteration prints a line, prefixed by the bone's name in
     ``names`` ({label: name}, e.g. from :func:`name_bones`) or ``bone <label>``.
-    Returns ``{label: RefineResult}``.
+
+    With ``exclude_others`` (default) every other bone's region is excluded
+    while a bone is refined: profile samples inside it get zero weight and
+    the surface never moves into it. The regions are the other bones'
+    current segmentations: their labels at first, their refined periosteal
+    masks once refined (bones refined later in a round see the earlier ones'
+    refined regions).
+
+    ``rounds`` > 1 repeats the pass over all bones, each starting from its
+    own refined region and excluding the others' refined regions, until no
+    bone's region changes by more than ``round_tolerance`` (fraction of its
+    voxels). Returns ``{label: RefineResult}`` from the last round.
     """
+    import sys
+
     kw = dict(kwargs)
     if refine is not None:
         kw["refine"] = refine
-    return _per_bone(refine_segmentation, image, labels, spacing, bones, options, per_bone, crop, verbose, kw,
-                     names)
+    lab = np.asarray(labels)
+    ids = [int(b) for b in (bones if bones is not None else np.flatnonzero(np.bincount(lab.ravel())[1:]) + 1)]
+    regions = {b: lab == b for b in ids}
+
+    def others(b):
+        if not exclude_others:
+            return None
+        ex = np.zeros(lab.shape, dtype=np.uint8)
+        for c, r in regions.items():
+            if c != b:
+                ex |= r.astype(np.uint8)
+        return ex
+
+    out = {}
+    for rnd in range(max(1, int(rounds))):
+        if verbose and rounds > 1:
+            print(f"round {rnd + 1} of at most {rounds}", file=sys.stderr, flush=True)
+        prev = {b: r.copy() for b, r in regions.items()}
+
+        def mask_of(b):
+            return prev[b] if rnd > 0 else lab == b
+
+        def exclude_of(b):
+            return others(b)
+
+        res = {}
+        # run the bones one at a time, so that later bones see earlier refined regions
+        order = sorted(ids, key=lambda b: (int(prev[b].sum()), b))
+        for b in order:
+            res.update(_per_bone(refine_segmentation, image, labels, spacing, [b], options, per_bone, crop,
+                                 verbose, kw, names, exclude_of=exclude_of, mask_of=mask_of,
+                                 report=(rnd == 0 and b == order[0])))
+            regions[b] = res[b].periosteal_mask
+        out = res
+        change = {b: float((regions[b] ^ prev[b]).sum()) / max(1, int(prev[b].sum())) for b in ids}
+        if verbose and rounds > 1:
+            print("round %d: region change per bone %s" % (rnd + 1, {
+                (names.get(b, b) if names else b): round(v, 4) for b, v in change.items()}), file=sys.stderr,
+                flush=True)
+        if rnd > 0 and max(change.values()) < round_tolerance:
+            break
+    return out

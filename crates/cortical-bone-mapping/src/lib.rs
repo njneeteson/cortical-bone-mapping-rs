@@ -70,5 +70,8 @@ pub use pipeline::{
 };
 pub use profiles::NormalConstraint;
 pub use psf::PsfModel;
-pub use refine::{cortical_masks, refine_segmentation, FreezeOptions, IterationStats, RefineOptions, RefineResult};
+pub use refine::{
+    cortical_masks, refine_segmentation, refine_segmentation_excluding, FreezeOptions, IterationStats, RefineOptions,
+    RefineResult,
+};
 pub use volume::{Geometry, Voxel};

@@ -725,6 +725,9 @@ pub fn fit_surface<T: Voxel>(
 /// regional convergence).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FitConstraints<'a> {
+    /// Voxels whose profile samples are ignored (weight zero), e.g. the
+    /// regions of other bones.
+    pub exclude: Option<ArrayView3<'a, bool>>,
     /// Per surface vertex: hold the node at its warm start (which must be
     /// given). With the regularised method such nodes are boundary
     /// conditions for their free neighbours; other methods simply keep the
@@ -772,6 +775,9 @@ pub fn fit_surface_constrained<T: Voxel>(
     let resolution = o.sampling.resolution.unwrap_or_else(|| o.geometry.min_spacing());
     let line = SampleLine::new(o.sampling.outside, o.sampling.inside, resolution);
     let mut profiles = Profiles::sample(image, &o.geometry, &points, &normals, &line, o.sampling.smoothing);
+    if let Some(ex) = constraints.exclude {
+        profiles.exclude(&ex, &o.geometry, &points, &normals, &line);
+    }
     let x = line.x.clone();
     let weights = residual_weights(&x, o.model.residual_boost);
 
@@ -781,7 +787,17 @@ pub fn fit_surface_constrained<T: Voxel>(
     // the fit.
     let maxima = || -> Vec<f64> {
         (0..n)
-            .map(|i| profiles.row(i).iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b)) as f64)
+            .map(|i| {
+                let row = profiles.row(i);
+                match profiles.used_row(i) {
+                    None => row.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b)) as f64,
+                    Some(u) => row
+                        .iter()
+                        .zip(u)
+                        .filter(|(_, &k)| k)
+                        .fold(f32::NEG_INFINITY, |a, (&b, _)| a.max(b)) as f64,
+                }
+            })
             .collect()
     };
     let (rho_c, rho_c_node) = match o.model.rho_c_mode {
@@ -1093,13 +1109,15 @@ pub fn fit_surface_constrained<T: Voxel>(
         .enumerate()
         .map(|(i, p)| {
             let y = profiles.row(i);
+            let wr = profiles.row_weights(i, &weights);
             let s: f64 = x
                 .iter()
                 .zip(y)
-                .zip(&weights)
+                .zip(wr.iter())
                 .map(|((&xj, &yj), &w)| w * (eval(xj, p, rho_c) - yj as f64).powi(2))
                 .sum();
-            (s / wsum).sqrt()
+            let ws: f64 = wr.iter().sum();
+            (s / if ws > 0.0 { ws } else { wsum }).sqrt()
         })
         .collect();
     if let Some(node) = &rho_c_node {

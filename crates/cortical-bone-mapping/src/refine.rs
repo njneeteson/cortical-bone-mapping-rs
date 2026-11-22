@@ -265,6 +265,50 @@ pub fn refine_segmentation<T: Voxel, U: Voxel, V: Voxel>(
     options: &Options,
     refine: &RefineOptions,
 ) -> Result<RefineResult, Error> {
+    refine_segmentation_excluding(image, mask, sub_mask, None::<ArrayView3<u8>>, options, refine)
+}
+
+/// [`refine_segmentation`] next to other structures: profile samples in the
+/// `exclude` voxels (e.g. other bones) get zero weight, and the surface is
+/// never moved into them (a hard constraint: with `level_set` those voxels
+/// are kept outside the surface, also at the start; otherwise a move into
+/// one is shortened until it stays out).
+pub fn refine_segmentation_excluding<T: Voxel, U: Voxel, V: Voxel, W: Voxel>(
+    image: ArrayView3<T>,
+    mask: ArrayView3<U>,
+    sub_mask: Option<ArrayView3<V>>,
+    exclude: Option<ArrayView3<W>>,
+    options: &Options,
+    refine: &RefineOptions,
+) -> Result<RefineResult, Error> {
+    let exclude: Option<Array3<bool>> = match exclude {
+        Some(e) if e.dim() != image.dim() => {
+            return Err(Error::ShapeMismatch(format!(
+                "image {:?} vs exclude {:?}",
+                image.dim(),
+                e.dim()
+            )))
+        }
+        Some(e) => Some(e.mapv(|v| v.to_f64() != 0.0)),
+        None => None,
+    };
+    let exclude = exclude.as_ref().map(|e| e.view());
+    let inside_excluded = |p: V3| -> bool {
+        match &exclude {
+            None => false,
+            Some(e) => {
+                let q = options.geometry.to_index(p).map(|v| v.round());
+                let (d0, d1, d2) = e.dim();
+                q[0] >= 0.0
+                    && q[1] >= 0.0
+                    && q[2] >= 0.0
+                    && (q[0] as usize) < d0
+                    && (q[1] as usize) < d1
+                    && (q[2] as usize) < d2
+                    && e[[q[0] as usize, q[1] as usize, q[2] as usize]]
+            }
+        }
+    };
     if image.dim() != mask.dim() {
         return Err(Error::ShapeMismatch(format!(
             "image {:?} vs mask {:?}",
@@ -305,7 +349,12 @@ pub fn refine_segmentation<T: Voxel, U: Voxel, V: Voxel>(
         let mut level_set = refine.level_set.then(|| {
             let band = max_move + 3.0 * max_spacing;
             let margin = options.sampling.outside + options.sampling.inside + band;
-            LevelSet::from_mesh(&mesh, dims_u, geom, margin, band)
+            let mut ls = LevelSet::from_mesh(&mesh, dims_u, geom, margin, band);
+            if let Some(e) = &exclude {
+                let mut ch = Array3::from_elem(ls.phi.dim(), false);
+                ls.forbid(e, &mut ch);
+            }
+            ls
         });
         if level_set.is_some() {
             clock.since("level set: initialisation", tl);
@@ -363,8 +412,17 @@ pub fn refine_segmentation<T: Voxel, U: Voxel, V: Voxel>(
             )
         };
         let tf = Instant::now();
-        let mut result =
-            fit_surface_constrained(&image, mesh.clone(), &keep, options, None, &FitConstraints::default())?;
+        let mut result = fit_surface_constrained(
+            &image,
+            mesh.clone(),
+            &keep,
+            options,
+            None,
+            &FitConstraints {
+                exclude,
+                ..FitConstraints::default()
+            },
+        )?;
         clock.since("fits", tf);
         clock.add_fit(&result);
         let mut last_full = true;
@@ -611,7 +669,10 @@ pub fn refine_segmentation<T: Voxel, U: Voxel, V: Voxel>(
                     .collect();
                 let width = mesh.mean_edge_length().max(1e-9);
                 let ta = Instant::now();
-                let changed = ls.advance(&mesh.vertices, &s, width, 8);
+                let mut changed = ls.advance(&mesh.vertices, &s, width, 8);
+                if let Some(e) = &exclude {
+                    ls.forbid(e, &mut changed);
+                }
                 clock.since("level set: advance", ta);
                 let te = Instant::now();
                 let e = ls.extract();
@@ -661,7 +722,18 @@ pub fn refine_segmentation<T: Voxel, U: Voxel, V: Voxel>(
                             d[a] = 0.0;
                         }
                     }
-                    mesh.vertices[v] = add(mesh.vertices[v], d);
+                    // never into an excluded region: shorten the move
+                    let mut step = d;
+                    for _ in 0..6 {
+                        if !inside_excluded(add(mesh.vertices[v], step)) {
+                            break;
+                        }
+                        step = scale(step, 0.5);
+                    }
+                    if inside_excluded(add(mesh.vertices[v], step)) {
+                        step = [0.0; 3];
+                    }
+                    mesh.vertices[v] = add(mesh.vertices[v], step);
                 }
                 if refine.smoothing_iterations > 0 {
                     let pinned: Vec<bool> = (0..nv).map(|v| pinned0[v] || frozen[v]).collect();
@@ -707,6 +779,7 @@ pub fn refine_segmentation<T: Voxel, U: Voxel, V: Voxel>(
                 held = vec![false; nv];
             }
             let constraints = FitConstraints {
+                exclude,
                 fixed: (!full && freeze.is_some()).then_some(held.as_slice()),
                 rho_c,
                 densities,
@@ -742,6 +815,7 @@ pub fn refine_segmentation<T: Voxel, U: Voxel, V: Voxel>(
                 options,
                 Some(&warm),
                 &FitConstraints {
+                    exclude,
                     rho_c,
                     density_start: Some(density_start),
                     sigma_start: global_sigma.then_some(sigma_start),

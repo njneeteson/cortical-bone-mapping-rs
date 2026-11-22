@@ -292,7 +292,7 @@ fn run<'py>(
 
 /// Refine a segmentation; returns a dict of arrays.
 #[pyfunction]
-#[pyo3(signature = (image, mask, sub_mask, options, refine))]
+#[pyo3(signature = (image, mask, sub_mask, options, refine, exclude=None))]
 fn refine<'py>(
     py: Python<'py>,
     image: &Bound<'py, PyAny>,
@@ -300,6 +300,7 @@ fn refine<'py>(
     sub_mask: Option<PyReadonlyArray3<'py, u8>>,
     options: &Bound<'py, PyDict>,
     refine: &Bound<'py, PyDict>,
+    exclude: Option<PyReadonlyArray3<'py, u8>>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let opts = parse_options(options)?;
     let ro = cbm::RefineOptions {
@@ -331,8 +332,9 @@ fn refine<'py>(
     };
     let m = mask.as_array();
     let s: Option<ArrayView3<'_, u8>> = sub_mask.as_ref().map(|s| s.as_array());
+    let e: Option<ArrayView3<'_, u8>> = exclude.as_ref().map(|e| e.as_array());
     let r = with_image!(image, |img| py
-        .detach(|| cbm::refine_segmentation(img, m, s, &opts, &ro))
+        .detach(|| cbm::refine_segmentation_excluding(img, m, s, e, &opts, &ro))
         .map_err(to_pyerr))?;
     let d = PyDict::new(py);
     d.set_item("result", result_dict(py, &r.result)?)?;
@@ -519,7 +521,12 @@ fn fit_profiles<'py>(
     }
     let inits: Vec<Params> = ia.rows().into_iter().map(|r| [r[0], r[1], r[2], r[3], r[4]]).collect();
     let values: Vec<f32> = p.iter().copied().collect();
-    let prof = cbm::profiles::Profiles { n, m, values };
+    let prof = cbm::profiles::Profiles {
+        n,
+        m,
+        values,
+        used: None,
+    };
     let w = cbm::model::residual_weights(&x, residual_boost);
     let settings = cbm::local::FitSettings {
         lower,
@@ -824,6 +831,24 @@ fn label_bones<'py>(
     Ok((r.labels.into_pyarray(py), r.sizes))
 }
 
+/// Hysteresis: grow labelled bones into connected voxels >= low_threshold.
+#[pyfunction]
+#[pyo3(signature = (image, labels, low_threshold, median_kernel))]
+fn grow_bones<'py>(
+    py: Python<'py>,
+    image: &Bound<'py, PyAny>,
+    labels: PyReadonlyArray3<'py, u16>,
+    low_threshold: f64,
+    median_kernel: [usize; 3],
+) -> PyResult<Bound<'py, numpy::PyArray3<u16>>> {
+    let l = labels.as_array();
+    let r =
+        with_image!(image, |img| Ok::<_, PyErr>(py.detach(|| {
+            cbm::segmentation::grow_bones(img, l, low_threshold, median_kernel)
+        })))?;
+    Ok(r.into_pyarray(py))
+}
+
 /// Per-bone per-slice convex hulls (or closings), kept apart.
 #[pyfunction]
 #[pyo3(signature = (labels, spacing, max_distance, closing_radius))]
@@ -844,6 +869,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(otsu_thresholds, m)?)?;
     m.add_function(wrap_pyfunction!(label_bones, m)?)?;
     m.add_function(wrap_pyfunction!(bone_hulls, m)?)?;
+    m.add_function(wrap_pyfunction!(grow_bones, m)?)?;
     m.add_function(wrap_pyfunction!(run, m)?)?;
     m.add_function(wrap_pyfunction!(refine, m)?)?;
     m.add_function(wrap_pyfunction!(voxelize, m)?)?;

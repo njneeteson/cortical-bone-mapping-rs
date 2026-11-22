@@ -724,6 +724,65 @@ pub fn label_bones<T: Voxel>(image: ArrayView3<T>, o: &BoneLabelOptions) -> Bone
     }
 }
 
+/// Hysteresis thresholding: grow labelled bones (e.g. from [`label_bones`]
+/// at a high threshold) into the connected voxels at or above
+/// `low_threshold`, after a binary median with `median_kernel`. Thin
+/// cortices that fall below the high threshold through partial volume are
+/// recovered, while the bones are still told apart at the high threshold: a
+/// voxel reachable from several bones goes to the one that reaches it first
+/// (fewest 6-connected steps, a geodesic nearest bone; ties to the lower
+/// label). Labels and their order are unchanged.
+pub fn grow_bones<T: Voxel>(
+    image: ArrayView3<T>,
+    labels: ArrayView3<u16>,
+    low_threshold: f64,
+    median_kernel: [usize; 3],
+) -> Array3<u16> {
+    let mut low = Array3::from_elem(image.dim(), false);
+    Zip::from(&mut low)
+        .and(&image)
+        .par_for_each(|b, &v| *b = v.to_f64() >= low_threshold);
+    if median_kernel.iter().any(|&k| k > 1) {
+        low = binary_median(&low, median_kernel);
+    }
+    let (d0, d1, d2) = image.dim();
+    let mut out = labels.to_owned();
+    let mut queue: std::collections::VecDeque<(usize, usize, usize)> = std::collections::VecDeque::new();
+    for ((i, j, k), &l) in out.indexed_iter() {
+        if l != 0 {
+            queue.push_back((i, j, k));
+        }
+    }
+    while let Some((i, j, k)) = queue.pop_front() {
+        let l = out[[i, j, k]];
+        let mut visit = |a: usize, b: usize, c: usize| {
+            if out[[a, b, c]] == 0 && low[[a, b, c]] {
+                out[[a, b, c]] = l;
+                queue.push_back((a, b, c));
+            }
+        };
+        if i > 0 {
+            visit(i - 1, j, k);
+        }
+        if i + 1 < d0 {
+            visit(i + 1, j, k);
+        }
+        if j > 0 {
+            visit(i, j - 1, k);
+        }
+        if j + 1 < d1 {
+            visit(i, j + 1, k);
+        }
+        if k > 0 {
+            visit(i, j, k - 1);
+        }
+        if k + 1 < d2 {
+            visit(i, j, k + 1);
+        }
+    }
+    out
+}
+
 /// Starting segmentations for several bones: the per-slice convex hull
 /// ([`slice_hulls`]) of every labelled bone, kept apart.
 ///
@@ -1198,6 +1257,41 @@ mod tests {
         );
         assert_eq!(one.sizes.len(), 1);
         assert_eq!(one.labels[[1, 40, 50]], 0);
+    }
+
+    #[test]
+    fn hysteresis_recovers_faint_cortex_and_keeps_bones_apart() {
+        // two dense blocks (600) joined by a faint bridge (200); block 1 has
+        // a faint rim (200); soft tissue 50
+        let img = Array3::from_shape_fn((4, 30, 60), |(_, j, k)| {
+            if (5..25).contains(&j) && ((5..25).contains(&k) || (35..55).contains(&k)) {
+                600.0f32
+            } else if ((12..18).contains(&j) && (25..35).contains(&k)) || ((2..5).contains(&j) && (5..25).contains(&k))
+            {
+                200.0 // the bridge, and the rim of block 1
+            } else {
+                50.0
+            }
+        });
+        let seeds = label_bones(
+            img.view(),
+            &BoneLabelOptions {
+                threshold: 400.0,
+                median_kernel: [1, 1, 1],
+                min_size: 10,
+                ..BoneLabelOptions::default()
+            },
+        );
+        assert_eq!(seeds.sizes.len(), 2);
+        let g = grow_bones(img.view(), seeds.labels.view(), 150.0, [1, 1, 1]);
+        let (a, b) = (seeds.labels[[1, 15, 10]], seeds.labels[[1, 15, 45]]);
+        assert!(a != 0 && b != 0 && a != b);
+        assert_eq!(g[[1, 3, 10]], a); // the faint rim joins its bone
+        assert_eq!(g[[1, 15, 26]], a); // the bridge is split between the bones
+        assert_eq!(g[[1, 15, 33]], b);
+        assert_eq!(g[[1, 28, 10]], 0); // soft tissue is not grown into
+                                       // nothing at or above the low threshold is left unlabelled where connected
+        assert!(g.iter().zip(img.iter()).all(|(&l, &v)| v < 150.0 || l != 0));
     }
 
     #[test]

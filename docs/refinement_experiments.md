@@ -3,8 +3,9 @@
 *A record of what the clinical knee CT taught us about refinement, and the
 changes it led to. The image is real data, used with the subject's
 permission, and is not part of the repository. Figures show only the bone
-and its immediate surroundings: everything more than 4 mm outside the
-starting segmentation is blanked.*
+and its surroundings: everything more than 10 mm outside the starting
+segmentation is blanked. The blanking is for display only. The analysis
+uses the whole crop, soft tissue included.*
 
 On the knee CT ([clinical_ct.md](clinical_ct.md)), the patella, fibula and
 tibia converged but the femur did not. These experiments isolate the
@@ -356,7 +357,7 @@ whole knee.
   settle this.
 * **The whole knee** ([clinical_ct.md](clinical_ct.md)) has been redone with
   the closing start, per-node densities, the level set and regional
-  convergence. All four bones converge, in 4–6 moves and 141 s in all. The
+  convergence. All four bones converge, in 5–7 moves and 138 s in all. The
   first version of the pipeline took about 19 minutes, and its femur never
   converged. Whether the remaining inward offset is right is the question
   above.

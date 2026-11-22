@@ -15,6 +15,12 @@ mapped separately, from the image alone.
 How the pipeline got to this point, and why each step is there, is in
 [refinement_experiments.md](refinement_experiments.md).
 
+**What the analysis sees.** The only cut made to the image is `--crop`, which
+keeps one knee with all its soft tissue. Each bone is fitted on a box around
+its starting segmentation, padded by the profile lengths (4 mm outside plus
+8 mm inside) and 2 more voxels, so every profile and every move stays within
+image data. Blanking the soft tissue is done only when drawing the figures.
+
 ## Commands
 
 Every step is a library call. The script reads the DICOM series, crops to
@@ -32,9 +38,11 @@ which runs
 ```python
 thr = cbm.otsu_thresholds(image, floor=-500)[0]                       # 267 HU
 labels, names, _ = cbm.separate_bones(image, thr, landmarks, spacing, origin)
+low = cbm.soft_tissue_threshold(image, thr, floor=-500)              # 146 HU
+labels = cbm.grow_bones(image, labels, low)                          # hysteresis
 starts = cbm.bone_hulls(labels, spacing, closing_radius=4.0)          # local convex hulls
 results = cbm.refine_bones(image, starts, spacing, options=OPTIONS, refine=REFINE,
-                           names=names, origin=origin)
+                           names=names, origin=origin)                # other bones excluded
 ```
 
 with, for clinical CT,
@@ -70,6 +78,20 @@ REFINE = cbm.RefineOptions(refine_iterations=150, level_set=True, freeze=True)
    | 3 | patella | 19 cm³ |
    | 4 | fibula | 12 cm³ |
 
+   **Hysteresis.** At 267 HU, thin cortices that partial volume pushes below
+   the threshold drop out: the anterior proximal tibia, the lateral femoral
+   condylar rim, and parts of the tibial plateau. Over stretches longer than
+   the closing can bridge, the start then cuts through the bone, and
+   refinement cannot recover bone up to a centimetre outside it. Longer
+   outside profiles (8 mm) did not help either; see below. So each bone is
+   grown (`grow_bones`) into the voxels connected to it above a low
+   threshold. That threshold is taken from the histogram
+   (`soft_tissue_threshold`): the soft-tissue peak (57 HU) plus 4 standard
+   deviations of soft tissue (22 HU, from the peak's lower half-width), which
+   gives 146 HU. The bones are still told apart at 267 HU: a voxel that
+   several bones can reach goes to the one that reaches it first.
+   `--hysteresis off` turns it off, and `--hysteresis 150` gives a value.
+
 3. **Starting segmentations.** `bone_hulls(..., closing_radius=4)` closes each
    bone on its own, with a ball of radius 4 mm:
    1. dilate;
@@ -102,6 +124,11 @@ REFINE = cbm.RefineOptions(refine_iterations=150, level_set=True, freeze=True)
    - **The finish.** A bone has converged when a full fit of its whole
      surface moves it by less than 0.1 voxel RMS, and by less than 0.2 voxel
      RMS in every region.
+   - **Other bones excluded.** The other bones' regions are excluded while a
+     bone is refined. Profile samples inside them get zero weight, so a
+     femoral profile that crosses the joint does not fit the tibia. No
+     surface is ever moved into another bone. That is a hard constraint: the
+     level set keeps those voxels outside.
 
 ## Results
 
@@ -109,7 +136,8 @@ REFINE = cbm.RefineOptions(refine_iterations=150, level_set=True, freeze=True)
 
 *Sections through the knee: the starting segmentations (yellow, dashed), and
 the refined periosteal (solid) and fitted endosteal (dotted) surfaces of each
-bone. Everything more than 3 mm from the bones is blanked.*
+bone. Everything more than 10 mm from the starting segmentations is blanked
+in the figures (display only).*
 
 ![Refinement](images/knee_ct_refinement.gif)
 
@@ -121,18 +149,39 @@ bone. Everything more than 3 mm from the bones is blanked.*
 
 | bone | nodes | moves | converged | `ρc` (HU) | thickness, median (5–95%) | time |
 |---|---:|---:|---|---:|---|---:|
-| patella | 13 268 | 6 | yes | 1379 | 1.17 mm (0.31–3.46) | 11 s |
-| fibula | 16 481 | 5 | yes | 1488 | 0.88 mm (0.27–2.75) | 11 s |
-| tibia | 65 410 | 6 | yes | 1493 | 0.89 mm (0.11–3.18) | 70 s |
-| femur | 82 342 | 4 | yes | 1532 | 0.53 mm (0.18–2.55) | 49 s |
+| patella | 13 384 | 5 | yes | 1380 | 1.18 mm (0.30–3.47) | 8 s |
+| fibula | 16 679 | 5 | yes | 1463 | 0.88 mm (0.32–2.79) | 9 s |
+| tibia | 65 263 | 7 | yes | 1492 | 0.91 mm (0.15–3.19) | 69 s |
+| femur | 82 323 | 5 | yes | 1535 | 0.53 mm (0.21–2.55) | 52 s |
 
-The whole knee takes 141 s. The first version of this pipeline
+The whole knee takes 138 s. The first version of this pipeline
 (per-slice convex hulls, global densities, the same mesh nodes moved every
 iteration) took about 19 minutes, and its femur never converged. It folded
 over the notch.
 
-* **All four bones converge** in 4–6 moves, and their surfaces follow the
+* **All four bones converge** in 5–7 moves, and their surfaces follow the
   periosteum, the femoral notch included.
+* **Hysteresis halves the missed bone.** This is the volume of bone (above
+  146 HU, connected to a bone) more than 1 mm outside the refined surfaces:
+
+  | | femur | tibia | patella | fibula | time |
+  |---|---:|---:|---:|---:|---:|
+  | without hysteresis | 5.1 cm³ | 8.4 | 1.8 | 0.8 | 162 s |
+  | with hysteresis (150 HU) | 2.2 | 3.5 | 1.2 | 0.5 | 139 s |
+  | 8 mm outside profiles, no hysteresis | 4.9 | 7.4 | 1.4 | 0.8 | 158 s |
+  | both | 2.1 | 3.7 | 1.2 | 0.5 | 170 s |
+
+  Longer outside profiles do little on their own. Where the start cut
+  through the bone, it lies inside trabecular bone, so the outer part of a
+  profile shows bone, the faint cortex and then soft tissue. That is not
+  the soft-tissue-then-cortex step the model expects, and seeing further
+  does not produce an outward move. What remains after hysteresis is mostly
+  the blurred edge itself: the 146 HU surface lies 1–2 voxels outside the
+  fitted periosteum all round. The one clear gap left is the lateral tip of
+  the patella.
+* **A second pass over the bones** (`rounds=2`), each excluding the others'
+  refined regions, changes no bone by more than 0.7% of its voxels. On this
+  knee the bones do not affect each other's fits once they are excluded.
 * **The thickness pattern** is what one expects:
   - thin (≲ 0.5 mm) subchondral and metaphyseal shells over the epiphyses;
   - a thick anterior patella (up to about 3.5 mm);

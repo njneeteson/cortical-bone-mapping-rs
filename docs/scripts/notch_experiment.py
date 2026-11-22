@@ -10,7 +10,8 @@ and refines the femur's starting hull there with each variant:
 
 ``run`` writes one ``<variant>.pkl`` and ``<variant>.json`` per variant into
 ``--out``; ``figures`` draws docs/images/notch_*.png from them. Everything
-farther than 4 mm outside the femur's hull is blanked in the figures.
+farther than 10 mm outside the femur's start is blanked in the figures (display only:
+the analysis uses the whole crop, soft tissue included).
 
 Measures (no ground truth on real data):
 
@@ -270,8 +271,8 @@ def figures(args):
     from matplotlib.collections import LineCollection
 
     img, hull, lab, sp = load_crop(args.cache)
-    # blank everything farther than 4 mm outside the hull (real data)
-    keep = ndimage.distance_transform_edt(hull == 0, sampling=sp) <= 4.0
+    # blank everything farther than 10 mm outside the hull (display only; real data)
+    keep = ndimage.distance_transform_edt(hull == 0, sampling=sp) <= 10.0
     shown = np.where(keep, img, -1000)
     out = Path(args.out)
     names = [n for n in (args.variants or VARIANTS) if (out / f"{n}.pkl").exists()]

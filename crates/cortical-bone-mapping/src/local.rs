@@ -221,7 +221,16 @@ pub fn fit_all(
         .into_par_iter()
         .map(|i| {
             let p0 = if init.len() == 1 { &init[0] } else { &init[i] };
-            fit_profile(profiles.row(i), x, &w, rho_c, p0, settings)
+            match profiles.used_row(i) {
+                None => fit_profile(profiles.row(i), x, &w, rho_c, p0, settings),
+                Some(_) => {
+                    // ignored samples get weight 0; renormalise the rest
+                    let wr = profiles.row_weights(i, weights);
+                    let s: f64 = wr.iter().sum::<f64>().max(1e-300);
+                    let wr: Vec<f64> = wr.iter().map(|v| v / s).collect();
+                    fit_profile(profiles.row(i), x, &wr, rho_c, p0, settings)
+                }
+            }
         })
         .collect()
 }

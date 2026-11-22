@@ -80,12 +80,59 @@ pub struct Profiles {
     pub n: usize,
     pub m: usize,
     pub values: Vec<f32>,
+    /// Per sample (`n × m`): `false` for samples to ignore (weight zero),
+    /// e.g. inside another bone. `None` = every sample is used.
+    pub used: Option<Vec<bool>>,
 }
 
 impl Profiles {
     #[inline]
     pub fn row(&self, i: usize) -> &[f32] {
         &self.values[i * self.m..(i + 1) * self.m]
+    }
+
+    /// Which samples of row `i` are used (`None` = all).
+    #[inline]
+    pub fn used_row(&self, i: usize) -> Option<&[bool]> {
+        self.used.as_ref().map(|u| &u[i * self.m..(i + 1) * self.m])
+    }
+
+    /// The residual weights `w` of row `i`, with ignored samples set to 0.
+    pub fn row_weights<'a>(&self, i: usize, w: &'a [f64]) -> std::borrow::Cow<'a, [f64]> {
+        match self.used_row(i) {
+            None => std::borrow::Cow::Borrowed(w),
+            Some(u) => std::borrow::Cow::Owned(w.iter().zip(u).map(|(&v, &k)| if k { v } else { 0.0 }).collect()),
+        }
+    }
+
+    /// Ignore the samples that fall in voxels marked in `excluded` (nearest
+    /// voxel; outside the image counts as not excluded).
+    pub fn exclude<V: Voxel>(
+        &mut self,
+        excluded: &ArrayView3<V>,
+        geom: &Geometry,
+        points: &[V3],
+        normals: &[V3],
+        line: &SampleLine,
+    ) {
+        let m = self.m;
+        let (d0, d1, d2) = excluded.dim();
+        let mut used = self.used.take().unwrap_or_else(|| vec![true; self.n * m]);
+        used.par_chunks_mut(m)
+            .zip(points.par_iter().zip(normals.par_iter()))
+            .for_each(|(u, (&p, &nrm))| {
+                for (j, &x) in line.x.iter().enumerate() {
+                    let q = geom.to_index(add(p, scale(nrm, x)));
+                    let r = q.map(|v| v.round());
+                    if r[0] >= 0.0 && r[1] >= 0.0 && r[2] >= 0.0 {
+                        let (a, b, c) = (r[0] as usize, r[1] as usize, r[2] as usize);
+                        if a < d0 && b < d1 && c < d2 && excluded[[a, b, c]].to_f64() != 0.0 {
+                            u[j] = false;
+                        }
+                    }
+                }
+            });
+        self.used = Some(used);
     }
 
     /// Sample `img` along `p + x·n` for every point/normal pair, optionally
@@ -119,7 +166,12 @@ impl Profiles {
                     }
                 },
             );
-        Profiles { n, m, values }
+        Profiles {
+            n,
+            m,
+            values,
+            used: None,
+        }
     }
 }
 

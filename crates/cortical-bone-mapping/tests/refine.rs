@@ -127,6 +127,50 @@ fn regional_convergence_freezes_still_regions_and_refits_all_at_the_end() {
 }
 
 #[test]
+fn refinement_never_enters_an_excluded_region() {
+    // a dilated start next to an excluded slab (e.g. another bone) that cuts
+    // into the bone along one side: the surface must stay out of it
+    let (ph, img, bad, truth) = bad_phantom(0.35, 0.0);
+    let o = options(&ph, regularized(64, None));
+    let (_, d1, _) = ph.dims;
+    let ex = ndarray::Array3::from_shape_fn(ph.dims, |(_, j, _)| (j >= d1 * 3 / 4) as u8);
+    let bad = {
+        let mut b = bad.clone();
+        b.zip_mut_with(&ex, |v, &e| {
+            if e != 0 {
+                *v = 0
+            }
+        });
+        b
+    };
+    for level_set in [true, false] {
+        let ro = RefineOptions {
+            level_set,
+            verbose: false,
+            ..RefineOptions::default()
+        };
+        let r = refine_segmentation_excluding(img.view(), bad.view(), NO_SUB, Some(ex.view()), &o, &ro).unwrap();
+        let inside = r
+            .periosteal_mask
+            .iter()
+            .zip(ex.iter())
+            .filter(|(&p, &e)| p && e != 0)
+            .count();
+        assert_eq!(
+            inside, 0,
+            "level set {level_set}: {inside} voxels inside the excluded region"
+        );
+        // away from the slab the surface is still right
+        let free = |a: &ndarray::Array3<bool>| a.indexed_iter().filter(|((_, j, _), &v)| v && *j < d1 / 2).count();
+        let (got, want) = (free(&r.periosteal_mask), free(&truth.mapv(|v| v != 0)));
+        assert!(
+            (got as f64 / want as f64 - 1.0).abs() < 0.01,
+            "level set {level_set}: {got} vs {want} voxels"
+        );
+    }
+}
+
+#[test]
 fn eroded_segmentation_grows_outward() {
     let (ph, img, bad, truth) = bad_phantom(-0.3, 0.0);
     let o = options(&ph, Method::Local);

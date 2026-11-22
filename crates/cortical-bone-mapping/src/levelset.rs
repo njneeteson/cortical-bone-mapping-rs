@@ -11,7 +11,7 @@
 //! stretches, and cannot fold or self-intersect. Finally `φ` is reset to the
 //! distance to the new mesh where it changed, so it stays a signed distance.
 
-use ndarray::{Array3, Zip};
+use ndarray::{Array3, ArrayView3, Zip};
 use rayon::prelude::*;
 
 use crate::kdtree::KdTree;
@@ -116,6 +116,22 @@ impl LevelSet {
                 }
             });
         changed
+    }
+
+    /// Keep the voxels marked in `forbidden` (image-shaped) outside the
+    /// surface: `φ ≥ h/2` there (`h` the smallest spacing). Changed voxels are
+    /// marked in `changed`.
+    pub fn forbid(&mut self, forbidden: &ArrayView3<bool>, changed: &mut Array3<bool>) {
+        let h = 0.5 * self.geom.min_spacing() as f32;
+        let lo = self.lo;
+        Zip::indexed(&mut self.phi)
+            .and(changed)
+            .par_for_each(|(i, j, k), phi, ch| {
+                if forbidden[[lo[0] + i, lo[1] + j, lo[2] + k]] && *phi < h {
+                    *phi = h;
+                    *ch = true;
+                }
+            });
     }
 
     /// Reset `φ` to the signed distance to `mesh` (the sign is kept) on the

@@ -281,7 +281,11 @@ impl<'a> Problem<'a> {
                         let i = ci * CHUNK + k;
                         let p = self.params_at(lay, &nf, &state.scalars, i);
                         let y = self.profiles.row(i);
+                        let w = self.profiles.row_weights(i, &w);
                         for j in 0..x.len() {
+                            if w[j] == 0.0 {
+                                continue;
+                            }
                             let (f, d) = eval_grad(x[j], &p, rho_c);
                             let r = f - y[j] as f64;
                             total += 0.5 * w[j] * r * r;
@@ -302,6 +306,7 @@ impl<'a> Problem<'a> {
             det_sum(n, |i| {
                 let p = self.params_at(lay, &nf, &state.scalars, i);
                 let y = self.profiles.row(i);
+                let w = self.profiles.row_weights(i, &w);
                 let mut c = 0.0;
                 for j in 0..x.len() {
                     let r = eval(x[j], &p, rho_c) - y[j] as f64;
@@ -974,7 +979,17 @@ mod tests {
             truth.push(p);
             pts.push([s * 10.0, 0.0, 0.0]);
         }
-        (Profiles { n, m: x.len(), values }, x, truth, pts)
+        (
+            Profiles {
+                n,
+                m: x.len(),
+                values,
+                used: None,
+            },
+            x,
+            truth,
+            pts,
+        )
     }
 
     fn bounds() -> (Params, Params) {
@@ -1073,7 +1088,12 @@ mod tests {
         let values: Vec<f32> = (0..n * x.len())
             .map(|_| (300.0 + 200.0 * rng.normal()) as f32)
             .collect();
-        let prof = Profiles { n, m: x.len(), values };
+        let prof = Profiles {
+            n,
+            m: x.len(),
+            values,
+            used: None,
+        };
         let w = residual_weights(&x, 3.0);
         let sm = SmoothingOperator::new(&mesh.vertices, 6, 0.8, f64::INFINITY);
         for mode in [CurvatureMode::Change, CurvatureMode::Excess { kappa: 0.3 }] {

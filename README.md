@@ -151,10 +151,11 @@ See [method](docs/method.md#cortical-density).
   (0.5 mm gap) and the knee's subchondral plate
   ([segmentation](docs/segmentation.md)).
 * **Real data.** On a clinical knee CT, all four bones (femur, tibia,
-  patella, fibula) are segmented and mapped from the image alone in 141 s.
-  Each converges in 4–6 moves, with the femoral notch followed
-  ([clinical CT](docs/clinical_ct.md)). Getting there took a local convex
-  hull start, per-node densities, remeshing and regional convergence
+  patella, fibula) are segmented and mapped from the image alone in 138 s.
+  Each converges in 5–7 moves, with the femoral notch followed
+  ([clinical CT](docs/clinical_ct.md)). Getting there took hysteresis
+  thresholding, a local convex hull start, per-node densities, remeshing,
+  regional convergence and excluding the other bones
   ([refinement experiments](docs/refinement_experiments.md)).
 * **Speed and memory.** Against the original Python implementation (Bonelab)
   on the same profiles, the local fit is ~420× faster, multigrid ~45× and the

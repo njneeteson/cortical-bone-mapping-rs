@@ -2,7 +2,8 @@
 
     python docs/scripts/ct_example.py DICOM_FOLDER [--crop Z0:Z1,Y0:Y1,X0:X1]
         [--threshold otsu|VALUE] [--otsu-floor HU] [--min-volume MM3] [--max-bones N]
-        [--landmark NAME=Z,Y,X ...] [--closing MM] [--progress N] [--slices Z,Y,X]
+        [--landmark NAME=Z,Y,X ...] [--hysteresis auto|off|VALUE] [--closing MM]
+        [--outside MM] [--rounds N] [--no-exclude] [--progress N] [--slices Z,Y,X]
         [--figures PREFIX] [--vtk OUTDIR] [--cache FILE]
 
 Every processing step is a library call; this script only reads the DICOM
@@ -16,6 +17,11 @@ series (or a .npy volume with ``--spacing``), crops it, and draws figures.
    landmarks (``--landmark femur=250,240,123``, voxel indices of the full
    image), ``cbm.separate_bones`` names the bones and, where two landmarks
    fall on one bone, raises the threshold within that bone until they split.
+   Then hysteresis (``--hysteresis``, default ``auto``): ``cbm.grow_bones``
+   grows each bone into the connected voxels above a low threshold, by
+   default the soft-tissue peak + 4 sd of the histogram
+   (``cbm.soft_tissue_threshold``), to recover thin cortices that partial
+   volume pushes below the bone threshold. ``off`` disables it.
 3. Starting segmentation: ``cbm.bone_hulls`` with ``closing_radius``: each
    bone's morphological closing by a ball of ``--closing`` mm (default 4),
    with its voids filled, the bones kept apart. Concavities narrower than
@@ -25,6 +31,9 @@ series (or a .npy volume with ``--spacing``), crops it, and draws figures.
    surface) at a time, from the smallest to the largest: per-node densities,
    the surface carried as a level set (remeshed every iteration), inexact
    inner fits and regional convergence (see docs/refinement_experiments.md).
+   The other bones are excluded: their profile samples get zero weight and
+   no surface moves into another bone (``--no-exclude`` turns this off;
+   ``--rounds`` repeats the pass over the bones).
    A progress line every ``--progress`` solver iterations and after every
    fit.
 
@@ -35,6 +44,7 @@ Figures: ``PREFIX_threshold.png``, ``PREFIX_segmentation.png``,
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import pickle
 import sys
 import time
@@ -130,12 +140,22 @@ def run(a):
     else:
         labels, _ = cbm.label_bones(img, thr, min_size=min_size, max_bones=a.max_bones)
         names, used = {}, {}
+    seeds = labels
+    low = None
+    if a.hysteresis != "off":
+        # hysteresis: grow the bones into connected voxels above a low threshold,
+        # by default the soft-tissue peak + 4 sd of the histogram
+        low = cbm.soft_tissue_threshold(img, thr, floor=a.otsu_floor) if a.hysteresis == "auto" \
+            else float(a.hysteresis)
+        labels = cbm.grow_bones(img, labels, low)
+        print(f"hysteresis: bones grown into connected voxels >= {low:.1f}", flush=True)
     hulls = cbm.bone_hulls(labels, spacing)  # per-slice convex hulls (kept for comparison)
     starts = cbm.bone_hulls(labels, spacing, closing_radius=a.closing) if a.closing > 0 else hulls
-    o = OPTIONS
+    o = replace(OPTIONS, outside=a.outside, lower=(-a.outside,) + tuple(OPTIONS.lower[1:]))
     t0 = time.perf_counter()
     results = cbm.refine_bones(img, starts, spacing, options=o, refine=REFINE, names=names,
-                               progress_every=a.progress, origin=origin)
+                               progress_every=a.progress, origin=origin, exclude_others=not a.no_exclude,
+                               rounds=a.rounds)
     print(f"done in {time.perf_counter() - t0:.0f} s", flush=True)
     for b, rr in sorted(results.items()):
         r = rr.result
@@ -144,7 +164,8 @@ def run(a):
               f"(5-95%: {np.percentile(r.thickness, 5):.2f}-{np.percentile(r.thickness, 95):.2f})", flush=True)
     body = img[img >= a.otsu_floor]
     hist = np.histogram(body, bins=np.linspace(a.otsu_floor, float(body.max()), 440))
-    return dict(img=img, spacing=spacing, origin=origin, threshold=thr, labels=labels, hulls=hulls,
+    return dict(img=img, spacing=spacing, origin=origin, threshold=thr, labels=labels, hulls=hulls, seeds=seeds,
+                low_threshold=low, outside=a.outside, rounds=a.rounds, exclude=not a.no_exclude,
                 starts=starts, closing=a.closing,
                 names=names, used=used, results=results, hist=hist)
 
@@ -176,7 +197,8 @@ def cut(a, kind, k):
     return {"axial": lambda: a[k], "coronal": lambda: a[:, k, :], "sagittal": lambda: a[:, :, k]}[kind]()
 
 
-BONE_MARGIN = 3.0  # mm of context around the bones in the slice figures
+BONE_MARGIN = 10.0  # mm of context around the bones in the slice figures (display only: the
+# analysis uses the whole image crop, soft tissue included)
 
 
 def show(ax, d, kind, k):
@@ -184,10 +206,11 @@ def show(ax, d, kind, k):
     that the figures show bone, not the body outline."""
     sp = d["spacing"]
     aspect = {"axial": sp[1] / sp[2], "coronal": sp[0] / sp[2], "sagittal": sp[0] / sp[1]}[kind]
-    if "near_bone" not in d:  # everything further than BONE_MARGIN from the bone hulls is blanked
+    if d.get("near_bone_margin") != BONE_MARGIN:  # blank everything further than BONE_MARGIN from the starts
         from scipy import ndimage
 
         d["near_bone"] = ndimage.distance_transform_edt(d.get("starts", d["hulls"]) == 0, sampling=sp) <= BONE_MARGIN
+        d["near_bone_margin"] = BONE_MARGIN
     sl = np.where(cut(d["near_bone"], kind, k), cut(d["img"], kind, k), -1000.0)
     ax.imshow(sl, cmap="gray", vmin=-200, vmax=1400, origin="upper" if kind == "axial" else "lower", aspect=aspect)
     idx = np.argwhere(d.get("starts", d["hulls"]) > 0)
@@ -252,15 +275,21 @@ def fig_refinement_gif(d, plt, prefix, slices):
             m[b] = cbm.voxelize(rr.surfaces[j], rr.surfaces_faces[j], shape, sp, org)
         frames.append(m)
     fig, axes = plt.subplots(1, 2, figsize=(10, 6))
+    # the image, limits and layout are fixed; only the contours and titles change
+    titles = []
+    for ax, (kind, k) in zip(axes, views):
+        show(ax, d, kind, k)
+        titles.append(ax.set_title(f"{kind}: iteration 0 (start)"))
+    fig.tight_layout()
+    drawn = []
 
     def draw(it):
-        for ax, (kind, k) in zip(axes, views):
-            ax.clear()
-            show(ax, d, kind, k)
+        while drawn:
+            drawn.pop().remove()
+        for ax, t, (kind, k) in zip(axes, titles, views):
             for b, m in frames[it].items():
-                ax.contour(cut(m, kind, k), [0.5], colors=[colour(b)], linewidths=1.0)
-            ax.set_title(f"{kind}: iteration {it}" + (" (start)" if it == 0 else ""))
-        fig.tight_layout()
+                drawn.append(ax.contour(cut(m, kind, k), [0.5], colors=[colour(b)], linewidths=1.0))
+            t.set_text(f"{kind}: iteration {it}" + (" (start)" if it == 0 else ""))
 
     seq = list(range(n_frames)) + [n_frames - 1] * 4
     animation.FuncAnimation(fig, draw, frames=seq, interval=600).save(
@@ -278,9 +307,9 @@ def fig_thickness(d, plt, prefix):
     cmap = plt.cm.viridis
     light = np.array([0.5, 0.6, 0.6])
     light /= np.linalg.norm(light)
-    # plot axes: X = patient left (+x), Y = anterior (−y), Z = superior (+z) for standard axial DICOM
+    # plot axes: X = the subject's left (+x), Y = anterior (−y), Z = superior (+z) for standard axial DICOM
     to_plot = lambda p: p[:, ::-1] * np.array([1.0, -1.0, 1.0])  # noqa: E731
-    views = [("anterior", 90), ("patient left", 0), ("posterior", -90), ("patient right", 180)]
+    views = [("anterior", 90), ("subject's left", 0), ("posterior", -90), ("subject's right", 180)]
     allp = np.concatenate([to_plot(r.points) for r in res.values()])
     lo, hi = allp.min(0), allp.max(0)
     fig = plt.figure(figsize=(16, 9))
@@ -320,6 +349,14 @@ def main(argv=None):
     ap.add_argument("--max-bones", type=int, help="keep at most this many bones (the largest)")
     ap.add_argument("--landmark", action="append",
                     help="NAME=Z,Y,X: a voxel (full-image indices) in that bone; repeat for several bones")
+    ap.add_argument("--hysteresis", default="auto",
+                    help="hysteresis thresholding: grow the bones into connected voxels above a low threshold, "
+                         "'auto' (default: the soft-tissue peak + 4 sd of the histogram), a value in image "
+                         "units, or 'off'")
+    ap.add_argument("--outside", type=float, default=4.0, help="profile length outside the surface, mm (default 4)")
+    ap.add_argument("--rounds", type=int, default=1, help="passes over all bones (default 1)")
+    ap.add_argument("--no-exclude", action="store_true",
+                    help="do not exclude the other bones' regions while refining a bone")
     ap.add_argument("--closing", type=float, default=4.0,
                     help="start from each bone's closing by a ball of this radius in mm "
                          "(default 4; 0 = per-slice convex hull)")
