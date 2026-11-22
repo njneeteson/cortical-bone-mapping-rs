@@ -361,7 +361,10 @@ profiles cross the cortex (within the sampled range). Two are provided:
   a fixed stride and compacted, so construction never holds two copies.
   Transposed products scatter into a fixed number (16) of per-chunk buffers
   instead of storing the transpose.
-* k-d tree: implicit (permutation + reordered coordinates), median pivots.
+* k-d tree: the `kiddo` crate's immutable tree, wrapped so that results are
+  canonical (k-NN results are the `k` smallest by (squared distance, index),
+  radius results are sorted by index, with distances recomputed in a fixed
+  order), so they do not depend on the tree's layout.
 
 ## Differences
 

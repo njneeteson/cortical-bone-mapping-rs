@@ -1,20 +1,22 @@
-//! A compact static k-d tree over 3D points for k-nearest-neighbour and
-//! radius queries (Bentley 1975; Friedman et al. 1977).
+//! k-nearest-neighbour and radius queries over 3D points, on the k-d tree
+//! of the `kiddo` crate (Bentley 1975; Friedman et al. 1977).
 //!
-//! The tree is stored implicitly: points are permuted so that each node is a
-//! contiguous range whose median along the node's axis (cycling through the
-//! three axes with depth) sits in the middle as the pivot, found by
-//! `select_nth` in linear time. The only memory beyond the input is one
-//! permutation (`u32` per point) and a copy of the coordinates in tree order
-//! (for cache-friendly leaf scans); median splits make the tree balanced, with
-//! depth `log₂(N/16)`.
+//! `kiddo`'s immutable tree (a balanced k-d tree in Eytzinger layout with
+//! leaf buckets) finds the candidates. This wrapper makes the results
+//! *canonical*, i.e. independent of the tree's layout and of how the library
+//! computes distances (it may use SIMD or fused multiply-adds):
 //!
-//! Queries descend first into the half containing the query point and visit
-//! the other half only if the splitting plane is closer than the current
-//! `k`-th best distance (branch and bound), which for well-distributed points
-//! costs O(log N + k) per query (Friedman et al. 1977). Candidates are ordered
-//! by distance and then index, so ties, which are common on voxel-lattice
-//! points, are broken deterministically.
+//! * every candidate's squared distance is recomputed as
+//!   `Σ_a (q_a − p_a)²` in axis order ([`crate::util::dist2`]);
+//! * a k-NN query returns the `k` smallest by (squared distance, index), so
+//!   ties, which are common on voxel-lattice points, are resolved by index;
+//!   the library is asked for a few more neighbours than needed, and for more
+//!   until the last one it returns is farther than the `k`-th by more than
+//!   the library's possible rounding, so no point that belongs in the result
+//!   can be missing;
+//! * a radius query asks for a radius larger by the same margin, keeps the
+//!   points with `d² ≤ r²` by the recomputed distance, and sorts them by
+//!   index.
 //!
 //! # References
 //!
@@ -24,45 +26,30 @@
 //!   best matches in logarithmic expected time*, ACM Transactions on
 //!   Mathematical Software 3(3):209–226, 1977.
 
-use std::collections::BinaryHeap;
+use std::num::NonZeroUsize;
 
-use crate::util::V3;
+use kiddo::{ImmutableKdTree, SquaredEuclidean};
 
-const LEAF: usize = 16;
+use crate::util::{dist2, V3};
+
+/// Relative margin for the library's rounding of squared distances (a few
+/// ulps in practice).
+const MARGIN: f64 = 1e-12;
 
 pub struct KdTree {
+    tree: Option<ImmutableKdTree<f64, 3>>,
     pts: Vec<V3>,
-    idx: Vec<u32>,
-}
-
-/// Candidate neighbour (squared distance, index), ordered by distance then
-/// index so that ties are broken deterministically.
-struct Cand(f64, u32);
-impl PartialEq for Cand {
-    fn eq(&self, o: &Self) -> bool {
-        self.cmp(o) == std::cmp::Ordering::Equal
-    }
-}
-impl Eq for Cand {}
-impl PartialOrd for Cand {
-    fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(o))
-    }
-}
-impl Ord for Cand {
-    fn cmp(&self, o: &Self) -> std::cmp::Ordering {
-        self.0.total_cmp(&o.0).then(self.1.cmp(&o.1))
-    }
 }
 
 impl KdTree {
-    /// Build the tree by recursive median splits (in parallel for large
-    /// subtrees).
+    /// Build the tree (in parallel for large inputs).
     pub fn new(points: &[V3]) -> Self {
-        let mut idx: Vec<u32> = (0..points.len() as u32).collect();
-        build(points, &mut idx, 0);
-        let pts = idx.iter().map(|&i| points[i as usize]).collect();
-        KdTree { pts, idx }
+        let tree = (!points.is_empty())
+            .then(|| ImmutableKdTree::new_from_slice_parallel(points).expect("fewer than 2³² points"));
+        KdTree {
+            tree,
+            pts: points.to_vec(),
+        }
     }
 
     /// Number of points.
@@ -75,132 +62,77 @@ impl KdTree {
         self.pts.is_empty()
     }
 
-    /// The `k` nearest points to `q` as `(index, squared distance)`, sorted
-    /// by distance. Points with `index == exclude` are skipped.
+    /// The `k` nearest points to `q` as `(index, squared distance)`: the `k`
+    /// smallest by (squared distance, index), in that order, so that ties are
+    /// resolved by index whatever the tree's layout. Points with
+    /// `index == exclude` are skipped.
     pub fn knn(&self, q: V3, k: usize, exclude: Option<u32>) -> Vec<(u32, f64)> {
-        let mut heap: BinaryHeap<Cand> = BinaryHeap::with_capacity(k + 1);
-        if k > 0 && !self.pts.is_empty() {
-            self.knn_rec(q, k, exclude, 0, self.pts.len(), 0, &mut heap);
-        }
-        let mut out: Vec<(u32, f64)> = heap.into_iter().map(|c| (c.1, c.0)).collect();
-        out.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        out
-    }
-
-    /// Branch and bound: scan a leaf; otherwise test the pivot, descend into the
-    /// half containing `q`, and into the other half only while it can still hold
-    /// a point closer than the current `k`-th best (`Δ² < d_k²`).
-    #[allow(clippy::too_many_arguments)]
-    fn knn_rec(
-        &self,
-        q: V3,
-        k: usize,
-        ex: Option<u32>,
-        lo: usize,
-        hi: usize,
-        depth: usize,
-        heap: &mut BinaryHeap<Cand>,
-    ) {
-        if hi - lo <= LEAF {
-            for t in lo..hi {
-                let id = self.idx[t];
-                if Some(id) == ex {
-                    continue;
-                }
-                let d = crate::util::dist2(q, self.pts[t]);
-                if heap.len() < k {
-                    heap.push(Cand(d, id));
-                } else if d < heap.peek().unwrap().0 {
-                    heap.pop();
-                    heap.push(Cand(d, id));
-                }
-            }
-            return;
-        }
-        let axis = depth % 3;
-        let mid = lo + (hi - lo) / 2;
-        let split = self.pts[mid][axis];
-        let diff = q[axis] - split;
-        // the pivot itself
-        let id = self.idx[mid];
-        if Some(id) != ex {
-            let d = crate::util::dist2(q, self.pts[mid]);
-            if heap.len() < k {
-                heap.push(Cand(d, id));
-            } else if d < heap.peek().unwrap().0 {
-                heap.pop();
-                heap.push(Cand(d, id));
-            }
-        }
-        let (first, second) = if diff < 0.0 {
-            ((lo, mid), (mid + 1, hi))
-        } else {
-            ((mid + 1, hi), (lo, mid))
+        let (Some(tree), n) = (&self.tree, self.pts.len()) else {
+            return Vec::new();
         };
-        self.knn_rec(q, k, ex, first.0, first.1, depth + 1, heap);
-        if heap.len() < k || diff * diff < heap.peek().unwrap().0 {
-            self.knn_rec(q, k, ex, second.0, second.1, depth + 1, heap);
+        if k == 0 {
+            return Vec::new();
+        }
+        if k == 1 && exclude.is_none() {
+            return vec![self.nearest(tree, q)];
+        }
+        let mut ask = (k + exclude.is_some() as usize + 2).min(n);
+        loop {
+            let found = tree
+                .query(&q)
+                .nearest_n::<SquaredEuclidean<f64>>(NonZeroUsize::new(ask).unwrap())
+                .execute();
+            let farthest = found.last().map_or(0.0, |r| r.distance);
+            let mut out: Vec<(u32, f64)> = found
+                .iter()
+                .filter(|r| Some(r.item) != exclude)
+                .map(|r| (r.item, dist2(q, self.pts[r.item as usize])))
+                .collect();
+            out.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+            // complete if every point is in, or if no point left out can be as
+            // close as the k-th
+            let complete = ask == n || (out.len() > k && farthest > out[k - 1].1 * (1.0 + MARGIN) + f64::MIN_POSITIVE);
+            if complete {
+                out.truncate(k);
+                return out;
+            }
+            ask = (2 * ask).min(n);
         }
     }
 
-    /// All points within distance `r` of `q` (unsorted), as
-    /// `(index, squared distance)`.
+    /// The nearest point, smallest index among exact ties: the library's
+    /// nearest, unless another point is as close within its rounding, in
+    /// which case the general query decides.
+    fn nearest(&self, tree: &ImmutableKdTree<f64, 3>, q: V3) -> (u32, f64) {
+        let r = tree.query(&q).nearest_one::<SquaredEuclidean<f64>>().execute();
+        let d = dist2(q, self.pts[r.item as usize]);
+        let mut near = Vec::new();
+        self.within(q, (d * (1.0 + 4.0 * MARGIN)).sqrt(), &mut near);
+        near.into_iter()
+            .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)))
+            .unwrap_or((r.item, d))
+    }
+
+    /// All points within distance `r` of `q` (`d² ≤ r²`), as
+    /// `(index, squared distance)`, sorted by index (an order that does not
+    /// depend on the tree's layout).
     pub fn within(&self, q: V3, r: f64, out: &mut Vec<(u32, f64)>) {
         out.clear();
-        if !self.pts.is_empty() {
-            self.within_rec(q, r * r, 0, self.pts.len(), 0, out);
-        }
-    }
-
-    /// As [`Self::knn_rec`] with a fixed radius: visit a half only if the
-    /// splitting plane is within `r` of `q`.
-    fn within_rec(&self, q: V3, r2: f64, lo: usize, hi: usize, depth: usize, out: &mut Vec<(u32, f64)>) {
-        if hi - lo <= LEAF {
-            for t in lo..hi {
-                let d = crate::util::dist2(q, self.pts[t]);
-                if d <= r2 {
-                    out.push((self.idx[t], d));
-                }
-            }
+        let Some(tree) = &self.tree else {
             return;
-        }
-        let axis = depth % 3;
-        let mid = lo + (hi - lo) / 2;
-        let diff = q[axis] - self.pts[mid][axis];
-        let d = crate::util::dist2(q, self.pts[mid]);
-        if d <= r2 {
-            out.push((self.idx[mid], d));
-        }
-        if diff < 0.0 || diff * diff <= r2 {
-            self.within_rec(q, r2, lo, mid, depth + 1, out);
-        }
-        if diff >= 0.0 || diff * diff <= r2 {
-            self.within_rec(q, r2, mid + 1, hi, depth + 1, out);
-        }
-    }
-}
-
-/// Order `idx` into the implicit tree: the median along the node's axis
-/// (depth mod 3) at the middle, the lower half before it and the upper half
-/// after it, recursively down to leaves of `LEAF` points.
-fn build(points: &[V3], idx: &mut [u32], depth: usize) {
-    if idx.len() <= LEAF {
-        return;
-    }
-    let axis = depth % 3;
-    let mid = idx.len() / 2;
-    idx.select_nth_unstable_by(mid, |&a, &b| {
-        points[a as usize][axis]
-            .partial_cmp(&points[b as usize][axis])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    let (l, r) = idx.split_at_mut(mid);
-    let r = &mut r[1..]; // the pivot stays at `mid`
-    if l.len() + r.len() > 4096 {
-        rayon::join(|| build(points, l, depth + 1), || build(points, r, depth + 1));
-    } else {
-        build(points, l, depth + 1);
-        build(points, r, depth + 1);
+        };
+        let r2 = r * r;
+        let pts = &self.pts;
+        tree.query(&q)
+            .within::<SquaredEuclidean<f64>>(r2 * (1.0 + MARGIN) + f64::MIN_POSITIVE)
+            .unsorted()
+            .visit(|c| {
+                let d = dist2(q, pts[c.item as usize]);
+                if d <= r2 {
+                    out.push((c.item, d));
+                }
+            });
+        out.sort_unstable_by_key(|c| c.0);
     }
 }
 
@@ -235,6 +167,38 @@ mod tests {
             for (g, a) in got.iter().zip(&all) {
                 assert!((g.1 - a.1).abs() < 1e-12);
             }
+        }
+    }
+
+    #[test]
+    fn results_are_canonical_with_ties() {
+        // a lattice: many points at exactly equal distances
+        let pts: Vec<V3> = (0..12)
+            .flat_map(|i| (0..12).flat_map(move |j| (0..6).map(move |k| [i as f64, j as f64, 0.5 * k as f64])))
+            .collect();
+        let tree = KdTree::new(&pts);
+        let mut r = Rng::new(5);
+        for _ in 0..100 {
+            let q = pts[(r.next_u64() % pts.len() as u64) as usize];
+            let k = 1 + (r.next_u64() % 30) as usize;
+            let ex = r
+                .next_u64()
+                .is_multiple_of(2)
+                .then(|| (r.next_u64() % pts.len() as u64) as u32);
+            let mut all: Vec<(u32, f64)> = (0..pts.len() as u32)
+                .filter(|&i| Some(i) != ex)
+                .map(|i| (i, crate::util::dist2(q, pts[i as usize])))
+                .collect();
+            all.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+            all.truncate(k);
+            assert_eq!(tree.knn(q, k, ex), all);
+            let mut out = Vec::new();
+            tree.within(q, 1.5, &mut out);
+            let want: Vec<(u32, f64)> = (0..pts.len() as u32)
+                .map(|i| (i, crate::util::dist2(q, pts[i as usize])))
+                .filter(|c| c.1 <= 2.25)
+                .collect();
+            assert_eq!(out, want);
         }
     }
 
