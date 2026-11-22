@@ -352,14 +352,15 @@ step.
 
 * A. J. Burghardt et al., *Reproducibility of direct quantitative measures
   of cortical bone microarchitecture of the distal radius and tibia by
-  HR-pQCT*, Bone 47:519–528, 2010
+  HR-pQCT*, Bone 47(3):519–528, 2010
   ([PMC2926164](https://pmc.ncbi.nlm.nih.gov/articles/PMC2926164)). Ct.Th,
   Ct.Po, pore diameter; trans-cortical foramina treated as background.
 * XtremeCT II normative data, 863 adults
   ([PMC9719438](https://pmc.ncbi.nlm.nih.gov/articles/PMC9719438)). Ct.Th,
   Ct.Po, Ct.vBMD, trabecular structure, Tt.Ar.
 * M. Peters et al., *An automated algorithm for the detection of cortical
-  interruptions on HR-pQCT images of finger joints*, PLoS ONE 12:e0175829,
+  interruptions on high resolution peripheral quantitative computed tomography
+  images of finger joints*, PLoS ONE 12(4):e0175829,
   2017 ([PMC5402632](https://pmc.ncbi.nlm.nih.gov/articles/PMC5402632)), and
   *Prospective follow-up of cortical interruptions …*, Calcif. Tissue Int.,
   2019 ([doi:10.1007/s00223-019-00523-2](https://doi.org/10.1007/s00223-019-00523-2)).
@@ -368,6 +369,7 @@ step.
   in high resolution peripheral computed tomography: impact of image quality
   on measures of bone density and micro-architecture*, Bone 50:111–118,
   2012. Motion artefacts.
-* Knee joint space width and cartilage thickness in healthy adults: BMC
+* K. A. Beattie et al., *Minimum joint space width and tibial cartilage
+  morphology in the knees of healthy individuals: a cross-sectional study*, BMC
   Musculoskelet. Disord. 9:119, 2008
   ([doi:10.1186/1471-2474-9-119](https://doi.org/10.1186/1471-2474-9-119)).

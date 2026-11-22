@@ -41,12 +41,14 @@
 //!   1987.
 //! * M. Shinozuka, G. Deodatis, *Simulation of stochastic processes by
 //!   spectral representation*, Applied Mechanics Reviews 44(4):191–204, 1991.
-//! * A. J. Burghardt et al., *Reproducibility of direct quantitative measures
+//! * A. J. Burghardt, H. R. Buie, A. Laib, S. Majumdar, S. K. Boyd,
+//!   *Reproducibility of direct quantitative measures
 //!   of cortical bone microarchitecture of the distal radius and tibia by
-//!   HR-pQCT*, Bone 47:519–528, 2010.
+//!   HR-pQCT*, Bone 47(3):519–528, 2010.
 //! * M. Peters et al., *An automated algorithm for the detection of cortical
-//!   interruptions on HR-pQCT images of finger joints*, PLoS ONE 12:e0175829,
-//!   2017.
+//!   interruptions on high resolution peripheral quantitative computed
+//!   tomography images of finger joints*, PLoS ONE 12(4):e0175829, 2017,
+//!   doi:10.1371/journal.pone.0175829.
 
 use ndarray::Array3;
 use rayon::prelude::*;

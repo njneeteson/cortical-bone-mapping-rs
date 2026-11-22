@@ -321,7 +321,7 @@ impl<'p, 'a> Solver<'p, 'a> {
     }
 
     /// Preconditioned conjugate gradients (Hestenes & Stiefel 1952; Nocedal &
-    /// Wright 2006, Algorithm 5.3) on `(JᵀJ + μD) δ = −g` over the free
+    /// Wright 2006, ch. 5) on `(JᵀJ + μD) δ = −g` over the free
     /// variables, from `δ = 0`, stopping at `‖r‖ ≤ η ‖g‖`, on negative curvature
     /// (`pᵀAp ≤ 0`, which damping prevents in exact arithmetic) or on the CG
     /// budget.

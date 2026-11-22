@@ -63,9 +63,10 @@
 //!   *Automatic segmentation of cortical and trabecular compartments based on
 //!   a dual threshold technique for in vivo micro-CT bone analysis*, Bone
 //!   41(4):505–515, 2007, doi:10.1016/j.bone.2007.07.007.
-//! * A. J. Burghardt et al., *Reproducibility of direct quantitative measures
+//! * A. J. Burghardt, H. R. Buie, A. Laib, S. Majumdar, S. K. Boyd,
+//!   *Reproducibility of direct quantitative measures
 //!   of cortical bone microarchitecture of the distal radius and tibia by
-//!   HR-pQCT*, Bone 47:519–528, 2010.
+//!   HR-pQCT*, Bone 47(3):519–528, 2010.
 
 use ndarray::{s, Array3, ArrayView3, Zip};
 

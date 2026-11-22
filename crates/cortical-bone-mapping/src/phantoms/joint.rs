@@ -40,9 +40,9 @@
 //!
 //! # References
 //!
-//! * *Knee joint space width and cartilage thickness in healthy adults*, BMC
-//!   Musculoskeletal Disorders 9:119, 2008, doi:10.1186/1471-2474-9-119 (as
-//!   listed in `docs/segmentation.md`).
+//! * K. A. Beattie et al., *Minimum joint space width and tibial cartilage
+//!   morphology in the knees of healthy individuals: a cross-sectional study*,
+//!   BMC Musculoskeletal Disorders 9:119, 2008, doi:10.1186/1471-2474-9-119.
 
 use ndarray::Array3;
 use rayon::prelude::*;
