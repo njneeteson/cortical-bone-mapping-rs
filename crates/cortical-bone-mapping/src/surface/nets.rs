@@ -33,43 +33,15 @@ pub struct Extracted {
 /// midpoints. It needs a float copy of the mask's bounding box.
 pub fn extract_surface<T: Voxel>(mask: &ArrayView3<T>, geom: &Geometry, smoothing_sigma: f64) -> Extracted {
     let Some((lo, hi)) = bounding_box(mask) else {
-        return Extracted {
-            mesh: Mesh::default(),
-            border: Vec::new(),
-        };
+        return Extracted::empty();
     };
-    let dims = {
-        let d = mask.dim();
-        [d.0 as isize, d.1 as isize, d.2 as isize]
-    };
+    let d = mask.dim();
+    let dims = [d.0 as isize, d.1 as isize, d.2 as isize];
     if smoothing_sigma > 0.0 {
-        // Blur a padded copy of the bounding box.
         let pad = (3.0 * smoothing_sigma).ceil() as usize + 1;
-        let lo_p: Vec<isize> = (0..3).map(|a| lo[a] as isize - pad as isize).collect();
-        let shape = (
-            hi[0] - lo[0] + 1 + 2 * pad,
-            hi[1] - lo[1] + 1 + 2 * pad,
-            hi[2] - lo[2] + 1 + 2 * pad,
-        );
-        let sub = Array3::from_shape_fn(shape, |(i, j, k)| {
-            let g = [i as isize + lo_p[0], j as isize + lo_p[1], k as isize + lo_p[2]];
-            if (0..3).all(|a| g[a] >= 0 && g[a] < dims[a]) {
-                (mask[[g[0] as usize, g[1] as usize, g[2] as usize]].to_f64() != 0.0) as u8 as f64
-            } else {
-                0.0
-            }
-        });
-        let blurred = gaussian_filter(&sub, [smoothing_sigma; 3]);
-        let field = |i: isize, j: isize, k: isize| -> f64 {
-            let l = [i - lo_p[0], j - lo_p[1], k - lo_p[2]];
-            let s = blurred.dim();
-            let s = [s.0 as isize, s.1 as isize, s.2 as isize];
-            if (0..3).all(|a| l[a] >= 0 && l[a] < s[a]) {
-                blurred[[l[0] as usize, l[1] as usize, l[2] as usize]]
-            } else {
-                0.0
-            }
-        };
+        let (blurred, origin) = blurred_box(mask, lo, hi, pad, smoothing_sigma);
+        let value = window(blurred.view(), origin);
+        let field = |i: isize, j: isize, k: isize| value([i, j, k]).unwrap_or(0.0);
         // Blurring may grow the surface beyond the bounding box by ~3σ.
         let lo2 = lo.map(|v| v.saturating_sub(pad));
         let hi2 = [0, 1, 2].map(|a| (hi[a] + pad).min(dims[a] as usize - 1));
@@ -87,6 +59,47 @@ pub fn extract_surface<T: Voxel>(mask: &ArrayView3<T>, geom: &Geometry, smoothin
     }
 }
 
+/// The mask's bounding box `lo..=hi`, padded by `pad` voxels (outside the
+/// image as background), as 0/1 blurred by `sigma`; and its origin.
+fn blurred_box<T: Voxel>(
+    mask: &ArrayView3<T>,
+    lo: [usize; 3],
+    hi: [usize; 3],
+    pad: usize,
+    sigma: f64,
+) -> (Array3<f64>, [isize; 3]) {
+    let d = mask.dim();
+    let dims = [d.0 as isize, d.1 as isize, d.2 as isize];
+    let origin = lo.map(|v| v as isize - pad as isize);
+    let shape = (
+        hi[0] - lo[0] + 1 + 2 * pad,
+        hi[1] - lo[1] + 1 + 2 * pad,
+        hi[2] - lo[2] + 1 + 2 * pad,
+    );
+    let sub = Array3::from_shape_fn(shape, |(i, j, k)| {
+        let g = [i as isize + origin[0], j as isize + origin[1], k as isize + origin[2]];
+        if (0..3).all(|a| g[a] >= 0 && g[a] < dims[a]) {
+            (mask[[g[0] as usize, g[1] as usize, g[2] as usize]].to_f64() != 0.0) as u8 as f64
+        } else {
+            0.0
+        }
+    });
+    (gaussian_filter(&sub, [sigma; 3]), origin)
+}
+
+/// Look-up of image voxel `g` in `arr`, which holds the voxels from `origin`
+/// on; `None` outside it.
+fn window<A: Copy>(arr: ArrayView3<'_, A>, origin: [isize; 3]) -> impl Fn([isize; 3]) -> Option<A> + '_ {
+    let s = arr.dim();
+    let shape = [s.0 as isize, s.1 as isize, s.2 as isize];
+    move |g| {
+        let l = [g[0] - origin[0], g[1] - origin[1], g[2] - origin[2]];
+        (0..3)
+            .all(|a| l[a] >= 0 && l[a] < shape[a])
+            .then(|| arr[[l[0] as usize, l[1] as usize, l[2] as usize]])
+    }
+}
+
 const ISO: f64 = 0.5;
 
 /// Extract the zero level of a signed distance `phi` (negative inside),
@@ -96,25 +109,56 @@ const ISO: f64 = 0.5;
 pub fn extract_level_set(phi: &ArrayView3<f32>, lo: [usize; 3], dims: [usize; 3], geom: &Geometry) -> Extracted {
     let (s0, s1, s2) = phi.dim();
     if s0 == 0 || s1 == 0 || s2 == 0 {
-        return Extracted {
-            mesh: Mesh::default(),
-            border: Vec::new(),
-        };
+        return Extracted::empty();
     }
-    let shape = [s0 as isize, s1 as isize, s2 as isize];
-    let lo_i = lo.map(|v| v as isize);
-    let field = |i: isize, j: isize, k: isize| -> f64 {
-        let l = [i - lo_i[0], j - lo_i[1], k - lo_i[2]];
-        if (0..3).all(|a| l[a] >= 0 && l[a] < shape[a]) {
-            ISO - phi[[l[0] as usize, l[1] as usize, l[2] as usize]] as f64
-        } else {
-            0.0
-        }
-    };
+    let value = window(phi.view(), lo.map(|v| v as isize));
+    let field = |i: isize, j: isize, k: isize| value([i, j, k]).map_or(0.0, |p| ISO - p as f64);
     let hi = [lo[0] + s0 - 1, lo[1] + s1 - 1, lo[2] + s2 - 1];
     nets(field, lo, hi, dims.map(|v| v as isize), geom)
 }
 
+impl Extracted {
+    fn empty() -> Self {
+        Extracted {
+            mesh: Mesh::default(),
+            border: Vec::new(),
+        }
+    }
+}
+
+/// Cube corner offsets, and the 12 cube edges as corner index pairs.
+const CORNERS: [[isize; 3]; 8] = [
+    [0, 0, 0],
+    [0, 0, 1],
+    [0, 1, 0],
+    [0, 1, 1],
+    [1, 0, 0],
+    [1, 0, 1],
+    [1, 1, 0],
+    [1, 1, 1],
+];
+const EDGES: [(usize, usize); 12] = [
+    (0, 1),
+    (2, 3),
+    (4, 5),
+    (6, 7),
+    (0, 2),
+    (1, 3),
+    (4, 6),
+    (5, 7),
+    (0, 4),
+    (1, 5),
+    (2, 6),
+    (3, 7),
+];
+const NONE: u32 = u32::MAX;
+
+fn inside(v: f64) -> bool {
+    v > ISO
+}
+
+/// Surface nets over the voxels `lo..=hi` of the field `f` (inside above
+/// `ISO`), one cell layer at a time.
 fn nets<F: Fn(isize, isize, isize) -> f64>(
     f: F,
     lo: [usize; 3],
@@ -122,151 +166,175 @@ fn nets<F: Fn(isize, isize, isize) -> f64>(
     dims: [isize; 3],
     geom: &Geometry,
 ) -> Extracted {
-    // Cells c = (a, b, c) with corners voxels c + {0,1}^3, covering
-    // a ∈ [lo0 − 1, hi0] etc.
-    let c0 = [lo[0] as isize - 1, lo[1] as isize - 1, lo[2] as isize - 1];
-    let n1 = (hi[1] - lo[1] + 2) as isize;
-    let n2 = (hi[2] - lo[2] + 2) as isize;
-    let none = u32::MAX;
-    let mut prev = vec![none; (n1 * n2) as usize];
-    let mut cur = vec![none; (n1 * n2) as usize];
-    let mut verts: Vec<[f64; 3]> = Vec::new();
-    let mut border: Vec<bool> = Vec::new();
-    let mut faces: Vec<[u32; 3]> = Vec::new();
+    let mut nets = Nets::new(lo, hi, dims);
+    for a in nets.c0[0]..=hi[0] as isize {
+        nets.vertices(&f, a, geom);
+        nets.quads(&f, a);
+        std::mem::swap(&mut nets.prev, &mut nets.cur);
+    }
+    Extracted {
+        mesh: Mesh {
+            vertices: nets.verts,
+            faces: nets.faces,
+        },
+        border: nets.border,
+    }
+}
 
-    let lidx = |b: isize, c: isize| -> usize { ((b - c0[1]) * n2 + (c - c0[2])) as usize };
-    let inside = |v: f64| v > ISO;
+/// Surface nets in progress. Cells `(a, b, c)` have the voxels
+/// `(a, b, c) + {0,1}³` as corners and cover `c0 ..= hi`; the vertex index
+/// is kept for the current and the previous cell layer.
+struct Nets {
+    c0: [isize; 3],
+    hi: [isize; 3],
+    n2: isize,
+    dims: [isize; 3],
+    prev: Vec<u32>,
+    cur: Vec<u32>,
+    verts: Vec<[f64; 3]>,
+    border: Vec<bool>,
+    faces: Vec<[u32; 3]>,
+}
 
-    // Cube corner offsets and the 12 edges as corner index pairs.
-    const CORNERS: [[isize; 3]; 8] = [
-        [0, 0, 0],
-        [0, 0, 1],
-        [0, 1, 0],
-        [0, 1, 1],
-        [1, 0, 0],
-        [1, 0, 1],
-        [1, 1, 0],
-        [1, 1, 1],
-    ];
-    const EDGES: [(usize, usize); 12] = [
-        (0, 1),
-        (2, 3),
-        (4, 5),
-        (6, 7),
-        (0, 2),
-        (1, 3),
-        (4, 6),
-        (5, 7),
-        (0, 4),
-        (1, 5),
-        (2, 6),
-        (3, 7),
-    ];
+impl Nets {
+    fn new(lo: [usize; 3], hi: [usize; 3], dims: [isize; 3]) -> Self {
+        let n1 = (hi[1] - lo[1] + 2) as isize;
+        let n2 = (hi[2] - lo[2] + 2) as isize;
+        Nets {
+            c0: lo.map(|v| v as isize - 1),
+            hi: hi.map(|v| v as isize),
+            n2,
+            dims,
+            prev: vec![NONE; (n1 * n2) as usize],
+            cur: vec![NONE; (n1 * n2) as usize],
+            verts: Vec::new(),
+            border: Vec::new(),
+            faces: Vec::new(),
+        }
+    }
 
-    for a in c0[0]..=hi[0] as isize {
-        // 1. vertices of cell layer a
-        cur.iter_mut().for_each(|v| *v = none);
-        for b in c0[1]..=hi[1] as isize {
-            for c in c0[2]..=hi[2] as isize {
-                let mut vals = [0.0; 8];
-                let mut mask = 0u8;
-                for (q, o) in CORNERS.iter().enumerate() {
-                    vals[q] = f(a + o[0], b + o[1], c + o[2]);
-                    if inside(vals[q]) {
-                        mask |= 1 << q;
-                    }
-                }
-                if mask == 0 || mask == 255 {
+    fn lidx(&self, b: isize, c: isize) -> usize {
+        ((b - self.c0[1]) * self.n2 + (c - self.c0[2])) as usize
+    }
+
+    /// The vertex of cell `(b, c)` in a layer, `NONE` outside the cells.
+    fn cell(&self, layer: &[u32], b: isize, c: isize) -> u32 {
+        if b < self.c0[1] || c < self.c0[2] || b > self.hi[1] || c > self.hi[2] {
+            NONE
+        } else {
+            layer[self.lidx(b, c)]
+        }
+    }
+
+    /// One vertex per cell of layer `a` that straddles the boundary.
+    fn vertices<F: Fn(isize, isize, isize) -> f64>(&mut self, f: &F, a: isize, geom: &Geometry) {
+        self.cur.iter_mut().for_each(|v| *v = NONE);
+        for b in self.c0[1]..=self.hi[1] {
+            for c in self.c0[2]..=self.hi[2] {
+                let vals: [f64; 8] = std::array::from_fn(|q| {
+                    let o = CORNERS[q];
+                    f(a + o[0], b + o[1], c + o[2])
+                });
+                let Some(off) = crossing_mean(&vals) else {
                     continue;
-                }
-                let mut acc = [0.0; 3];
-                let mut cnt = 0.0;
-                for &(p, q) in &EDGES {
-                    if inside(vals[p]) != inside(vals[q]) {
-                        let t = ((ISO - vals[p]) / (vals[q] - vals[p])).clamp(0.0, 1.0);
-                        for d in 0..3 {
-                            acc[d] += CORNERS[p][d] as f64 + t * (CORNERS[q][d] - CORNERS[p][d]) as f64;
-                        }
-                        cnt += 1.0;
-                    }
-                }
-                let idx = [
-                    a as f64 + acc[0] / cnt,
-                    b as f64 + acc[1] / cnt,
-                    c as f64 + acc[2] / cnt,
-                ];
-                cur[lidx(b, c)] = verts.len() as u32;
-                verts.push(geom.to_physical(idx));
-                let on_border = a < 0 || b < 0 || c < 0 || a + 1 >= dims[0] || b + 1 >= dims[1] || c + 1 >= dims[2];
-                border.push(on_border);
+                };
+                let idx = [a as f64 + off[0], b as f64 + off[1], c as f64 + off[2]];
+                let k = self.lidx(b, c);
+                self.cur[k] = self.verts.len() as u32;
+                self.verts.push(geom.to_physical(idx));
+                let d = self.dims;
+                let on_border = a < 0 || b < 0 || c < 0 || a + 1 >= d[0] || b + 1 >= d[1] || c + 1 >= d[2];
+                self.border.push(on_border);
             }
         }
-        // 2. quads for edges whose cells are all in layers a−1 and a.
-        let emit = |q: [u32; 4], flip: bool, verts: &Vec<[f64; 3]>, faces: &mut Vec<[u32; 3]>| {
-            if q.contains(&none) {
-                return;
-            }
-            let q = if flip { [q[0], q[3], q[2], q[1]] } else { q };
-            let d02 = crate::util::dist2(verts[q[0] as usize], verts[q[2] as usize]);
-            let d13 = crate::util::dist2(verts[q[1] as usize], verts[q[3] as usize]);
-            if d02 <= d13 {
-                faces.push([q[0], q[1], q[2]]);
-                faces.push([q[0], q[2], q[3]]);
-            } else {
-                faces.push([q[0], q[1], q[3]]);
-                faces.push([q[1], q[2], q[3]]);
-            }
-        };
-        let cell = |layer: &Vec<u32>, b: isize, c: isize| -> u32 {
-            if b < c0[1] || c < c0[2] || b > hi[1] as isize || c > hi[2] as isize {
-                none
-            } else {
-                layer[lidx(b, c)]
-            }
-        };
-        for b in c0[1]..=hi[1] as isize + 1 {
-            for c in c0[2]..=hi[2] as isize + 1 {
+    }
+
+    /// Quads for the voxel edges whose four cells are all in layers `a − 1`
+    /// and `a`.
+    fn quads<F: Fn(isize, isize, isize) -> f64>(&mut self, f: &F, a: isize) {
+        for b in self.c0[1]..=self.hi[1] + 1 {
+            for c in self.c0[2]..=self.hi[2] + 1 {
                 let here = inside(f(a, b, c));
                 // axis-0 edge (a,b,c)–(a+1,b,c): cells (a, b-1..b, c-1..c), layer a
                 if here != inside(f(a + 1, b, c)) {
+                    let cur = &self.cur;
                     let q = [
-                        cell(&cur, b - 1, c - 1),
-                        cell(&cur, b, c - 1),
-                        cell(&cur, b, c),
-                        cell(&cur, b - 1, c),
+                        self.cell(cur, b - 1, c - 1),
+                        self.cell(cur, b, c - 1),
+                        self.cell(cur, b, c),
+                        self.cell(cur, b - 1, c),
                     ];
-                    emit(q, !here, &verts, &mut faces);
+                    self.emit(q, !here);
                 }
-                if a > c0[0] {
-                    // axis-1 edge (a,b,c)–(a,b+1,c): cells (a-1..a, b, c-1..c)
-                    if here != inside(f(a, b + 1, c)) {
-                        let q = [
-                            cell(&prev, b, c - 1),
-                            cell(&prev, b, c),
-                            cell(&cur, b, c),
-                            cell(&cur, b, c - 1),
-                        ];
-                        emit(q, !here, &verts, &mut faces);
-                    }
-                    // axis-2 edge (a,b,c)–(a,b,c+1): cells (a-1..a, b-1..b, c)
-                    if here != inside(f(a, b, c + 1)) {
-                        let q = [
-                            cell(&prev, b - 1, c),
-                            cell(&cur, b - 1, c),
-                            cell(&cur, b, c),
-                            cell(&prev, b, c),
-                        ];
-                        emit(q, !here, &verts, &mut faces);
-                    }
+                if a == self.c0[0] {
+                    continue;
+                }
+                let (prev, cur) = (&self.prev, &self.cur);
+                // axis-1 edge (a,b,c)–(a,b+1,c): cells (a-1..a, b, c-1..c)
+                if here != inside(f(a, b + 1, c)) {
+                    let q = [
+                        self.cell(prev, b, c - 1),
+                        self.cell(prev, b, c),
+                        self.cell(cur, b, c),
+                        self.cell(cur, b, c - 1),
+                    ];
+                    self.emit(q, !here);
+                }
+                let (prev, cur) = (&self.prev, &self.cur);
+                // axis-2 edge (a,b,c)–(a,b,c+1): cells (a-1..a, b-1..b, c)
+                if here != inside(f(a, b, c + 1)) {
+                    let q = [
+                        self.cell(prev, b - 1, c),
+                        self.cell(cur, b - 1, c),
+                        self.cell(cur, b, c),
+                        self.cell(prev, b, c),
+                    ];
+                    self.emit(q, !here);
                 }
             }
         }
-        std::mem::swap(&mut prev, &mut cur);
     }
-    Extracted {
-        mesh: Mesh { vertices: verts, faces },
-        border,
+
+    /// Two triangles for the quad `q` (reversed with `flip`), split along
+    /// its shorter diagonal; nothing if a cell has no vertex.
+    fn emit(&mut self, q: [u32; 4], flip: bool) {
+        if q.contains(&NONE) {
+            return;
+        }
+        let q = if flip { [q[0], q[3], q[2], q[1]] } else { q };
+        let v = &self.verts;
+        let d02 = crate::util::dist2(v[q[0] as usize], v[q[2] as usize]);
+        let d13 = crate::util::dist2(v[q[1] as usize], v[q[3] as usize]);
+        if d02 <= d13 {
+            self.faces.push([q[0], q[1], q[2]]);
+            self.faces.push([q[0], q[2], q[3]]);
+        } else {
+            self.faces.push([q[0], q[1], q[3]]);
+            self.faces.push([q[1], q[2], q[3]]);
+        }
     }
+}
+
+/// The mean of the boundary crossings on a cell's edges (corner values
+/// `vals`), relative to its first corner; `None` if the cell is all inside
+/// or all outside.
+fn crossing_mean(vals: &[f64; 8]) -> Option<[f64; 3]> {
+    let mask = (0..8).filter(|&q| inside(vals[q])).fold(0u8, |m, q| m | 1 << q);
+    if mask == 0 || mask == 255 {
+        return None;
+    }
+    let mut acc = [0.0; 3];
+    let mut cnt = 0.0;
+    for &(p, q) in &EDGES {
+        if inside(vals[p]) != inside(vals[q]) {
+            let t = ((ISO - vals[p]) / (vals[q] - vals[p])).clamp(0.0, 1.0);
+            for d in 0..3 {
+                acc[d] += CORNERS[p][d] as f64 + t * (CORNERS[q][d] - CORNERS[p][d]) as f64;
+            }
+            cnt += 1.0;
+        }
+    }
+    Some([acc[0] / cnt, acc[1] / cnt, acc[2] / cnt])
 }
 
 #[cfg(test)]

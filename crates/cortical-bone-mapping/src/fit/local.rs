@@ -113,70 +113,18 @@ pub fn fit_profile(y: &[f32], x: &[f64], w: &[f64], rho_c: f64, init: &Params, s
     let mut it = 0;
     while it < s.max_iterations {
         it += 1;
-        // free & inactive variables
-        let mut vars = [0usize; NPARAM];
-        let mut nv = 0;
-        let mut gmax: f64 = 0.0;
-        let rnorm = (2.0 * ne.cost).sqrt();
-        for a in 0..NPARAM {
-            if !s.free[a] {
-                continue;
-            }
-            let at_lo = p[a] <= s.lower[a] && ne.g[a] > 0.0;
-            let at_hi = p[a] >= s.upper[a] && ne.g[a] < 0.0;
-            if at_lo || at_hi {
-                continue;
-            }
-            let jn = ne.h[sym5(a, a)].sqrt();
-            if jn > 0.0 && rnorm > 0.0 {
-                gmax = gmax.max(ne.g[a].abs() / (jn * rnorm));
-            }
-            vars[nv] = a;
-            nv += 1;
-        }
-        if nv == 0 || gmax <= s.gtol || ne.cost == 0.0 {
+        let active = Active::new(&p, &ne, s);
+        if active.n == 0 || active.gmax <= s.gtol || ne.cost == 0.0 {
             status = Status::Gtol;
             break;
         }
-        // (H + μ D) δ = −g on the active subspace
-        let mut a_mat = [0.0; 25];
-        let mut b = [0.0; NPARAM];
-        let dmax = (0..nv).map(|i| ne.h[sym5(vars[i], vars[i])]).fold(0.0, f64::max);
-        for i in 0..nv {
-            for j in 0..nv {
-                a_mat[i * nv + j] = ne.h[sym5(vars[i], vars[j])];
-            }
-            let d = ne.h[sym5(vars[i], vars[i])].max(1e-12 * dmax).max(1e-300);
-            a_mat[i * nv + i] += mu * d;
-            b[i] = -ne.g[vars[i]];
-        }
-        cholesky_solve(&mut a_mat, &mut b, nv);
-        let mut pn = p;
-        for i in 0..nv {
-            let a = vars[i];
-            pn[a] = (p[a] + b[i]).clamp(s.lower[a], s.upper[a]);
-        }
-        // actual step, predicted reduction and scaled step length
-        let mut step = [0.0; NPARAM];
-        let mut snorm = 0.0;
-        let mut pnorm = 0.0;
-        for a in 0..NPARAM {
-            step[a] = pn[a] - p[a];
-            let d = ne.h[sym5(a, a)].max(1e-300).sqrt();
-            snorm += (d * step[a]).powi(2);
-            pnorm += (d * p[a]).powi(2);
-        }
-        if snorm.sqrt() <= s.xtol * (pnorm.sqrt() + s.xtol) {
+        let pn = active.trial_point(&p, &ne, mu, s);
+        let step: Params = std::array::from_fn(|a| pn[a] - p[a]);
+        if negligible(&ne, &p, &step, s.xtol) {
             status = Status::Xtol;
             break;
         }
-        let mut pred = 0.0;
-        for a in 0..NPARAM {
-            pred -= ne.g[a] * step[a];
-            for bb in 0..NPARAM {
-                pred -= 0.5 * step[a] * ne.h[sym5(a, bb)] * step[bb];
-            }
-        }
+        let pred = predicted_decrease(&ne, &step);
         let cn = cost_only(y, x, w, rho_c, &pn);
         let actual = ne.cost - cn;
         let rho = if pred > 0.0 { actual / pred } else { -1.0 };
@@ -205,6 +153,88 @@ pub fn fit_profile(y: &[f32], x: &[f64], w: &[f64], rho_c: f64, init: &Params, s
         iterations: it as u32,
         status,
     }
+}
+
+/// The free variables not held at a bound by the gradient, and the largest
+/// scaled gradient `|gᵢ| / (‖Jᵢ‖ ‖r‖)` over them.
+struct Active {
+    vars: [usize; NPARAM],
+    n: usize,
+    gmax: f64,
+}
+
+impl Active {
+    fn new(p: &Params, ne: &Normal, s: &FitSettings) -> Self {
+        let mut vars = [0usize; NPARAM];
+        let mut n = 0;
+        let mut gmax: f64 = 0.0;
+        let rnorm = (2.0 * ne.cost).sqrt();
+        for a in 0..NPARAM {
+            if !s.free[a] {
+                continue;
+            }
+            let at_lo = p[a] <= s.lower[a] && ne.g[a] > 0.0;
+            let at_hi = p[a] >= s.upper[a] && ne.g[a] < 0.0;
+            if at_lo || at_hi {
+                continue;
+            }
+            let jn = ne.h[sym5(a, a)].sqrt();
+            if jn > 0.0 && rnorm > 0.0 {
+                gmax = gmax.max(ne.g[a].abs() / (jn * rnorm));
+            }
+            vars[n] = a;
+            n += 1;
+        }
+        Active { vars, n, gmax }
+    }
+
+    /// Solve `(H + μ D) δ = −g` on the active variables and project `p + δ`
+    /// onto the bounds.
+    fn trial_point(&self, p: &Params, ne: &Normal, mu: f64, s: &FitSettings) -> Params {
+        let (vars, nv) = (&self.vars, self.n);
+        let mut a_mat = [0.0; 25];
+        let mut b = [0.0; NPARAM];
+        let dmax = (0..nv).map(|i| ne.h[sym5(vars[i], vars[i])]).fold(0.0, f64::max);
+        for i in 0..nv {
+            for j in 0..nv {
+                a_mat[i * nv + j] = ne.h[sym5(vars[i], vars[j])];
+            }
+            let d = ne.h[sym5(vars[i], vars[i])].max(1e-12 * dmax).max(1e-300);
+            a_mat[i * nv + i] += mu * d;
+            b[i] = -ne.g[vars[i]];
+        }
+        cholesky_solve(&mut a_mat, &mut b, nv);
+        let mut pn = *p;
+        for i in 0..nv {
+            let a = vars[i];
+            pn[a] = (p[a] + b[i]).clamp(s.lower[a], s.upper[a]);
+        }
+        pn
+    }
+}
+
+/// The step, scaled by the Jacobian column norms, is negligible next to `p`.
+fn negligible(ne: &Normal, p: &Params, step: &Params, xtol: f64) -> bool {
+    let mut snorm = 0.0;
+    let mut pnorm = 0.0;
+    for a in 0..NPARAM {
+        let d = ne.h[sym5(a, a)].max(1e-300).sqrt();
+        snorm += (d * step[a]).powi(2);
+        pnorm += (d * p[a]).powi(2);
+    }
+    snorm.sqrt() <= xtol * (pnorm.sqrt() + xtol)
+}
+
+/// The cost decrease the quadratic model predicts for `step`.
+fn predicted_decrease(ne: &Normal, step: &Params) -> f64 {
+    let mut pred = 0.0;
+    for a in 0..NPARAM {
+        pred -= ne.g[a] * step[a];
+        for bb in 0..NPARAM {
+            pred -= 0.5 * step[a] * ne.h[sym5(a, bb)] * step[bb];
+        }
+    }
+    pred
 }
 
 /// Fit every profile independently in parallel. `init` and `fixed_sigma`

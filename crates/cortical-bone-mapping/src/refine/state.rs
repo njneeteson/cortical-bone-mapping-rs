@@ -108,36 +108,49 @@ impl Freeze {
     /// surroundings have moved, count still nodes (a node whose fit failed is
     /// never still), and freeze nodes whose whole neighbourhood is still.
     pub fn update(&self, st: &mut NodeState, mesh: &Mesh, step: &Step) {
-        let nv = st.frozen.len();
         if st.frozen.iter().any(|&f| f) {
-            let movers: Vec<usize> = (0..nv).filter(|&v| !st.frozen[v]).collect();
-            let pts: Vec<V3> = movers.iter().map(|&v| mesh.vertices[v]).collect();
-            let tree = KdTree::new(&pts);
-            let nearby_max: Vec<f64> = (0..nv)
-                .into_par_iter()
-                .map(|v| {
-                    if !st.frozen[v] || pts.is_empty() {
-                        return 0.0;
-                    }
-                    let mut near = Vec::new();
-                    tree.within(mesh.vertices[v], self.radius, &mut near);
-                    near.iter()
-                        .map(|&(u, _)| norm(step.disp[movers[u as usize]]))
-                        .fold(0.0, f64::max)
-                })
-                .collect();
-            for v in 0..nv {
-                if st.frozen[v] {
-                    st.near_motion[v] += nearby_max[v];
-                    if st.near_motion[v] > self.thaw {
-                        st.frozen[v] = false;
-                        st.still[v] = 0;
-                        st.near_motion[v] = 0.0;
-                    }
+            self.thaw_near_motion(st, mesh, step);
+        }
+        self.count_still(st, step);
+        self.freeze_still_regions(st, mesh);
+    }
+
+    /// Add the largest displacement of the moving nodes within `radius` of
+    /// each frozen node to its accumulated nearby motion; thaw it beyond `thaw`.
+    fn thaw_near_motion(&self, st: &mut NodeState, mesh: &Mesh, step: &Step) {
+        let nv = st.frozen.len();
+        let movers: Vec<usize> = (0..nv).filter(|&v| !st.frozen[v]).collect();
+        let pts: Vec<V3> = movers.iter().map(|&v| mesh.vertices[v]).collect();
+        let tree = KdTree::new(&pts);
+        let nearby_max: Vec<f64> = (0..nv)
+            .into_par_iter()
+            .map(|v| {
+                if !st.frozen[v] || pts.is_empty() {
+                    return 0.0;
+                }
+                let mut near = Vec::new();
+                tree.within(mesh.vertices[v], self.radius, &mut near);
+                near.iter()
+                    .map(|&(u, _)| norm(step.disp[movers[u as usize]]))
+                    .fold(0.0, f64::max)
+            })
+            .collect();
+        for v in 0..nv {
+            if st.frozen[v] {
+                st.near_motion[v] += nearby_max[v];
+                if st.near_motion[v] > self.thaw {
+                    st.frozen[v] = false;
+                    st.still[v] = 0;
+                    st.near_motion[v] = 0.0;
                 }
             }
         }
-        for v in 0..nv {
+    }
+
+    /// Count the fits in a row each moving node stayed still: moved less than
+    /// `dtol` and (if fitted and free) changed its thickness by less than `ttol`.
+    fn count_still(&self, st: &mut NodeState, step: &Step) {
+        for v in 0..st.frozen.len() {
             if st.frozen[v] {
                 continue;
             }
@@ -156,6 +169,12 @@ impl Freeze {
                 0
             };
         }
+    }
+
+    /// Freeze the nodes still for `patience` fits whose whole neighbourhood
+    /// (within `radius`) is still or frozen.
+    fn freeze_still_regions(&self, st: &mut NodeState, mesh: &Mesh) {
+        let nv = st.frozen.len();
         let eligible: Vec<bool> = (0..nv).map(|v| st.frozen[v] || st.still[v] >= self.patience).collect();
         let tree = KdTree::new(&mesh.vertices);
         let newly: Vec<bool> = (0..nv)

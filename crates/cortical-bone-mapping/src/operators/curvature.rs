@@ -84,45 +84,11 @@ impl SurfaceLaplacian {
                     let s: f64 = g.iter().sum();
                     return cand.iter().zip(&g).map(|(c, w)| (c.0, w / s)).collect();
                 }
-                // importance sampling with replacement from the Gaussian
-                let mut cdf = Vec::with_capacity(g.len());
-                let mut acc = 0.0;
-                for w in &g {
-                    acc += w;
-                    cdf.push(acc);
-                }
-                let mut rng = Rng::new(0x5eed ^ (i as u64).wrapping_mul(0x9E37_79B9));
-                let mut picks: Vec<u32> = (0..k)
-                    .map(|_| {
-                        let u = rng.uniform() * acc;
-                        let j = cdf.partition_point(|&c| c < u).min(cand.len() - 1);
-                        cand[j].0
-                    })
-                    .collect();
-                picks.sort_unstable();
-                let mut out: Vec<(u32, f64)> = Vec::new();
-                for p in picks {
-                    match out.last_mut() {
-                        Some(last) if last.0 == p => last.1 += 1.0 / k as f64,
-                        _ => out.push((p, 1.0 / k as f64)),
-                    }
-                }
-                out
+                sampled_row(cand, &g, k, i)
             })
             .collect();
         let mut rows = SparseRows::from_rows(rows, n);
-        let mut diag = vec![0.0; points.len()];
-        for i in 0..points.len() {
-            let mut m2 = 0.0;
-            for e in rows.offsets[i]..rows.offsets[i + 1] {
-                m2 += rows.vals[e] * crate::util::dist2(points[i], points[rows.cols[e] as usize]);
-            }
-            let s = 4.0 / m2.max(1e-300);
-            for e in rows.offsets[i]..rows.offsets[i + 1] {
-                rows.vals[e] *= s;
-            }
-            diag[i] = -s;
-        }
+        let diag = normalise_by_second_moment(&mut rows, points);
         SurfaceLaplacian {
             rows,
             diag,
@@ -140,6 +106,53 @@ impl SurfaceLaplacian {
             out.par_iter_mut().zip(tmp_out.par_iter()).for_each(|(o, &v)| o[c] = v);
         }
     }
+}
+
+/// Row `i` of the Gaussian average from `k` neighbours drawn with
+/// replacement from the candidates `cand` with probability ∝ `g`
+/// (deterministic per row): weight `1/k` per draw, repeats merged.
+fn sampled_row(cand: &[(u32, f64)], g: &[f64], k: usize, i: usize) -> Vec<(u32, f64)> {
+    let mut cdf = Vec::with_capacity(g.len());
+    let mut acc = 0.0;
+    for w in g {
+        acc += w;
+        cdf.push(acc);
+    }
+    let mut rng = Rng::new(0x5eed ^ (i as u64).wrapping_mul(0x9E37_79B9));
+    let mut picks: Vec<u32> = (0..k)
+        .map(|_| {
+            let u = rng.uniform() * acc;
+            let j = cdf.partition_point(|&c| c < u).min(cand.len() - 1);
+            cand[j].0
+        })
+        .collect();
+    picks.sort_unstable();
+    let mut out: Vec<(u32, f64)> = Vec::new();
+    for p in picks {
+        match out.last_mut() {
+            Some(last) if last.0 == p => last.1 += 1.0 / k as f64,
+            _ => out.push((p, 1.0 / k as f64)),
+        }
+    }
+    out
+}
+
+/// Scale each row of the averages to `4 / M2_i` (`M2_i = Σ w_ik |p_k −
+/// p_i|²`); returns the diagonal `−4 / M2_i`.
+fn normalise_by_second_moment(rows: &mut SparseRows<f64>, points: &[V3]) -> Vec<f64> {
+    let mut diag = vec![0.0; points.len()];
+    for i in 0..points.len() {
+        let mut m2 = 0.0;
+        for e in rows.offsets[i]..rows.offsets[i + 1] {
+            m2 += rows.vals[e] * crate::util::dist2(points[i], points[rows.cols[e] as usize]);
+        }
+        let s = 4.0 / m2.max(1e-300);
+        for e in rows.offsets[i]..rows.offsets[i + 1] {
+            rows.vals[e] *= s;
+        }
+        diag[i] = -s;
+    }
+    diag
 }
 
 /// Curvature penalty on the fitted periosteal (`S = V + (m − t/2) n`) and/or
@@ -246,6 +259,27 @@ impl CurvatureOperator {
         });
     }
 
+    /// Node `i`'s residual `r` and its unit direction `u` (the residual
+    /// vector is `r u`), given `q_i`; zero at boundary nodes and, in the
+    /// excess mode, where the curvature is within `κ`.
+    fn residual(&self, i: usize, q: V3) -> (f64, V3) {
+        if !self.lap.interior[i] {
+            return (0.0, [0.0; 3]);
+        }
+        let (nrm, c) = (self.normals[i], self.coef);
+        match self.mode {
+            CurvatureMode::Change => (c * dot(nrm, q), nrm),
+            CurvatureMode::Excess { kappa } => {
+                let h = dot(nrm, add(self.base[i], q));
+                if h.abs() > kappa {
+                    (c * (h.abs() - kappa), scale(nrm, h.signum()))
+                } else {
+                    (0.0, [0.0; 3])
+                }
+            }
+        }
+    }
+
     /// Cost and gradient with respect to `(m, t)`; updates `state`.
     /// Gradients are *added* to `gm`, `gt`.
     pub fn eval(&self, m: &[f64], t: &[f64], state: &mut CurvatureState, gm: &mut [f64], gt: &mut [f64]) -> f64 {
@@ -262,40 +296,16 @@ impl CurvatureOperator {
             }
             d.par_iter_mut().enumerate().for_each(|(i, v)| *v = m[i] + sign * t[i]);
             self.q(&d, &mut q);
-            let c = self.coef;
             let dir = &mut state.dir[s];
             let partial: Vec<f64> = e
                 .par_iter_mut()
                 .zip(dir.par_iter_mut())
                 .enumerate()
                 .map(|(i, (ei, di))| {
-                    *ei = [0.0; 3];
-                    *di = [0.0; 3];
-                    if !self.lap.interior[i] {
-                        return 0.0;
-                    }
-                    match self.mode {
-                        CurvatureMode::Change => {
-                            let nrm = self.normals[i];
-                            let r = c * dot(nrm, q[i]);
-                            *ei = scale(nrm, r);
-                            *di = nrm;
-                            0.5 * r * r
-                        }
-                        CurvatureMode::Excess { kappa } => {
-                            let nrm = self.normals[i];
-                            let h = dot(nrm, add(self.base[i], q[i]));
-                            if h.abs() > kappa {
-                                let u = scale(nrm, h.signum());
-                                let r = c * (h.abs() - kappa);
-                                *ei = scale(u, r);
-                                *di = u;
-                                0.5 * r * r
-                            } else {
-                                0.0
-                            }
-                        }
-                    }
+                    let (r, u) = self.residual(i, q[i]);
+                    *ei = scale(u, r);
+                    *di = u;
+                    0.5 * r * r
                 })
                 .collect();
             cost += partial.iter().sum::<f64>();

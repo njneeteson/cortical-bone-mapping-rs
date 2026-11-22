@@ -86,51 +86,18 @@ fn predict(s2: [f64; 3], n: V3) -> f64 {
 /// Non-negative least squares for `σ² ≈ Σ_a n_a² s_a²` under `model`,
 /// returning `s²` per axis.
 fn fit(rows: &[(V3, f64)], model: PsfModel) -> [f64; 3] {
-    // feature map
-    let feats = |n: V3| -> Vec<f64> {
-        match model {
-            PsfModel::Isotropic => vec![1.0],
-            PsfModel::Axial(a) => vec![1.0 - n[a] * n[a], n[a] * n[a]],
-            PsfModel::Anisotropic => vec![n[0] * n[0], n[1] * n[1], n[2] * n[2]],
-        }
-    };
-    let k = feats([0.0, 0.0, 1.0]).len();
-    let mut ata = vec![0.0; k * k];
-    let mut atb = vec![0.0; k];
-    for (n, s2) in rows {
-        let f = feats(*n);
-        for i in 0..k {
-            atb[i] += f[i] * s2;
-            for j in 0..k {
-                ata[i * k + j] += f[i] * f[j];
-            }
-        }
-    }
+    let k = features(model, [0.0, 0.0, 1.0]).len();
+    let (ata, atb) = normal_equations(rows, model, k);
     // enumerate active sets (k ≤ 3) and keep the best feasible solution
     let mut best: Option<(f64, Vec<f64>)> = None;
     for subset in 1u32..(1 << k) {
-        let idx: Vec<usize> = (0..k).filter(|i| subset & (1 << i) != 0).collect();
-        let m = idx.len();
-        let mut a = vec![0.0; m * m];
-        let mut b = vec![0.0; m];
-        for (p, &i) in idx.iter().enumerate() {
-            b[p] = atb[i];
-            for (q, &j) in idx.iter().enumerate() {
-                a[p * m + q] = ata[i * k + j];
-            }
-        }
-        crate::util::cholesky_solve(&mut a, &mut b, m);
-        if b.iter().any(|&v| v < 0.0) {
+        let Some(sol) = solve_on_subset(&ata, &atb, k, subset) else {
             continue;
-        }
-        let mut sol = vec![0.0; k];
-        for (p, &i) in idx.iter().enumerate() {
-            sol[i] = b[p];
-        }
+        };
         let sse: f64 = rows
             .iter()
             .map(|(n, s2)| {
-                let f = feats(*n);
+                let f = features(model, *n);
                 (s2 - f.iter().zip(&sol).map(|(a, b)| a * b).sum::<f64>()).powi(2)
             })
             .sum();
@@ -148,6 +115,55 @@ fn fit(rows: &[(V3, f64)], model: PsfModel) -> [f64; 3] {
         }
         PsfModel::Anisotropic => [sol[0], sol[1], sol[2]],
     }
+}
+
+/// The regression features of a normal `n` under `model`.
+fn features(model: PsfModel, n: V3) -> Vec<f64> {
+    match model {
+        PsfModel::Isotropic => vec![1.0],
+        PsfModel::Axial(a) => vec![1.0 - n[a] * n[a], n[a] * n[a]],
+        PsfModel::Anisotropic => vec![n[0] * n[0], n[1] * n[1], n[2] * n[2]],
+    }
+}
+
+/// `AᵀA` (`k × k`, row-major) and `Aᵀb` of the regression.
+fn normal_equations(rows: &[(V3, f64)], model: PsfModel, k: usize) -> (Vec<f64>, Vec<f64>) {
+    let mut ata = vec![0.0; k * k];
+    let mut atb = vec![0.0; k];
+    for (n, s2) in rows {
+        let f = features(model, *n);
+        for i in 0..k {
+            atb[i] += f[i] * s2;
+            for j in 0..k {
+                ata[i * k + j] += f[i] * f[j];
+            }
+        }
+    }
+    (ata, atb)
+}
+
+/// The least-squares solution with only the features in `subset` (a bit
+/// mask) non-zero; `None` if it is not non-negative.
+fn solve_on_subset(ata: &[f64], atb: &[f64], k: usize, subset: u32) -> Option<Vec<f64>> {
+    let idx: Vec<usize> = (0..k).filter(|i| subset & (1 << i) != 0).collect();
+    let m = idx.len();
+    let mut a = vec![0.0; m * m];
+    let mut b = vec![0.0; m];
+    for (p, &i) in idx.iter().enumerate() {
+        b[p] = atb[i];
+        for (q, &j) in idx.iter().enumerate() {
+            a[p * m + q] = ata[i * k + j];
+        }
+    }
+    crate::util::cholesky_solve(&mut a, &mut b, m);
+    if b.iter().any(|&v| v < 0.0) {
+        return None;
+    }
+    let mut sol = vec![0.0; k];
+    for (p, &i) in idx.iter().enumerate() {
+        sol[i] = b[p];
+    }
+    Some(sol)
 }
 
 /// [`SigmaMode::EstimatePsf`](crate::options::SigmaMode::EstimatePsf): the

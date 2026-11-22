@@ -127,6 +127,24 @@ pub fn erode(m: &Array3<bool>, kernel: [usize; 3]) -> Array3<bool> {
     dilate(&inv, kernel).mapv(|b| !b)
 }
 
+/// The 6-connected neighbours of voxel `p` in an array of shape `dim`, in
+/// the order −axis 0, +axis 0, −axis 1, +axis 1, −axis 2, +axis 2.
+pub(super) fn neighbours6(p: [usize; 3], dim: (usize, usize, usize)) -> impl Iterator<Item = [usize; 3]> {
+    let d = [dim.0, dim.1, dim.2];
+    (0..6).filter_map(move |n| {
+        let (axis, up) = (n / 2, n % 2 == 1);
+        let mut q = p;
+        if up && q[axis] + 1 < d[axis] {
+            q[axis] += 1;
+        } else if !up && q[axis] > 0 {
+            q[axis] -= 1;
+        } else {
+            return None;
+        }
+        Some(q)
+    })
+}
+
 /// Label 6-connected components (4-connected within slices if `two_d`).
 /// Returns labels (0 = background) and component sizes (index = label).
 pub(super) fn label_components(m: &Array3<bool>, two_d: bool) -> (Vec<u32>, Vec<usize>) {
@@ -147,32 +165,13 @@ pub(super) fn label_components(m: &Array3<bool>, two_d: bool) -> (Vec<u32>, Vec<
         queue.push_back(start);
         while let Some(p) = queue.pop_front() {
             size += 1;
-            let (i, j, k) = (p / (d1 * d2), (p / d2) % d1, p % d2);
-            let mut visit = |q: usize| {
+            let at = [p / (d1 * d2), (p / d2) % d1, p % d2];
+            for q in neighbours6(at, m.dim()).filter(|q| !two_d || q[0] == at[0]) {
+                let q = (q[0] * d1 + q[1]) * d2 + q[2];
                 if flat[q] && label[q] == 0 {
                     label[q] = id;
                     queue.push_back(q);
                 }
-            };
-            if !two_d {
-                if i > 0 {
-                    visit(p - d1 * d2);
-                }
-                if i + 1 < d0 {
-                    visit(p + d1 * d2);
-                }
-            }
-            if j > 0 {
-                visit(p - d2);
-            }
-            if j + 1 < d1 {
-                visit(p + d2);
-            }
-            if k > 0 {
-                visit(p - 1);
-            }
-            if k + 1 < d2 {
-                visit(p + 1);
             }
         }
         sizes.push(size);

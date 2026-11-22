@@ -1,11 +1,15 @@
 //! Several bones in one image: labelled connected components, hysteresis
 //! growth, and per-bone starting segmentations kept apart.
 
+use std::collections::VecDeque;
+
 use ndarray::{Array3, ArrayView3, Zip};
 use rayon::prelude::*;
 
 use super::hull::slice_hulls;
-use super::morphology::{binary_median, fill_slice_holes, label_components, outer_region, scaled_sq_distance};
+use super::morphology::{
+    binary_median, fill_slice_holes, label_components, neighbours6, outer_region, scaled_sq_distance,
+};
 use crate::volume::Voxel;
 
 /// Options of [`label_bones`].
@@ -92,39 +96,19 @@ pub fn grow_bones<T: Voxel>(
     if median_kernel.iter().any(|&k| k > 1) {
         low = binary_median(&low, median_kernel);
     }
-    let (d0, d1, d2) = image.dim();
     let mut out = labels.to_owned();
-    let mut queue: std::collections::VecDeque<(usize, usize, usize)> = std::collections::VecDeque::new();
-    for ((i, j, k), &l) in out.indexed_iter() {
-        if l != 0 {
-            queue.push_back((i, j, k));
-        }
-    }
-    while let Some((i, j, k)) = queue.pop_front() {
-        let l = out[[i, j, k]];
-        let mut visit = |a: usize, b: usize, c: usize| {
-            if out[[a, b, c]] == 0 && low[[a, b, c]] {
-                out[[a, b, c]] = l;
-                queue.push_back((a, b, c));
+    let mut queue: VecDeque<[usize; 3]> = out
+        .indexed_iter()
+        .filter(|(_, &l)| l != 0)
+        .map(|((i, j, k), _)| [i, j, k])
+        .collect();
+    while let Some(p) = queue.pop_front() {
+        let l = out[p];
+        for q in neighbours6(p, image.dim()) {
+            if out[q] == 0 && low[q] {
+                out[q] = l;
+                queue.push_back(q);
             }
-        };
-        if i > 0 {
-            visit(i - 1, j, k);
-        }
-        if i + 1 < d0 {
-            visit(i + 1, j, k);
-        }
-        if j > 0 {
-            visit(i, j - 1, k);
-        }
-        if j + 1 < d1 {
-            visit(i, j + 1, k);
-        }
-        if k > 0 {
-            visit(i, j, k - 1);
-        }
-        if k + 1 < d2 {
-            visit(i, j, k + 1);
         }
     }
     out
@@ -173,18 +157,10 @@ pub fn bone_hulls(
             continue;
         }
         let d = scaled_sq_distance(&mb, inv);
-        let mut hull = match closing_radius {
-            Some(r) => closing(&mb, &d, inv, r),
-            None => slice_hulls(&mb),
-        };
-        if let Some(r) = max_distance {
-            let r2 = (r * r) as f32;
-            Zip::from(&mut hull).and(&d).par_for_each(|h, &dv| *h &= dv <= r2);
-            hull = outer_region(&hull.mapv(|b| !b), true).mapv(|b| !b);
-        }
+        let start = bone_start(&mb, &d, inv, max_distance, closing_radius);
         Zip::from(&mut owner)
             .and(&mut best)
-            .and(&hull)
+            .and(&start)
             .and(&d)
             .par_for_each(|o, bst, &h, &dv| {
                 if h && dv < *bst {
@@ -193,48 +169,71 @@ pub fn bone_hulls(
                 }
             });
     }
-    let (d0, d1, d2) = dim;
+    let mut out = separate(&owner, &labels);
+    for b in 1..=n {
+        drop_fragments(&mut out, &labels, b);
+    }
+    out
+}
+
+/// One bone's start (`mb`, squared distance map `d`): its slice hulls or
+/// closing, optionally trimmed to `max_distance` of the bone with the slice
+/// holes filled.
+fn bone_start(
+    mb: &Array3<bool>,
+    d: &Array3<f32>,
+    inv: [f64; 3],
+    max_distance: Option<f64>,
+    closing_radius: Option<f64>,
+) -> Array3<bool> {
+    let mut start = match closing_radius {
+        Some(r) => closing(mb, d, inv, r),
+        None => slice_hulls(mb),
+    };
+    if let Some(r) = max_distance {
+        let r2 = (r * r) as f32;
+        Zip::from(&mut start).and(d).par_for_each(|h, &dv| *h &= dv <= r2);
+        start = outer_region(&start.mapv(|b| !b), true).mapv(|b| !b);
+    }
+    start
+}
+
+/// Clear the voxels of each bone's region that touch another bone's
+/// (6-neighbourhood), except its own thresholded bone (`labels`).
+fn separate(owner: &Array3<u16>, labels: &ArrayView3<u16>) -> Array3<u16> {
     let mut out = owner.clone();
     Zip::indexed(&mut out).par_for_each(|(i, j, k), o| {
         let b = owner[[i, j, k]];
         if b == 0 || labels[[i, j, k]] == b {
             return;
         }
-        let other = |q: [usize; 3]| {
-            let c = owner[q];
-            c != 0 && c != b
-        };
-        let touches = (i > 0 && other([i - 1, j, k]))
-            || (i + 1 < d0 && other([i + 1, j, k]))
-            || (j > 0 && other([i, j - 1, k]))
-            || (j + 1 < d1 && other([i, j + 1, k]))
-            || (k > 0 && other([i, j, k - 1]))
-            || (k + 1 < d2 && other([i, j, k + 1]));
+        let touches = neighbours6([i, j, k], owner.dim()).any(|q| owner[q] != 0 && owner[q] != b);
         if touches {
             *o = 0;
         }
     });
-    // keep, per bone, only the pieces that contain some of its thresholded
-    // bone (the assignment and the clearing can cut off small fragments)
-    for b in 1..=n {
-        let mb = out.mapv(|v| v == b);
-        let (comp, sizes) = label_components(&mb, false);
-        if sizes.len() <= 2 {
-            continue;
-        }
-        let mut has_bone = vec![false; sizes.len()];
-        for (c, &l) in comp.iter().zip(labels.iter()) {
-            if *c != 0 && l == b {
-                has_bone[*c as usize] = true;
-            }
-        }
-        for (o, c) in out.iter_mut().zip(comp.iter()) {
-            if *c != 0 && !has_bone[*c as usize] {
-                *o = 0;
-            }
+    out
+}
+
+/// Keep only the pieces of bone `b`'s region that contain some of its
+/// thresholded bone (assigning and separating can cut off small fragments).
+fn drop_fragments(out: &mut Array3<u16>, labels: &ArrayView3<u16>, b: u16) {
+    let mb = out.mapv(|v| v == b);
+    let (comp, sizes) = label_components(&mb, false);
+    if sizes.len() <= 2 {
+        return;
+    }
+    let mut has_bone = vec![false; sizes.len()];
+    for (c, &l) in comp.iter().zip(labels.iter()) {
+        if *c != 0 && l == b {
+            has_bone[*c as usize] = true;
         }
     }
-    out
+    for (o, c) in out.iter_mut().zip(comp.iter()) {
+        if *c != 0 && !has_bone[*c as usize] {
+            *o = 0;
+        }
+    }
 }
 
 /// Morphological closing of `m` by a ball of radius `r` (physical units)

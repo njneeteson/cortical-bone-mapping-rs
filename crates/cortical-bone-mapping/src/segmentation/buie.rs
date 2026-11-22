@@ -137,58 +137,19 @@ pub fn buie<T: Voxel>(image: ArrayView3<T>, o: &BuieOptions) -> BuieResult {
     });
     let shape = (d0, d1 + 2 * pad[1], d2 + 2 * pad[2]);
     let inner = s![.., pad[1]..pad[1] + d1, pad[2]..pad[2] + d2];
-    let conn = |m: &Array3<bool>| outer_region(m, o.connectivity_2d);
-
-    // ---- step 1: periosteal surface
-    // 2. threshold
-    let mut s2 = Array3::from_elem(shape, false);
-    Zip::from(s2.slice_mut(inner))
-        .and(&image)
-        .par_for_each(|b, &v| *b = v.to_f64() >= o.periosteal_threshold);
-    // 3. median
-    let mut s3 = binary_median(&s2, o.median_kernel);
-    drop(s2);
-    // pre-processing: keep the largest bone before any dilation, so that a
-    // nearby fibula / ulna cannot be merged with it by the closing
-    if o.largest_bone_only {
-        s3 = largest_component(&s3, o.connectivity_2d);
-    }
-    // 4. dilate
-    let s4 = dilate(&s3, o.periosteal_kernel);
-    drop(s3);
-    // 5. select the outer non-bone region; bone is everything else
-    let bg = s4.mapv(|b| !b);
-    drop(s4);
-    let s5 = conn(&bg).mapv(|b| !b);
-    drop(bg);
-    // 6. erode
-    let periosteal = erode(&s5, o.periosteal_kernel);
-    drop(s5);
-
-    // ---- step 2: endosteal surface
-    // 7–8. marrow cavities: below T2 inside the periosteal mask
+    let periosteal = {
+        let mut s2 = Array3::from_elem(shape, false);
+        Zip::from(s2.slice_mut(inner))
+            .and(&image)
+            .par_for_each(|b, &v| *b = v.to_f64() >= o.periosteal_threshold);
+        periosteal_region(s2, o)
+    };
     let mut marrow = Array3::from_elem(shape, false);
     Zip::from(marrow.slice_mut(inner))
         .and(&image)
         .and(periosteal.slice(inner))
         .par_for_each(|m, &v, &p| *m = p && v.to_f64() < o.endosteal_threshold);
-    // 9. dilate the marrow
-    let s9 = dilate(&marrow, o.endosteal_kernel);
-    drop(marrow);
-    // 10. select the outer white (non-marrow) region
-    let white = s9.mapv(|b| !b);
-    drop(s9);
-    let s10_white = conn(&white);
-    drop(white);
-    // 11. erode the marrow = dilate the white region
-    let s11_white = dilate(&s10_white, o.endosteal_kernel);
-    drop(s10_white);
-    // 12. Gaussian smooth, 13. threshold by lower (marrow where ≤ threshold)
-    let r = o.gaussian_support.map(|f| (o.gaussian_sigma * f).floor() as usize);
-    let sm = gaussian_truncated(&s11_white, o.gaussian_sigma, r);
-    drop(s11_white);
-    let non_marrow = sm.mapv(|v| v as f64 > o.smoothed_threshold);
-    drop(sm);
+    let non_marrow = non_marrow_region(marrow, o);
     // 14. combine
     let mut cortical = Array3::from_elem((d0, d1, d2), false);
     let mut trabecular = Array3::from_elem((d0, d1, d2), false);
@@ -205,4 +166,44 @@ pub fn buie<T: Voxel>(image: ArrayView3<T>, o: &BuieOptions) -> BuieResult {
         cortical,
         trabecular,
     }
+}
+
+/// Steps 3–6, the periosteal surface: from the thresholded bone `s2`
+/// (step 2), median, (largest bone,) dilate, fill everything but the outer
+/// background, erode.
+fn periosteal_region(s2: Array3<bool>, o: &BuieOptions) -> Array3<bool> {
+    let mut s3 = binary_median(&s2, o.median_kernel);
+    drop(s2);
+    // pre-processing: keep the largest bone before any dilation, so that a
+    // nearby fibula / ulna cannot be merged with it by the closing
+    if o.largest_bone_only {
+        s3 = largest_component(&s3, o.connectivity_2d);
+    }
+    let s4 = dilate(&s3, o.periosteal_kernel);
+    drop(s3);
+    let bg = s4.mapv(|b| !b);
+    drop(s4);
+    let s5 = outer_region(&bg, o.connectivity_2d).mapv(|b| !b);
+    drop(bg);
+    erode(&s5, o.periosteal_kernel)
+}
+
+/// Steps 9–13, the endosteal surface: from the marrow cavities (steps 7–8,
+/// below the endosteal threshold inside the periosteal region), dilate, take
+/// the outer non-marrow region, dilate it back, smooth and threshold.
+fn non_marrow_region(marrow: Array3<bool>, o: &BuieOptions) -> Array3<bool> {
+    let s9 = dilate(&marrow, o.endosteal_kernel);
+    drop(marrow);
+    let white = s9.mapv(|b| !b);
+    drop(s9);
+    let s10_white = outer_region(&white, o.connectivity_2d);
+    drop(white);
+    // 11. erode the marrow = dilate the white region
+    let s11_white = dilate(&s10_white, o.endosteal_kernel);
+    drop(s10_white);
+    // 12. Gaussian smooth, 13. threshold by lower (marrow where ≤ threshold)
+    let r = o.gaussian_support.map(|f| (o.gaussian_sigma * f).floor() as usize);
+    let sm = gaussian_truncated(&s11_white, o.gaussian_sigma, r);
+    drop(s11_white);
+    sm.mapv(|v| v as f64 > o.smoothed_threshold)
 }

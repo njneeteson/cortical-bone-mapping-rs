@@ -3,6 +3,7 @@ one bone at a time."""
 
 from __future__ import annotations
 
+import sys
 from dataclasses import fields, replace
 from typing import Literal, Optional, Sequence, Union
 
@@ -80,81 +81,99 @@ def separate_bones(image, threshold: Union[float, Literal["otsu"]], landmarks: d
     across a thin soft-tissue gap): within that bone only, the threshold is
     raised by ``step`` (default 5% of the threshold) until the landmarks fall
     on different pieces, up to ``max_threshold`` (default: the 99th
-    percentile of that bone's values), which is an error. Bones that were already separate keep the original
-    threshold; pieces of a split bone smaller than ``min_size`` are dropped.
+    percentile of that bone's values), which is an error. Bones that were
+    already separate keep the original threshold; pieces of a split bone
+    smaller than ``min_size`` are dropped.
 
     Returns ``(labels, names, thresholds)``: uint16 labels ordered by size
     (1 = largest), ``{label: name}`` for the landmarked bones, and
     ``{name: threshold}`` used for each landmarked bone.
     """
-    import sys
-
     img = _as_image(image)
     sp = np.asarray(_triple(spacing, "spacing"))
     org = np.asarray(_triple(origin, "origin"))
-    if isinstance(threshold, str):
-        if threshold != "otsu":
-            raise ValueError('threshold must be a number or "otsu"')
-        threshold = otsu_thresholds(img, floor=otsu_floor)[0]
-    t0 = float(threshold)
+    t0 = _threshold(img, threshold, otsu_floor)
     step = float(step) if step is not None else 0.05 * abs(t0)
     if not step > 0:
         raise ValueError("step must be positive")
-    lab, _ = label_bones(img, t0, median_kernel, min_size)
-    lab = lab.astype(np.uint32)
+    lab = label_bones(img, t0, median_kernel, min_size)[0].astype(np.uint32)
     used = {name: t0 for name in landmarks}
-    next_id = int(lab.max()) + 1
-    while True:
-        where = _landmark_bones(lab, landmarks, sp, org)
-        shared = {}
-        for name, b in where.items():
-            shared.setdefault(b, []).append(name)
-        merged = [(b, ns) for b, ns in shared.items() if b > 0 and len(ns) > 1]
-        if not merged:
-            break
-        b, ns = merged[0]
+    while (merged := _first_merged(lab, landmarks, sp, org)) is not None:
+        b, ns = merged
         comp = lab == b
-        box = tuple(slice(int(a), int(c) + 1) for a, c in zip(np.argwhere(comp).min(0), np.argwhere(comp).max(0)))
-        sub_img = np.where(comp[box], img[box], -np.inf).astype(np.float32)
-        sub_org = org + np.array([s.start for s in box]) * sp
         tmax = float(max_threshold) if max_threshold is not None else float(np.percentile(img[comp], 99))
-        t = t0
-        while True:
-            t += step
-            if t > tmax:
-                raise ValueError(f"landmarks {ns} stay on one bone up to threshold {tmax:g}; "
-                                 "the bones could not be separated")
-            pieces, _ = label_bones(sub_img, t, median_kernel, min_size)
-            w = _landmark_bones(pieces, {n: landmarks[n] for n in ns}, sp, sub_org)
-            if len(set(w.values())) == len(ns) and 0 not in w.values():
-                break
-        if verbose:
-            print(f"separate_bones: {', '.join(ns)} shared one bone at {t0:g}; separated at {t:g}", file=sys.stderr)
-        region = lab[box]
-        region[comp[box]] = 0
-        for k in range(1, int(pieces.max()) + 1):
-            region[pieces == k] = next_id
-            next_id += 1
-        for n in ns:
-            used[n] = t
+        box, pieces, t = _split(img, comp, {n: landmarks[n] for n in ns}, sp, org, t0, step, tmax,
+                                median_kernel, min_size)
+        _log(verbose, f"separate_bones: {', '.join(ns)} shared one bone at {t0:g}; separated at {t:g}")
+        _replace_bone(lab, comp, box, pieces)
+        used.update({n: t for n in ns})
     lab, sizes = _relabel_by_size(lab)
     if max_bones is not None and len(sizes) > max_bones:
         lab[lab > max_bones] = 0
         sizes = sizes[:max_bones]
     names = name_bones(lab, landmarks, sp, org)
-    if verbose:
-        print(f"separate_bones: {len(sizes)} bone(s): " + ", ".join(
-            f"{k}{' (' + names[k] + ')' if k in names else ''} {s} voxels" for k, s in enumerate(sizes, 1)),
-            file=sys.stderr)
+    _log(verbose, f"separate_bones: {len(sizes)} bone(s): " + ", ".join(
+        f"{k}{' (' + names[k] + ')' if k in names else ''} {s} voxels" for k, s in enumerate(sizes, 1)))
     return lab, names, used
 
 
-def _per_bone(fn, image, labels, spacing, bones, options, per_bone, crop, verbose, kwargs, names=None,
-              exclude_of=None, mask_of=None, report=True):
-    lab = np.asarray(labels)
-    img = np.asarray(image)
-    if img.shape != lab.shape:
-        raise ValueError(f"image {img.shape} and labels {lab.shape} shapes differ")
+def _threshold(img, threshold, otsu_floor):
+    """A number, or the two-class Otsu threshold for ``"otsu"``."""
+    if isinstance(threshold, str):
+        if threshold != "otsu":
+            raise ValueError('threshold must be a number or "otsu"')
+        threshold = otsu_thresholds(img, floor=otsu_floor)[0]
+    return float(threshold)
+
+
+def _first_merged(lab, landmarks, sp, org):
+    """The first bone with several landmarks on it, as ``(label, names)``,
+    or None."""
+    shared = {}
+    for name, b in _landmark_bones(lab, landmarks, sp, org).items():
+        shared.setdefault(b, []).append(name)
+    return next(((b, ns) for b, ns in shared.items() if b > 0 and len(ns) > 1), None)
+
+
+def _split(img, comp, marks, sp, org, t0, step, tmax, median_kernel, min_size):
+    """Raise the threshold within the bone ``comp`` from ``t0`` by ``step``
+    until each landmark of ``marks`` is on its own piece. Returns the bone's
+    bounding box, the labelled pieces in it, and the threshold."""
+    idx = np.argwhere(comp)
+    box = tuple(slice(int(a), int(c) + 1) for a, c in zip(idx.min(0), idx.max(0)))
+    sub_img = np.where(comp[box], img[box], -np.inf).astype(np.float32)
+    sub_org = org + np.array([s.start for s in box]) * sp
+    t = t0
+    while True:
+        t += step
+        if t > tmax:
+            raise ValueError(f"landmarks {list(marks)} stay on one bone up to threshold {tmax:g}; "
+                             "the bones could not be separated")
+        pieces, _ = label_bones(sub_img, t, median_kernel, min_size)
+        w = _landmark_bones(pieces, marks, sp, sub_org)
+        if len(set(w.values())) == len(marks) and 0 not in w.values():
+            return box, pieces, t
+
+
+def _replace_bone(lab, comp, box, pieces):
+    """Replace the bone ``comp`` in ``lab`` (in place) by its ``pieces``
+    (labelled within ``box``), under new labels."""
+    next_id = int(lab.max()) + 1
+    region = lab[box]
+    region[comp[box]] = 0
+    for k in range(1, int(pieces.max()) + 1):
+        region[pieces == k] = next_id
+        next_id += 1
+
+
+def _log(verbose, message):
+    if verbose:
+        print(message, file=sys.stderr, flush=True)
+
+
+def _bone_ids(lab, bones=None):
+    """The labels to fit (default: every label present), checked, from the
+    smallest bone to the largest; and the voxel count per label."""
     counts = np.bincount(lab.ravel().astype(np.int64))
     ids = [int(b) for b in (bones if bones is not None else np.flatnonzero(counts[1:]) + 1)]
     for b in ids:
@@ -162,44 +181,65 @@ def _per_bone(fn, image, labels, spacing, bones, options, per_bone, crop, verbos
             raise ValueError(f"no voxels with label {b}")
     # smallest bone first: small bones are quick, and problems show early
     ids.sort(key=lambda b: (counts[b], b))
-    sp0 = np.asarray(_make_options(options, spacing, {}).spacing, float)
-    if verbose and report:
-        import sys
+    return ids, counts
 
-        print(f"{len(ids)} bone(s), fitted from smallest to largest:", file=sys.stderr)
-        for b in ids:
-            nm = f" ({names[b]})" if names and b in names else ""
-            print(f"  bone {b}{nm}: {counts[b]} voxels, {counts[b] * sp0.prod():.0f} mm^3", file=sys.stderr)
-        sys.stderr.flush()
+
+def _list_bones(ids, counts, voxel_volume, names):
+    print(f"{len(ids)} bone(s), fitted from smallest to largest:", file=sys.stderr)
+    for b in ids:
+        nm = f" ({names[b]})" if names and b in names else ""
+        print(f"  bone {b}{nm}: {counts[b]} voxels, {counts[b] * voxel_volume:.0f} mm^3", file=sys.stderr)
+    sys.stderr.flush()
+
+
+def _per_bone(fn, image, labels, spacing, bones, options, per_bone, crop, verbose, kwargs, names=None,
+              exclude_of=None, mask_of=None, report=True):
+    """``fn`` (mapping or refinement) on each bone of ``bones``, with its
+    overrides from ``per_bone``; ``mask_of`` / ``exclude_of`` give each bone's
+    start and excluded region (default: its label, nothing)."""
+    lab = np.asarray(labels)
+    img = np.asarray(image)
+    if img.shape != lab.shape:
+        raise ValueError(f"image {img.shape} and labels {lab.shape} shapes differ")
+    ids, counts = _bone_ids(lab, bones)
+    if verbose and report:
+        _list_bones(ids, counts, np.prod(_make_options(options, spacing, {}).spacing), names)
     out = {}
     for b in ids:
         kw = dict(kwargs)
         kw.update((per_bone or {}).get(b, {}))
-        m = lab == b if mask_of is None else mask_of(b)
-        ex = None if exclude_of is None else exclude_of(b)
         o = _make_options(options, spacing, {k: v for k, v in kw.items() if k in _OPTION_FIELDS})
         rest = {k: v for k, v in kw.items() if k not in _OPTION_FIELDS}
         if fn is refine_segmentation:
             if "label" not in rest and not (rest.get("refine") and rest["refine"].label):
                 rest["label"] = names[b] if names and b in names else f"bone {b}"  # progress prefix
             rest.setdefault("verbose", verbose)
-        if crop:
-            sp = np.asarray(o.spacing, float)
-            margin = np.ceil((o.outside + o.inside) / sp).astype(int) + 2
-            idx = np.argwhere(m)
-            lo = np.maximum(idx.min(0) - margin, 0)
-            hi = np.minimum(idx.max(0) + margin + 1, lab.shape)
-            sl = tuple(slice(int(a), int(c)) for a, c in zip(lo, hi))
-            oc = replace(o, origin=tuple(float(v) for v in np.asarray(o.origin, float) + lo * sp))
-            if ex is not None:
-                rest["exclude"] = np.ascontiguousarray(ex[sl])
-            r = fn(np.ascontiguousarray(img[sl]), m[sl], options=oc, **rest)
-            out[b] = _uncrop(r, sl, lab.shape, o)
-        else:
-            if ex is not None:
-                rest["exclude"] = ex
-            out[b] = fn(img, m, options=o, **rest)
+        m = lab == b if mask_of is None else mask_of(b)
+        ex = None if exclude_of is None else exclude_of(b)
+        out[b] = (_fit_cropped if crop else _fit_whole)(fn, img, m, ex, o, rest)
     return out
+
+
+def _fit_whole(fn, img, m, ex, o, rest):
+    if ex is not None:
+        rest = dict(rest, exclude=ex)
+    return fn(img, m, options=o, **rest)
+
+
+def _fit_cropped(fn, img, m, ex, o, rest):
+    """``fn`` on the bounding box of ``m`` plus the sampling range; results
+    in the full image."""
+    sp = np.asarray(o.spacing, float)
+    margin = np.ceil((o.outside + o.inside) / sp).astype(int) + 2
+    idx = np.argwhere(m)
+    lo = np.maximum(idx.min(0) - margin, 0)
+    hi = np.minimum(idx.max(0) + margin + 1, img.shape)
+    sl = tuple(slice(int(a), int(c)) for a, c in zip(lo, hi))
+    oc = replace(o, origin=tuple(float(v) for v in np.asarray(o.origin, float) + lo * sp))
+    if ex is not None:
+        rest = dict(rest, exclude=np.ascontiguousarray(ex[sl]))
+    r = fn(np.ascontiguousarray(img[sl]), m[sl], options=oc, **rest)
+    return _uncrop(r, sl, img.shape, o)
 
 
 def _uncrop(r, sl, shape, options):
@@ -264,50 +304,38 @@ def refine_bones(image, labels, spacing: Union[float, Sequence[float], None] = N
     bone's region changes by more than ``round_tolerance`` (fraction of its
     voxels). Returns ``{label: RefineResult}`` from the last round.
     """
-    import sys
-
-    kw = dict(kwargs)
-    if refine is not None:
-        kw["refine"] = refine
+    kw = dict(kwargs, refine=refine) if refine is not None else dict(kwargs)
     lab = np.asarray(labels)
-    ids = [int(b) for b in (bones if bones is not None else np.flatnonzero(np.bincount(lab.ravel())[1:]) + 1)]
+    ids, counts = _bone_ids(lab, bones)
+    if verbose:
+        _list_bones(ids, counts, np.prod(_make_options(options, spacing, {}).spacing), names)
     regions = {b: lab == b for b in ids}
-
-    def others(b):
-        if not exclude_others:
-            return None
-        ex = np.zeros(lab.shape, dtype=np.uint8)
-        for c, r in regions.items():
-            if c != b:
-                ex |= r.astype(np.uint8)
-        return ex
-
-    out = {}
-    for rnd in range(max(1, int(rounds))):
-        if verbose and rounds > 1:
-            print(f"round {rnd + 1} of at most {rounds}", file=sys.stderr, flush=True)
+    exclude_of = (lambda b: _others(regions, b, lab.shape)) if exclude_others else None
+    rounds = max(1, int(rounds))
+    for rnd in range(rounds):
+        if rounds > 1:
+            _log(verbose, f"round {rnd + 1} of at most {rounds}")
         prev = {b: r.copy() for b, r in regions.items()}
-
-        def mask_of(b):
-            return prev[b] if rnd > 0 else lab == b
-
-        def exclude_of(b):
-            return others(b)
-
-        res = {}
-        # run the bones one at a time, so that later bones see earlier refined regions
-        order = sorted(ids, key=lambda b: (int(prev[b].sum()), b))
-        for b in order:
-            res.update(_per_bone(refine_segmentation, image, labels, spacing, [b], options, per_bone, crop,
-                                 verbose, kw, names, exclude_of=exclude_of, mask_of=mask_of,
-                                 report=(rnd == 0 and b == order[0])))
-            regions[b] = res[b].periosteal_mask
-        out = res
+        out = {}
+        # one bone at a time, so that later bones see earlier refined regions
+        for b in sorted(ids, key=lambda b: (int(prev[b].sum()), b)):
+            out.update(_per_bone(refine_segmentation, image, lab, spacing, [b], options, per_bone, crop, verbose,
+                                 kw, names, exclude_of=exclude_of, mask_of=prev.get, report=False))
+            regions[b] = out[b].periosteal_mask
         change = {b: float((regions[b] ^ prev[b]).sum()) / max(1, int(prev[b].sum())) for b in ids}
-        if verbose and rounds > 1:
-            print("round %d: region change per bone %s" % (rnd + 1, {
-                (names.get(b, b) if names else b): round(v, 4) for b, v in change.items()}), file=sys.stderr,
-                flush=True)
+        if rounds > 1:
+            _log(verbose, "round %d: region change per bone %s" % (rnd + 1, {
+                (names.get(b, b) if names else b): round(v, 4) for b, v in change.items()}))
         if rnd > 0 and max(change.values()) < round_tolerance:
             break
     return out
+
+
+def _others(regions, b, shape):
+    """The union of every region but bone ``b``'s."""
+    ex = np.zeros(shape, dtype=np.uint8)
+    for c, r in regions.items():
+        if c != b:
+            ex |= r.astype(np.uint8)
+    return ex
+

@@ -14,77 +14,76 @@ impl Mesh {
     /// closed mesh, including self-intersecting ones (where the parity rule
     /// decides). Memory is the output plus 8 bytes per ray crossing.
     pub fn voxelize(&self, shape: (usize, usize, usize), geom: &Geometry) -> Array3<bool> {
-        let (d0, d1, d2) = shape;
-        // Crossings (column id, axis-0 index coordinate).
+        let (_, d1, d2) = shape;
         let tri_idx: Vec<[V3; 3]> = self
             .faces
             .iter()
             .map(|f| f.map(|i| geom.to_index(self.vertices[i as usize])))
             .collect();
-        // Tiny irrational offset so rays never pass exactly through vertices
-        // or edges lying on the integer lattice.
-        const EPS1: f64 = 1.234_567e-7;
-        const EPS2: f64 = 7.654_321e-8;
         let mut crossings: Vec<(u32, f32)> = tri_idx
             .par_iter()
-            .flat_map_iter(|t| {
-                let mut out = Vec::new();
-                let (min1, max1) = minmax(t[0][1], t[1][1], t[2][1]);
-                let (min2, max2) = minmax(t[0][2], t[1][2], t[2][2]);
-                let j0 = (min1 - EPS1).ceil().max(0.0) as isize;
-                let j1 = ((max1 - EPS1).floor() as isize).min(d1 as isize - 1);
-                let k0 = (min2 - EPS2).ceil().max(0.0) as isize;
-                let k1 = ((max2 - EPS2).floor() as isize).min(d2 as isize - 1);
-                let (p, q, r) = (t[0], t[1], t[2]);
-                let det = (q[1] - p[1]) * (r[2] - p[2]) - (r[1] - p[1]) * (q[2] - p[2]);
-                if det.abs() < 1e-300 {
-                    return out.into_iter();
-                }
-                for j in j0..=j1 {
-                    for k in k0..=k1 {
-                        let y = j as f64 + EPS1;
-                        let z = k as f64 + EPS2;
-                        let u = ((y - p[1]) * (r[2] - p[2]) - (r[1] - p[1]) * (z - p[2])) / det;
-                        let v = ((q[1] - p[1]) * (z - p[2]) - (y - p[1]) * (q[2] - p[2])) / det;
-                        if u >= 0.0 && v >= 0.0 && u + v <= 1.0 {
-                            let x = p[0] + u * (q[0] - p[0]) + v * (r[0] - p[0]);
-                            out.push(((j as usize * d2 + k as usize) as u32, x as f32));
-                        }
-                    }
-                }
-                out.into_iter()
-            })
+            .flat_map_iter(|t| ray_crossings(t, d1, d2).into_iter())
             .collect();
         crossings.par_sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.partial_cmp(&b.1).unwrap()));
-        let mut out = Array3::from_elem(shape, false);
-        // Fill column by column.
-        let mut s = 0;
-        while s < crossings.len() {
-            let col = crossings[s].0;
-            let mut e = s;
-            while e < crossings.len() && crossings[e].0 == col {
-                e += 1;
-            }
-            let (j, k) = (col as usize / d2, col as usize % d2);
-            let xs = &crossings[s..e];
-            for pair in xs.chunks(2) {
-                if pair.len() < 2 {
-                    break;
-                }
-                let a = (pair[0].1 as f64).ceil().max(0.0) as usize;
-                let b = (pair[1].1 as f64).floor();
-                if b < 0.0 {
-                    continue;
-                }
-                let b = (b as usize).min(d0 - 1);
-                for i in a..=b {
-                    out[[i, j, k]] = true;
-                }
-            }
-            s = e;
-        }
-        out
+        fill_columns(&crossings, shape)
     }
+}
+
+/// Tiny irrational offsets so rays never pass exactly through vertices or
+/// edges lying on the integer lattice.
+const EPS1: f64 = 1.234_567e-7;
+const EPS2: f64 = 7.654_321e-8;
+
+/// Where the axis-0 rays through the voxel columns `(j, k)` (`d1 × d2` of
+/// them) cross the triangle `t` (index coordinates): (column id, axis-0
+/// coordinate).
+fn ray_crossings(t: &[V3; 3], d1: usize, d2: usize) -> Vec<(u32, f32)> {
+    let mut out = Vec::new();
+    let (min1, max1) = minmax(t[0][1], t[1][1], t[2][1]);
+    let (min2, max2) = minmax(t[0][2], t[1][2], t[2][2]);
+    let j0 = (min1 - EPS1).ceil().max(0.0) as isize;
+    let j1 = ((max1 - EPS1).floor() as isize).min(d1 as isize - 1);
+    let k0 = (min2 - EPS2).ceil().max(0.0) as isize;
+    let k1 = ((max2 - EPS2).floor() as isize).min(d2 as isize - 1);
+    let (p, q, r) = (t[0], t[1], t[2]);
+    let det = (q[1] - p[1]) * (r[2] - p[2]) - (r[1] - p[1]) * (q[2] - p[2]);
+    if det.abs() < 1e-300 {
+        return out;
+    }
+    for j in j0..=j1 {
+        for k in k0..=k1 {
+            let y = j as f64 + EPS1;
+            let z = k as f64 + EPS2;
+            let u = ((y - p[1]) * (r[2] - p[2]) - (r[1] - p[1]) * (z - p[2])) / det;
+            let v = ((q[1] - p[1]) * (z - p[2]) - (y - p[1]) * (q[2] - p[2])) / det;
+            if u >= 0.0 && v >= 0.0 && u + v <= 1.0 {
+                let x = p[0] + u * (q[0] - p[0]) + v * (r[0] - p[0]);
+                out.push(((j as usize * d2 + k as usize) as u32, x as f32));
+            }
+        }
+    }
+    out
+}
+
+/// Fill each column between successive pairs of its (sorted) crossings.
+fn fill_columns(crossings: &[(u32, f32)], shape: (usize, usize, usize)) -> Array3<bool> {
+    let (d0, _, d2) = shape;
+    let mut out = Array3::from_elem(shape, false);
+    for xs in crossings.chunk_by(|a, b| a.0 == b.0) {
+        let (j, k) = (xs[0].0 as usize / d2, xs[0].0 as usize % d2);
+        for [first, second] in xs.as_chunks::<2>().0 {
+            let a = (first.1 as f64).ceil().max(0.0) as usize;
+            let b = (second.1 as f64).floor();
+            if b < 0.0 {
+                continue;
+            }
+            let b = (b as usize).min(d0 - 1);
+            for i in a..=b {
+                out[[i, j, k]] = true;
+            }
+        }
+    }
+    out
 }
 
 #[inline]

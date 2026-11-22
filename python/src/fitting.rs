@@ -94,22 +94,7 @@ pub(crate) fn refine<'py>(
     d.set_item("periosteal_mask", r.periosteal_mask.into_pyarray(py))?;
     d.set_item("endosteal_mask", r.endosteal_mask.into_pyarray(py))?;
     d.set_item("cortical_mask", r.cortical_mask.into_pyarray(py))?;
-    let hist = PyList::empty(py);
-    for h in &r.history {
-        let e = PyDict::new(py);
-        e.set_item("rms_displacement", h.rms_displacement)?;
-        e.set_item("max_displacement", h.max_displacement)?;
-        e.set_item("mean_thickness", h.mean_thickness)?;
-        e.set_item("mean_residual", h.mean_residual)?;
-        e.set_item("nodes", h.nodes)?;
-        e.set_item("moving_nodes", h.moving_nodes)?;
-        e.set_item("full_fit", h.full_fit)?;
-        e.set_item("fit_converged", h.fit_converged)?;
-        e.set_item("untrusted", h.untrusted)?;
-        e.set_item("max_regional_rms", h.max_regional_rms)?;
-        hist.append(e)?;
-    }
-    d.set_item("history", hist)?;
+    d.set_item("history", history_list(py, &r.history)?)?;
     let surfs = PyList::empty(py);
     let sfaces = PyList::empty(py);
     for s in &r.surfaces {
@@ -123,6 +108,26 @@ pub(crate) fn refine<'py>(
     d.set_item("message", &r.message)?;
     d.set_item("timings", r.timings.clone())?;
     Ok(d)
+}
+
+/// A refinement's per-fit statistics as a list of dicts.
+fn history_list<'py>(py: Python<'py>, history: &[cbm::IterationStats]) -> PyResult<Bound<'py, PyList>> {
+    let hist = PyList::empty(py);
+    for h in history {
+        let e = PyDict::new(py);
+        e.set_item("rms_displacement", h.rms_displacement)?;
+        e.set_item("max_displacement", h.max_displacement)?;
+        e.set_item("mean_thickness", h.mean_thickness)?;
+        e.set_item("mean_residual", h.mean_residual)?;
+        e.set_item("nodes", h.nodes)?;
+        e.set_item("moving_nodes", h.moving_nodes)?;
+        e.set_item("full_fit", h.full_fit)?;
+        e.set_item("fit_converged", h.fit_converged)?;
+        e.set_item("untrusted", h.untrusted)?;
+        e.set_item("max_regional_rms", h.max_regional_rms)?;
+        hist.append(e)?;
+    }
+    Ok(hist)
 }
 
 /// Fit the profile model independently to each row of `profiles` (N × M)
