@@ -1,16 +1,51 @@
 //! Imaging blur (point-spread function) handling.
 //!
 //! Treece et al. (2012, 2015) hold the blur `σ` fixed while fitting, using an
-//! estimate of the scanner's point-spread function (PSF). For a Gaussian PSF
-//! with standard deviations `s = (s0, s1, s2)` along the array axes, the blur
-//! seen along a line with unit direction `n` is
-//! `σ(n) = sqrt(Σ_a n_a² s_a²)`, so it depends on the profile direction
-//! (CT blur is usually larger along the scanner axis).
+//! estimate of the scanner's point-spread function (PSF). For a separable
+//! Gaussian PSF with standard deviations `s = (s0, s1, s2)` along the array
+//! axes, the line-spread function along a line with unit direction `n` is the
+//! projection of the PSF onto that line, a Gaussian with variance
 //!
-//! [`estimate_psf`] estimates `s` from a first fit with `σ` free, by least
-//! squares regression of `σᵢ²` on `nᵢ²` over nodes where `σ` is well
-//! determined (cortex thick relative to the blur, `σ` not on a bound), with
-//! robust outlier rejection.
+//! ```text
+//! σ(n)² = nᵀ diag(s²) n = Σ_a n_a² s_a²
+//! ```
+//!
+//! so the blur depends on the profile direction (CT blur is usually larger
+//! along the scanner axis). [`sigma_along`] evaluates it.
+//!
+//! **PSF estimation** ([`estimate_psf`], ours). From a first local fit with
+//! `σ` free, `s²` is estimated by linear least squares of `σ_i²` on the
+//! squared normal components:
+//!
+//! ```text
+//! σ_i² ≈ Σ_a n_ia² s_a²       (anisotropic: 3 unknowns)
+//! σ_i² ≈ (1 − n_ia²) s_⊥² + n_ia² s_∥²    (axial: in-plane and along axis a)
+//! σ_i² ≈ s²                  (isotropic)
+//! ```
+//!
+//! using only nodes where `σ` is identifiable: `t ≥ min_ratio · σ` (on a thin
+//! cortex `σ` and `t` trade off and `σ` is unreliable) and `σ` strictly inside
+//! its bounds. The variances must be non-negative, so the problem is
+//! non-negative least squares (Lawson & Hanson 1974); with at most three
+//! unknowns it is solved exactly by enumerating the `2³ − 1` active sets and
+//! keeping the best feasible one. Two rounds reject outliers beyond 3 robust
+//! standard deviations, estimated as 1.4826 × the median absolute deviation
+//! (the consistency factor for normally distributed residuals; Rousseeuw &
+//! Croux 1993).
+//!
+//! # References
+//!
+//! * G. M. Treece, K. E. S. Poole, A. H. Gee, *Imaging the femoral cortex:
+//!   thickness, density and mass from clinical CT*, Medical Image Analysis
+//!   16(5):952–965, 2012.
+//! * G. M. Treece, A. H. Gee, *Independent measurement of femoral cortical
+//!   thickness and cortical bone density using clinical CT*, Medical Image
+//!   Analysis 20(1):249–264, 2015.
+//! * C. L. Lawson, R. J. Hanson, *Solving Least Squares Problems*,
+//!   Prentice-Hall, 1974.
+//! * P. J. Rousseeuw, C. Croux, *Alternatives to the median absolute
+//!   deviation*, Journal of the American Statistical Association
+//!   88(424):1273–1283, 1993.
 
 use super::{local, local_settings, Data};
 use crate::error::Error;
@@ -28,14 +63,18 @@ pub enum PsfModel {
     Anisotropic,
 }
 
-/// Blur along the unit direction `n` for a PSF with standard deviations `psf`.
+/// The blur along the unit direction `n` for a Gaussian PSF with standard
+/// deviations `psf`: `σ(n) = √(Σ_a n_a² s_a²)` (the projection of the PSF onto
+/// the line).
 #[inline]
 pub fn sigma_along(psf: [f64; 3], n: V3) -> f64 {
     (0..3).map(|a| (n[a] * psf[a]).powi(2)).sum::<f64>().sqrt()
 }
 
-/// Estimate the PSF from per-node fits with free `σ`. Uses nodes with
-/// `t ≥ min_ratio · σ` whose `σ` lies strictly inside `(sigma_lo, sigma_hi)`.
+/// Estimate the PSF from per-node fits with free `σ` (module documentation):
+/// least squares of `σ_i²` on `n_i²` under `model` over the nodes with
+/// `t ≥ min_ratio · σ` and `σ` strictly inside `(sigma_lo, sigma_hi)`, then
+/// two rounds rejecting residuals beyond 3 × 1.4826 × MAD from the median.
 /// Returns `None` if fewer than 10 nodes qualify.
 pub fn estimate_psf(
     normals: &[V3],
@@ -79,12 +118,15 @@ pub fn estimate_psf(
     Some(est.map(|v| v.max(0.0).sqrt()))
 }
 
+/// `Σ_a n_a² s2_a`: the predicted `σ²` along `n` for per-axis variances `s2`.
 fn predict(s2: [f64; 3], n: V3) -> f64 {
     (0..3).map(|a| n[a] * n[a] * s2[a]).sum()
 }
 
-/// Non-negative least squares for `σ² ≈ Σ_a n_a² s_a²` under `model`,
-/// returning `s²` per axis.
+/// Non-negative least squares (Lawson & Hanson 1974) for
+/// `σ² ≈ features(n) · β` under `model`, returning `s²` per axis: every
+/// subset of the features is solved by the normal equations and the best
+/// feasible (all `β ≥ 0`) subset wins, exact for at most three features.
 fn fit(rows: &[(V3, f64)], model: PsfModel) -> [f64; 3] {
     let k = features(model, [0.0, 0.0, 1.0]).len();
     let (ata, atb) = normal_equations(rows, model, k);

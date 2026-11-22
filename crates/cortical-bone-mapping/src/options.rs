@@ -155,7 +155,7 @@ pub struct SolverOptions {
     pub cg_tolerance: f64,
     /// CG iterations allowed over one global solve (bounds the work on a
     /// badly posed problem; the fit is then flagged in
-    /// [`FitInfo::budget_exhausted`]).
+    /// [`FitInfo::budget_exhausted`](crate::result::FitInfo::budget_exhausted)).
     pub cg_max_total: usize,
     /// Print the state of the global (multigrid / regularised) solver to
     /// stderr every this many iterations; 0 = never.
@@ -243,6 +243,9 @@ pub enum Method {
 }
 
 impl Method {
+    /// The multigrid preset of Table 1 of Neeteson & Boyd (2025) for the radius
+    /// and tibia: control-point spacings of 128, 64, 32 and 16 voxels of 60.7 µm,
+    /// each node interpolating its 5 nearest control points.
     pub fn multigrid() -> Self {
         // Table 1 of Neeteson & Boyd (2025), radius & tibia: 128, 64, 32, 16
         // voxels of 60.7 µm.
@@ -252,6 +255,10 @@ impl Method {
             seed: 0,
         }
     }
+    /// The regularised preset of Table 1 of Neeteson & Boyd (2025): `λ = 1`,
+    /// `σ_reg = 1.9424 mm` (32 voxels of 60.7 µm), 500 neighbours; plus our
+    /// neighbour cut-off at `3σ_reg` (which leaves the paper's operator unchanged
+    /// at HR-pQCT node spacing, where 500 neighbours lie well within it).
     pub fn regularized() -> Self {
         // Table 1: λ = 1, σ_reg = 1.942 mm (32 voxels), 500 neighbours.
         Method::Regularized {
@@ -291,6 +298,7 @@ impl Method {
         }
         m
     }
+    /// The method's name (as in the Python options).
     pub fn name(&self) -> &'static str {
         match self {
             Method::Local => "local",

@@ -1,4 +1,27 @@
 //! Rasterising the region enclosed by a closed mesh into a mask.
+//!
+//! A voxel is inside if a ray from its centre along array axis 0 crosses the
+//! surface an odd number of times (the even–odd or parity rule of the Jordan
+//! curve theorem; for voxelising meshes see Nooruddin & Turk 2003). All rays
+//! share a direction, so each triangle is intersected only with the rays of
+//! the voxel columns `(j, k)` inside its projection: for column `(y, z)` the
+//! barycentric coordinates `(u, v)` of the projected triangle are solved from
+//! the 2×2 system of its edges, and the crossing is at axis-0 coordinate
+//! `x = p₀ + u (q₀ − p₀) + v (r₀ − p₀)` if `u, v ≥ 0, u + v ≤ 1`. Sorting the
+//! crossings by column and position, each column is filled between
+//! successive pairs.
+//!
+//! Rays through a vertex or an edge would be counted twice or not at all; the
+//! rays are shifted by tiny irrational offsets (`≈ 10⁻⁷` voxel) so that they
+//! never pass exactly through the lattice points where surface-nets vertices
+//! can lie. Works for any closed mesh, including self-intersecting ones, where
+//! the parity rule decides. Memory is the output plus 8 bytes per crossing.
+//!
+//! # References
+//!
+//! * F. S. Nooruddin, G. Turk, *Simplification and repair of polygonal models
+//!   using volumetric techniques*, IEEE Transactions on Visualization and
+//!   Computer Graphics 9(2):191–205, 2003.
 
 use ndarray::Array3;
 use rayon::prelude::*;

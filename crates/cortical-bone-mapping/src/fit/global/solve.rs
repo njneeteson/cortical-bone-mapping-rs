@@ -1,10 +1,56 @@
 //! The bounded, damped Gauss–Newton (Levenberg–Marquardt) iteration with
 //! matrix-free preconditioned conjugate gradients.
 //!
-//! Each outer iteration linearises the problem once (gradient, Gauss–Newton
-//! diagonal blocks) and then tries steps of increasing damping until one
-//! lowers the cost enough; each trial step is one inexact PCG solve of
-//! `(JᵀJ + μD) δ = −g` over the variables not held at a bound.
+//! Each outer iteration linearises the problem once (gradient `g`,
+//! Gauss–Newton diagonal blocks) and then tries steps of increasing damping
+//! until one lowers the cost enough:
+//!
+//! 1. **Gradient test and active set.** Variables at a bound with the
+//!    gradient pointing out of the box, and frozen nodes, are held (projected
+//!    Newton; Bertsekas 1982). The scaled gradient
+//!    `max_v |g_v| / (√D_v ‖r‖)` over the others (`D = diag JᵀJ`,
+//!    `‖r‖ = √(2L)`), the MINPACK test of the local method generalised to
+//!    many variables (Moré 1978), below `gtol` ends the solve.
+//! 2. **Inexact Newton step.** Solve `(JᵀJ + μD) δ = −g` over the free
+//!    variables by preconditioned conjugate gradients (Hestenes & Stiefel
+//!    1952) to a relative residual `η = max(min(0.1, √gmax), cg_tolerance)`.
+//!    A forcing term that shrinks with the gradient gives superlinear
+//!    convergence while keeping early, far-from-optimal solves cheap (Dembo
+//!    et al. 1982; Nocedal & Wright 2006 use `min(0.5, √‖∇f‖)`). The
+//!    preconditioner is block Jacobi: one damped `nfc × nfc` block per dof and
+//!    one for the globals, each factored by Cholesky on its free rows.
+//! 3. **Projection and gain ratio.** `x' = clamp(x + δ, l, u)`; with the actual
+//!    step `s = x' − x`, `ρ = (L(x) − L(x')) / (−gᵀs − ½ sᵀ JᵀJ s)`.
+//! 4. **Damping** (Nielsen 1999): accept if `ρ > 10⁻⁴`, then
+//!    `μ ← μ max(1/3, 1 − (2ρ − 1)³)`; otherwise `μ ← μν`, `ν ← 2ν`.
+//!
+//! A solve stops converged on the gradient test; on an accepted step that
+//! lowers the cost by less than `ftol` (relative); on a step below `xtol`
+//! relative to the point (in the `√D` norm); on a stall (the last 10 accepted
+//! steps together lower the cost by less than 10⁻⁴, the slow crawl of
+//! projected steps when many nodes sit on a bound); or, with `edge_tol`, when an
+//! accepted step moves the fitted periosteal edges `m − t/2` of the free nodes
+//! by less than `edge_tol` (RMS), which is all refinement needs from an
+//! intermediate fit. It stops unconverged when it runs out of trial steps or
+//! CG iterations.
+//!
+//! # References
+//!
+//! * M. R. Hestenes, E. Stiefel, *Methods of conjugate gradients for solving
+//!   linear systems*, Journal of Research of the National Bureau of Standards
+//!   49(6):409–436, 1952.
+//! * R. S. Dembo, S. C. Eisenstat, T. Steihaug, *Inexact Newton methods*, SIAM
+//!   Journal on Numerical Analysis 19(2):400–408, 1982.
+//! * J. Nocedal, S. J. Wright, *Numerical Optimization*, 2nd ed., Springer,
+//!   2006 (inexact Newton: §7.1; CG: ch. 5; Levenberg–Marquardt: §10.3).
+//! * D. P. Bertsekas, *Projected Newton methods for optimization problems with
+//!   simple constraints*, SIAM Journal on Control and Optimization
+//!   20(2):221–246, 1982.
+//! * J. J. Moré, *The Levenberg–Marquardt algorithm: implementation and
+//!   theory*, in G. A. Watson (ed.), Numerical Analysis, Lecture Notes in
+//!   Mathematics 630, Springer, 1978, pp. 105–116.
+//! * H. B. Nielsen, *Damping parameter in Marquardt's method*, Technical
+//!   Report IMM-REP-1999-05, Technical University of Denmark, 1999.
 
 use std::collections::VecDeque;
 use std::time::Instant;
@@ -175,8 +221,9 @@ impl<'p, 'a> Solver<'p, 'a> {
         Status::MaxIterations
     }
 
-    /// Diagonal blocks, the gradient test (which also sets the free
-    /// variables) and the forcing term of the linear solves.
+    /// Steps 1–2 of the module documentation: diagonal blocks, the gradient test
+    /// (which also sets the free variables) and the forcing term
+    /// `η = max(min(0.1, √gmax), cg_tolerance)` of the linear solves.
     fn linearise(&mut self) -> Linearisation {
         let (lay, ev) = (&self.lay, &self.ev);
         let (fblocks, gblock) = timed!(
@@ -273,8 +320,11 @@ impl<'p, 'a> Solver<'p, 'a> {
         }
     }
 
-    /// Preconditioned conjugate gradients on `(JᵀJ + μD) δ = −g` over the
-    /// free variables, to the relative residual `eta`.
+    /// Preconditioned conjugate gradients (Hestenes & Stiefel 1952; Nocedal &
+    /// Wright 2006, Algorithm 5.3) on `(JᵀJ + μD) δ = −g` over the free
+    /// variables, from `δ = 0`, stopping at `‖r‖ ≤ η ‖g‖`, on negative curvature
+    /// (`pᵀAp ≤ 0`, which damping prevents in exact arithmetic) or on the CG
+    /// budget.
     fn pcg(&mut self, pre: &Precond, damp: &[f64], eta: f64) -> Vec<f64> {
         let nv = self.x.len();
         let mut delta = vec![0.0; nv];
@@ -438,6 +488,7 @@ impl<'p, 'a> Solver<'p, 'a> {
         old - self.ev.cost <= STALL_DECREASE * old
     }
 
+    /// The summary of the solve, ended with `status`.
     fn info(&self, status: Status) -> SolveInfo {
         let (clock, ev) = (&self.clock, &self.ev);
         SolveInfo {
@@ -457,6 +508,7 @@ impl<'p, 'a> Solver<'p, 'a> {
     }
 }
 
+/// Panics unless the state has one value per field channel and dof.
 fn check_state(lay: &Layout, state: &State) {
     assert_eq!(
         state.field.len(),
@@ -480,6 +532,7 @@ fn pack(lay: &Layout, s: &State) -> Vec<f64> {
     x
 }
 
+/// The inverse of [`pack`].
 fn unpack(lay: &Layout, x: &[f64], s: &mut State) {
     let (ndof, off) = (lay.ndof, lay.fields.len() * lay.ndof);
     for (fi, f) in s.field.iter_mut().enumerate() {
@@ -512,6 +565,7 @@ fn diagonal(lay: &Layout, fblocks: &[f64], gblock: &[f64]) -> Vec<f64> {
         .collect()
 }
 
+/// Dot product, summed in a fixed order ([`det_sum`]).
 fn dotp(a: &[f64], b: &[f64]) -> f64 {
     det_sum(a.len(), |i| a[i] * b[i])
 }

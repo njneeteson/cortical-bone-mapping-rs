@@ -1,6 +1,43 @@
-//! The regularised method (Neeteson & Boyd 2025): field parameters per node
-//! with the spatial smoothing penalty `½ κ_c ‖ω v_c‖²`, optionally plus the
-//! curvature penalty on the fitted surfaces (extension).
+//! The regularised method of our paper (Neeteson & Boyd 2025), optionally
+//! with the curvature penalty on the fitted surfaces (an extension in this
+//! crate).
+//!
+//! Every field parameter has one value per node, and neighbouring values are
+//! tied by the spatial smoothing penalty
+//!
+//! ```text
+//! ½ Σ_c κ_c ‖ω v_c‖²,    κ_m = κ_t = λ ρc² / (N t0²),   κ_σ = λ ρc² / (N σ0²)
+//! ```
+//!
+//! added to the data term `1/(2NM) Σ_ij γ_j r_ij²`, with `ω` the smoothing
+//! operator ([`crate::operators::SmoothingOperator`]: each value minus the
+//! Gaussian-weighted mean of its neighbours) and `t0`, `σ0` the thickness and
+//! blur of the global fit. The scaling makes the penalty commensurate with the
+//! data term: a residual is a density (scale `ρc`), and `ω m / t0`, `ω σ / σ0`
+//! are dimensionless, so `λ` is a pure number whatever the units and the
+//! number of nodes. The original Python implementation in Bonelab applied this scaling
+//! inconsistently between loss and gradient; here it is the same in both.
+//!
+//! Two additions of ours:
+//!
+//! * **density fields**: when `ρs`, `ρb` are fields instead of globals
+//!   ([`crate::options::ModelOptions::global`]) they are smoothed with
+//!   `κ_ρ = density_smoothing · λ ρc² / (N ρc²)`, i.e. their variation is
+//!   measured relative to the cortical density;
+//! * **curvature penalty** ([`crate::operators::CurvatureOperator`]): residual
+//!   scale `c = √(μ/N) ρc ℓ` (`ℓ` the curvature length, default `t0`), which
+//!   makes curvature dimensionless so that `μ` plays the same role as `λ`.
+//!
+//! The fields start from local fits (`init_from_local`) or from the node
+//! starts; the globals from the global fit, or the mean of the local fits.
+//! Held nodes (refinement) stay at their starts and act as boundary conditions
+//! of the penalties.
+//!
+//! # References
+//!
+//! * N. J. Neeteson, S. K. Boyd, *Advancing Cortical Bone Mapping with global
+//!   optimization*, Computers in Biology and Medicine, 2025,
+//!   doi:10.1016/j.compbiomed.2025.110636.
 
 use std::time::Instant;
 

@@ -1,4 +1,45 @@
 //! Sampling density profiles along surface normals.
+//!
+//! At every node `p` with inward unit normal `n` the image is sampled at
+//!
+//! ```text
+//! f_j = I(p + x_j n),    x_j = −outside, −outside + h, …, +inside
+//! ```
+//!
+//! (Treece et al. 2010), where `I` is the trilinear interpolant of the image
+//! ([`crate::volume::trilinear`]) and `h` the sampling resolution (default the
+//! smallest voxel spacing: finer sampling adds no information, coarser loses
+//! some). Optionally each profile is smoothed along the line by a 1D Gaussian
+//! to suppress noise before fitting; it widens the apparent blur by the
+//! smoothing width, which the fitted `σ` absorbs.
+//!
+//! **Direction constraints** ([`NormalConstraint`], our addition). Some
+//! images carry information in one direction only: profiles can be projected
+//! into the plane perpendicular to an axis (e.g. the transverse plane of a
+//! long-bone HR-pQCT stack, where the cortex runs along the axis) or replaced
+//! by an axis (e.g. through a subchondral plate). A constrained direction
+//! `n'` is accepted only if `|n'| ≥ 0.33` before normalisation, i.e. within
+//! about 70° (`arccos 0.33`) of the true normal: beyond that a profile runs
+//! along the cortex rather than through it, and its fit measures nothing.
+//!
+//! **Unused samples** (our addition). Samples can be given zero weight
+//! without changing the profile layout:
+//!
+//! * [`Profiles::exclude`]: samples in voxels of another structure (e.g.
+//!   another bone). Next to a joint, a profile through the joint space reaches
+//!   the neighbouring bone's cortex, which the three-level model would
+//!   otherwise try to explain as its own;
+//! * [`Profiles::limit_inside`]: inside samples beyond half the object's width
+//!   along the normal. Past the half-width a profile through a thin object
+//!   (patella, plate) approaches the opposite cortex, a fourth level the model
+//!   does not have; the half-width is where a line entering from the other
+//!   side would take over.
+//!
+//! # References
+//!
+//! * G. M. Treece, A. H. Gee, P. M. Mayhew, K. E. S. Poole, *High resolution
+//!   cortical bone thickness measurement from clinical CT data*, Medical Image
+//!   Analysis 14(3):276–290, 2010, doi:10.1016/j.media.2010.01.003.
 
 use ndarray::ArrayView3;
 use rayon::prelude::*;
@@ -21,9 +62,10 @@ pub enum NormalConstraint {
 }
 
 impl NormalConstraint {
-    /// Apply the constraint to a unit normal. Returns `None` when the
-    /// constrained direction is degenerate (e.g. an axial normal projected into
-    /// the transverse plane): such a vertex has no meaningful profile.
+    /// Apply the constraint to a unit normal. Returns `None` when the constrained
+    /// direction deviates by more than about 70° from `n` (`|n'| < 0.33` before
+    /// normalisation, `arccos 0.33 ≈ 71°`), e.g. an axial normal projected into the
+    /// transverse plane: such a vertex has no meaningful profile.
     pub fn apply(&self, n: V3) -> Option<V3> {
         let out = match *self {
             NormalConstraint::None => n,
@@ -58,7 +100,8 @@ pub struct SampleLine {
 }
 
 impl SampleLine {
-    /// Samples from `-outside` to `+inside` every `resolution`.
+    /// Samples from `−outside` to `+inside` every `resolution` (the far end
+    /// included when it falls on the grid, up to rounding).
     pub fn new(outside: f64, inside: f64, resolution: f64) -> Self {
         assert!(resolution > 0.0 && outside >= 0.0 && inside > 0.0);
         let m = ((outside + inside) / resolution + 1e-9).floor() as usize + 1;
@@ -66,9 +109,11 @@ impl SampleLine {
             x: (0..m).map(|j| -outside + j as f64 * resolution).collect(),
         }
     }
+    /// Number of samples per profile.
     pub fn len(&self) -> usize {
         self.x.len()
     }
+    /// Whether there are no samples.
     pub fn is_empty(&self) -> bool {
         self.x.is_empty()
     }
@@ -171,8 +216,10 @@ impl Profiles {
         self.used = Some(used);
     }
 
-    /// Sample `img` along `p + x·n` for every point/normal pair, optionally
-    /// smoothing each profile with a 1D Gaussian of `smoothing` samples.
+    /// Sample `img` at `p + x_j n` (trilinear interpolation) for every
+    /// point/normal pair, optionally smoothing each profile with a 1D Gaussian of
+    /// `smoothing` samples (edges replicated, so a profile is not pulled towards
+    /// zero at its ends).
     pub fn sample<T: Voxel>(
         img: &ArrayView3<T>,
         geom: &Geometry,

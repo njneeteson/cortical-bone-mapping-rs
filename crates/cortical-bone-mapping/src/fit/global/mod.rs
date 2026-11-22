@@ -12,19 +12,32 @@
 //! ([`Role`]): fixed, a single global value, or a *field* with one value per
 //! degree of freedom. Field degrees of freedom are the nodes themselves
 //! (regularised method) or control points interpolated to the nodes by a
-//! sparse matrix `A` (multigrid method). The original global initialisation
-//! (one model for all profiles) is the special case with every parameter
-//! global.
+//! sparse matrix `A` (multigrid method). The global initialisation of our
+//! paper (one model for all profiles; Neeteson & Boyd 2025) is the special case
+//! with every parameter global.
 //!
-//! The problem is solved with a bounded, damped Gauss–Newton (Levenberg–
-//! Marquardt) iteration. Each node's 5×5 Gauss–Newton block `Bᵢ = Σⱼ wⱼ ∇f̂ᵢⱼ
-//! ∇f̂ᵢⱼᵀ` is formed once per outer iteration; the linear system
-//! `(JᵀJ + μD) δ = −g` is then solved matrix-free by preconditioned conjugate
-//! gradients (block-Jacobi preconditioner), so the Hessian is never
-//! assembled. Memory is ~25 doubles per node beyond the profiles, and every
-//! step is parallel. This replaces the L-BFGS-B solver used by Neeteson &
-//! Boyd: it exploits the least-squares structure and typically converges in
-//! tens rather than hundreds of iterations.
+//! All three terms are sums of squared residuals, so the problem is solved by
+//! a bounded, damped Gauss–Newton (Levenberg–Marquardt) iteration that uses
+//! that structure ([`solve()`]). Each node's 5×5 Gauss–Newton block
+//! `Bᵢ = Σⱼ wⱼ ∇f̂ᵢⱼ ∇f̂ᵢⱼᵀ` is formed once per outer iteration; the linear
+//! system `(JᵀJ + μD) δ = −g` is then solved matrix-free by preconditioned
+//! conjugate gradients (Hestenes & Stiefel 1952) with a block-Jacobi
+//! preconditioner, so the Hessian is never assembled (`problem` forms the
+//! products). Memory is ~25 doubles per node beyond the profiles, and every
+//! step is parallel. This replaces the L-BFGS-B solver of our 2025 paper: a
+//! first-order quasi-Newton method ignores the least-squares structure, and
+//! typically needs hundreds of iterations where Gauss–Newton needs tens.
+//!
+//! # References
+//!
+//! * N. J. Neeteson, S. K. Boyd, *Advancing Cortical Bone Mapping with global
+//!   optimization*, Computers in Biology and Medicine, 2025,
+//!   doi:10.1016/j.compbiomed.2025.110636.
+//! * M. R. Hestenes, E. Stiefel, *Methods of conjugate gradients for solving
+//!   linear systems*, Journal of Research of the National Bureau of Standards
+//!   49(6):409–436, 1952.
+//! * J. Nocedal, S. J. Wright, *Numerical Optimization*, 2nd ed., Springer,
+//!   2006 (Gauss–Newton and Levenberg–Marquardt: ch. 10; CG: ch. 5).
 
 use crate::fit::local::Status;
 use crate::fit::profiles::Profiles;
@@ -157,6 +170,7 @@ struct Layout {
 }
 
 impl Layout {
+    /// Number of variables: one per field channel and dof, plus the globals.
     fn nvars(&self) -> usize {
         self.fields.len() * self.ndof + self.globals.len()
     }

@@ -30,6 +30,19 @@
 //! cartilage ~1.5 mm thick); narrowing to ~2 mm is moderate osteoarthritis,
 //! and bone-on-bone contact only occurs in end-stage disease. Ground truth is exact as for
 //! [`BonePhantom`](crate::phantoms::bone::BonePhantom).
+//!
+//! The smooth maximum is the log-sum-exp
+//! `smax(a, b; k) = k ln(e^{a/k} + e^{b/k}) = max(a, b) + k ln(1 + e^{−|a−b|/k})`,
+//! which exceeds `max(a, b)` by at most `k ln 2` and rounds the rim over a width
+//! of about `k` while keeping the implicit functions smooth for the bisection
+//! of the ground truth. The phantom is ours; the joint-space and cartilage
+//! dimensions follow measurements in healthy adults (the knee reference below).
+//!
+//! # References
+//!
+//! * *Knee joint space width and cartilage thickness in healthy adults*, BMC
+//!   Musculoskeletal Disorders 9:119, 2008, doi:10.1186/1471-2474-9-119 (as
+//!   listed in `docs/segmentation.md`).
 
 use ndarray::Array3;
 use rayon::prelude::*;
@@ -139,7 +152,8 @@ struct Coeffs {
     pores: Vec<(V3, f64)>,
 }
 
-/// Smooth maximum with width `k` (`max` for `k = 0`).
+/// Smooth maximum `k ln(e^{a/k} + e^{b/k})` with width `k` (`max` for
+/// `k = 0`), written as `max + k ln(1 + e^{−|a−b|/k})` to avoid overflow.
 fn smax(a: f64, b: f64, k: f64) -> f64 {
     if k <= 0.0 {
         return a.max(b);
@@ -149,10 +163,13 @@ fn smax(a: f64, b: f64, k: f64) -> f64 {
 }
 
 impl JointPhantom {
+    /// The phantom's voxel grid (origin at zero).
     pub fn geometry(&self) -> Geometry {
         Geometry::new(self.spacing)
     }
 
+    /// The random coefficients of the phantom, drawn from its seed: footprints,
+    /// articular bumps, plate thickness, trabecular and pore fields.
     fn coeffs(&self) -> Coeffs {
         let mut r = Rng::new(self.seed);
         let tau = 2.0 * std::f64::consts::PI;
@@ -189,6 +206,7 @@ impl JointPhantom {
         }
     }
 
+    /// In-plane position of the bones' common axis (the volume's centre).
     fn axis(&self) -> [f64; 2] {
         let (_, d1, d2) = self.dims;
         [
@@ -226,6 +244,8 @@ impl JointPhantom {
         ((dy * dy + dx * dx).sqrt(), self.radius * scale * s)
     }
 
+    /// Subchondral plate thickness of a bone at in-plane position `p`:
+    /// `t̄ (1 + v f)` for a unit random field `f`, clipped at the minimum.
     fn plate_at(&self, c: &Coeffs, p: V3, bone: Bone) -> f64 {
         let f = field(&c.plate[bone as usize - 1], [0.0, p[1], p[2]]);
         (self.plate_thickness * (1.0 + self.plate_variation * f)).max(self.plate_min)
@@ -247,6 +267,10 @@ impl JointPhantom {
         )
     }
 
+    /// The true density at `p`: inside a bone, cortex (with pores, the level set
+    /// `f > √2 erf⁻¹(1 − 2P)`) or marrow with trabeculae whose BV/TV rises towards
+    /// the plate as `BV + (BV_endo − BV) exp(−d / w)`; cartilage between the two
+    /// articular surfaces within the tibial footprint; soft tissue elsewhere.
     fn density(&self, c: &Coeffs, p: V3) -> f64 {
         for bone in [Bone::Tibia, Bone::Femur] {
             let (outer, marrow) = self.implicit(c, p, bone);

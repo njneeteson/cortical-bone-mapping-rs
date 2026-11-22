@@ -2,6 +2,31 @@
 //! topology checks. Rasterisation ([`super::voxelize`]), VTK output
 //! ([`super::vtk`]) and the cotangent Laplacian ([`super::cotan`]) are in
 //! their own modules.
+//!
+//! * **Vertex normals** are the normalised sum of the incident face normals
+//!   `(b − a) × (c − a)`, i.e. weighted by face area: large faces, which
+//!   sample more of the surface, count more, and the weighting needs no extra
+//!   computation. (Angle weighting would be independent of the triangulation;
+//!   surface nets give near-uniform triangles, where the two agree closely.)
+//! * **Taubin λ|μ smoothing** (Taubin 1995): alternate a shrinking step
+//!   `v ← v + λ (v̄ − v)` and an inflating step `v ← v + μ (v̄ − v)`
+//!   (`λ > 0 > μ`, `v̄` the mean of the one-ring, the "umbrella" operator).
+//!   The pair has transfer function `(1 − λk)(1 − μk)` at surface frequency
+//!   `k`, which is 1 at `k = 0` and at the pass-band frequency
+//!   `k_pb = 1/λ + 1/μ`: low frequencies (the shape) pass, high ones (the voxel
+//!   staircase) are attenuated, and unlike plain Laplacian smoothing the
+//!   surface does not shrink.
+//! * **Signed volume** by the divergence theorem: the sum over faces of the
+//!   signed tetrahedron volumes `a · (b × c) / 6` (positive for an
+//!   outward-oriented closed mesh).
+//! * **Topology**: a closed, consistently oriented 2-manifold has every
+//!   directed edge exactly once and its reverse exactly once; the Euler
+//!   characteristic `V − E + F` is 2 for a sphere-like surface.
+//!
+//! # References
+//!
+//! * G. Taubin, *A signal processing approach to fair surface design*,
+//!   Proceedings of SIGGRAPH 95, 1995, pp. 351–358.
 
 use std::collections::HashMap;
 
@@ -31,11 +56,14 @@ impl Adjacency {
 }
 
 impl Mesh {
+    /// Number of vertices.
     pub fn n_vertices(&self) -> usize {
         self.vertices.len()
     }
 
-    /// Area-weighted vertex normals (unit length, pointing outwards).
+    /// Area-weighted vertex normals: the normalised sum of the incident face
+    /// normals `(b − a) × (c − a)` (length twice the face area); unit length,
+    /// pointing outwards. Isolated vertices get a zero normal.
     pub fn vertex_normals(&self) -> Vec<V3> {
         let mut acc = vec![[0.0; 3]; self.vertices.len()];
         for f in &self.faces {
@@ -231,7 +259,9 @@ impl Mesh {
         v - edges.len() as i64 + self.faces.len() as i64
     }
 
-    /// Enclosed volume (positive for an outward-oriented closed mesh).
+    /// Enclosed volume by the divergence theorem, `Σ_faces a · (b × c) / 6`
+    /// (positive for an outward-oriented closed mesh; independent of the origin
+    /// for a closed mesh).
     pub fn signed_volume(&self) -> f64 {
         crate::util::det_sum(self.faces.len(), |k| {
             let [a, b, c] = self.faces[k].map(|i| self.vertices[i as usize]);

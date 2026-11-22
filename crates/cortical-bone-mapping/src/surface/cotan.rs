@@ -1,4 +1,32 @@
-//! The cotangent Laplace–Beltrami operator of a mesh.
+//! The cotangent Laplace–Beltrami operator of a mesh (Pinkall & Polthier
+//! 1993; Meyer et al. 2003).
+//!
+//! ```text
+//! (L x)_i = Σ_{k ∈ N(i)} (cot α_ik + cot β_ik) / (2 A_i) · (x_k − x_i)
+//! ```
+//!
+//! with `α_ik`, `β_ik` the angles opposite edge `ik` in its two faces and `A_i`
+//! the area associated with vertex `i`. Applied to the vertex positions,
+//! `½ L x = H n` is the mean-curvature normal (`H` the mean curvature, `n` the
+//! inward normal for an outward oriented mesh), so `|½ L x| = 1/R` on a sphere
+//! of radius `R`. Each cotangent is computed as `cos/sin = (e₁ · e₂) / |e₁ × e₂|`.
+//!
+//! Two simplifications, both standard and both safe on the near-uniform
+//! meshes of surface nets: `A_i` is the barycentric area (a third of the area
+//! of the incident faces) rather than the mixed Voronoi area of Meyer et al.,
+//! and negative weights (edges opposite obtuse angles) are clamped to zero,
+//! which keeps `−L` positive semi-definite and the penalty convex at the cost
+//! of a small bias where triangles are obtuse. Boundary vertices (on an open
+//! sub-mesh) get no valid row.
+//!
+//! # References
+//!
+//! * U. Pinkall, K. Polthier, *Computing discrete minimal surfaces and their
+//!   conjugates*, Experimental Mathematics 2(1):15–36, 1993.
+//! * M. Meyer, M. Desbrun, P. Schröder, A. H. Barr, *Discrete
+//!   differential-geometry operators for triangulated 2-manifolds*, in
+//!   H.-C. Hege, K. Polthier (eds.), Visualization and Mathematics III,
+//!   Springer, 2003, pp. 35–57.
 
 use std::collections::HashMap;
 
@@ -30,6 +58,10 @@ pub struct CotanLaplacian {
 }
 
 impl CotanLaplacian {
+    /// Assemble the operator: per face, add `½ cot` of each angle to the weight of
+    /// the opposite edge (`cot = e₁·e₂ / |e₁ × e₂|`) and a third of the face area
+    /// to each vertex; then `L_ik = max(w_ik, 0) / A_i` (module documentation for
+    /// the clamping and the barycentric areas).
     pub fn new(mesh: &Mesh) -> Self {
         let n = mesh.vertices.len();
         let mut area = vec![0.0f64; n];

@@ -28,6 +28,25 @@
 //! along any line are found by stepping plus bisection
 //! ([`BonePhantom::edges_along`]), i.e. the reference thickness is measured
 //! along the same line as CBM measures it.
+//!
+//! The phantom is ours. Its random fields and level cuts are described in
+//! `phantoms::render` (Berk 1987; Shinozuka & Deodatis 1991); its parameters
+//! follow HR-pQCT measurements of the distal radius and tibia (Burghardt et
+//! al. 2010) and of cortical breaks (Peters et al. 2017).
+//!
+//! # References
+//!
+//! * N. F. Berk, *Scattering properties of a model bicontinuous structure with
+//!   a well defined length scale*, Physical Review Letters 58(25):2718–2721,
+//!   1987.
+//! * M. Shinozuka, G. Deodatis, *Simulation of stochastic processes by
+//!   spectral representation*, Applied Mechanics Reviews 44(4):191–204, 1991.
+//! * A. J. Burghardt et al., *Reproducibility of direct quantitative measures
+//!   of cortical bone microarchitecture of the distal radius and tibia by
+//!   HR-pQCT*, Bone 47:519–528, 2010.
+//! * M. Peters et al., *An automated algorithm for the detection of cortical
+//!   interruptions on HR-pQCT images of finger joints*, PLoS ONE 12:e0175829,
+//!   2017.
 
 use ndarray::Array3;
 use rayon::prelude::*;
@@ -162,10 +181,15 @@ struct Coeffs {
 }
 
 impl BonePhantom {
+    /// The phantom's voxel grid (origin at zero).
     pub fn geometry(&self) -> Geometry {
         Geometry::new(self.spacing)
     }
 
+    /// The random coefficients of the phantom, drawn from its seed: shape and
+    /// thickness harmonics with amplitudes `∝ k^-1.5` (a smooth, mostly
+    /// low-order outline), axial drifts, the centre wander and the trabecular and
+    /// pore fields.
     fn coeffs(&self) -> Coeffs {
         let mut r = Rng::new(self.seed);
         let tau = 2.0 * std::f64::consts::PI;
@@ -264,6 +288,10 @@ impl BonePhantom {
         })
     }
 
+    /// The true density at `p`: soft tissue outside, cortex (with pores, the
+    /// level set `f > √2 erf⁻¹(1 − 2P)`) between the surfaces, marrow with
+    /// trabeculae (`|f| < √2 erf⁻¹(BV/TV)`) inside, and the neighbouring bone and
+    /// cortical breaks if present.
     fn density(&self, c: &Coeffs, p: V3) -> f64 {
         let (r, th, big_r, t) = self.polar(c, p);
         let re = big_r - t;

@@ -1,13 +1,15 @@
 //! Synthetic phantoms with known cortical geometry, for tests, validation
-//! and examples.
+//! and examples (ours).
 //!
 //! A [`ShellPhantom`] is a cylinder (along array axis 0) or a sphere whose
-//! outer (periosteal) radius is `R(θ)` and whose cortical thickness is
-//! `t(θ) = t̄ + a cos(kθ)`. Densities are piecewise constant (soft tissue,
-//! cortex, trabecular/marrow), integrated over each voxel by supersampling,
-//! blurred with an anisotropic Gaussian PSF and corrupted with Gaussian noise.
-//! The companion segmentation can be perturbed (offset, bumps) to emulate a
-//! poor outer-surface segmentation.
+//! outer (periosteal) radius is `R(θ) = R + b cos(k_R θ)` and whose cortical
+//! thickness is `t(θ) = t̄ + a cos(k_t θ)`. Densities are piecewise constant
+//! (soft tissue, cortex, trabecular/marrow), i.e. exactly the three-level model
+//! of [`crate::model`] along radial lines, integrated over each voxel by
+//! supersampling, blurred with an anisotropic Gaussian PSF and corrupted with
+//! Gaussian noise: the image formation that CBM assumes, so any error in a fit
+//! is the method's, not the model's. The companion segmentation can be
+//! perturbed (offset, bumps) to emulate a poor outer-surface segmentation.
 
 use ndarray::Array3;
 use rayon::prelude::*;
@@ -79,6 +81,7 @@ impl Default for ShellPhantom {
 }
 
 impl ShellPhantom {
+    /// The phantom's voxel grid (origin at zero).
     pub fn geometry(&self) -> Geometry {
         Geometry::new(self.spacing)
     }
@@ -113,14 +116,17 @@ impl ShellPhantom {
         }
     }
 
+    /// True periosteal radius `R(θ) = R + b cos(k_R θ)`.
     pub fn outer_radius(&self, theta: f64) -> f64 {
         self.radius + self.radius_bump * (self.radius_lobes * theta).cos()
     }
 
+    /// True cortical (radial) thickness `t(θ) = t̄ + a cos(k_t θ)`.
     pub fn thickness(&self, theta: f64) -> f64 {
         self.thickness_mean + self.thickness_amplitude * (self.thickness_lobes * theta).cos()
     }
 
+    /// Radius of the companion segmentation: the true radius, offset and bumped.
     pub fn mask_radius(&self, theta: f64) -> f64 {
         self.outer_radius(theta) + self.mask_offset + self.mask_bump * (self.mask_lobes * theta).cos()
     }
@@ -137,6 +143,7 @@ impl ShellPhantom {
         r - self.outer_radius(th)
     }
 
+    /// The piecewise constant true density at `p`.
     fn density(&self, p: V3) -> f64 {
         let (r, th) = self.polar(p);
         let ro = self.outer_radius(th);
@@ -149,7 +156,9 @@ impl ShellPhantom {
         }
     }
 
-    /// Generate `(image, mask)`.
+    /// Generate `(image, mask)`: the true density integrated over each voxel by
+    /// `s³` supersampling, blurred with the Gaussian PSF, plus Gaussian noise;
+    /// the mask is the (perturbed) segmentation at voxel centres.
     pub fn generate(&self) -> (Array3<f32>, Array3<u8>) {
         let g = self.geometry();
         let ss = self.supersample.max(1);

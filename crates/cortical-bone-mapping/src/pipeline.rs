@@ -1,11 +1,29 @@
 //! The end-to-end cortical bone mapping pipeline.
 //!
-//! 1. Extract the outer bone surface from the binary mask (surface nets) and
-//!    smooth it (Taubin λ|μ).
-//! 2. Select the nodes to fit: optionally only near a sub-mask, never on the
-//!    caps where the mask is cut by the image edge, and only where the
-//!    (optionally constrained) sampling direction is valid.
-//! 3. Fit the profile model to the nodes' profiles ([`fit_surface`]).
+//! 1. Extract the outer bone surface from the binary mask with surface nets
+//!    ([`crate::surface::nets`]; Gibson 1998) and smooth it with Taubin λ|μ
+//!    smoothing ([`Mesh::taubin_smooth`]; Taubin 1995), which removes the voxel
+//!    staircase without shrinking the surface.
+//! 2. Select the nodes to fit: optionally only near a sub-mask (vertices with
+//!    a sub-mask voxel among the 8 voxels of their cell), never on the caps
+//!    where the mask is cut by the image edge (they are not periosteum), and
+//!    only where the (optionally constrained) sampling direction is valid.
+//! 3. Fit the profile model to the nodes' profiles ([`fit_surface`]; Treece et
+//!    al. 2010, Neeteson & Boyd 2025).
+//!
+//! # References
+//!
+//! * S. F. F. Gibson, *Constrained elastic surface nets: generating smooth
+//!   surfaces from binary segmented data*, MICCAI 1998, Lecture Notes in
+//!   Computer Science 1496, Springer, 1998, pp. 888–898.
+//! * G. Taubin, *A signal processing approach to fair surface design*,
+//!   Proceedings of SIGGRAPH 95, 1995, pp. 351–358.
+//! * G. M. Treece, A. H. Gee, P. M. Mayhew, K. E. S. Poole, *High resolution
+//!   cortical bone thickness measurement from clinical CT data*, Medical Image
+//!   Analysis 14(3):276–290, 2010, doi:10.1016/j.media.2010.01.003.
+//! * N. J. Neeteson, S. K. Boyd, *Advancing Cortical Bone Mapping with global
+//!   optimization*, Computers in Biology and Medicine, 2025,
+//!   doi:10.1016/j.compbiomed.2025.110636.
 
 use std::time::Instant;
 

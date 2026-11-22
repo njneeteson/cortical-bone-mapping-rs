@@ -1,18 +1,27 @@
 //! Sparse linear operators used by the global solver:
 //!
 //! * [`SparseRows`]: a row-compressed sparse matrix (used for the multigrid
-//!   interpolation matrix `A`).
-//! * [`SmoothingOperator`]: the spatial regularisation matrix `ω` of
-//!   Neeteson & Boyd (2025), `(ω x)_i = x_i − Σ_k g(d_ik) x_k / Σ_k g(d_ik)`
-//!   over the k nearest neighbours.
+//!   interpolation matrix `A` and the operators below).
+//! * [`SmoothingOperator`]: the spatial regularisation matrix `ω` of our paper
+//!   (Neeteson & Boyd 2025), `(ω x)_i = x_i − Σ_k g(d_ik) x_k / Σ_k g(d_ik)`
+//!   over the `k` nearest neighbours, `g` a Gaussian.
 //! * [`CurvatureOperator`]: curvature penalties on the fitted periosteal and
 //!   endosteal surfaces (an extension in this crate).
-//! * [`select_control_points`]: random sequential selection of control points
-//!   with a minimum separation.
+//! * [`select_control_points`] and [`interpolation_matrix`]: the multigrid
+//!   control points and their interpolation to the nodes (Neeteson & Boyd
+//!   2025).
 //!
-//! Transposed products use one accumulation buffer per worker thread instead
-//! of storing the transpose, which halves the memory of the large
-//! neighbourhood matrices.
+//! Transposed products `Mᵀ y` scatter into one accumulation buffer per fixed
+//! chunk of rows, which are then added in chunk order, instead of storing the
+//! transpose: this halves the memory of the large neighbourhood matrices, and
+//! because the chunking does not depend on the number of threads the result is
+//! bitwise reproducible.
+//!
+//! # References
+//!
+//! * N. J. Neeteson, S. K. Boyd, *Advancing Cortical Bone Mapping with global
+//!   optimization*, Computers in Biology and Medicine, 2025,
+//!   doi:10.1016/j.compbiomed.2025.110636.
 
 use rayon::prelude::*;
 
@@ -36,9 +45,11 @@ pub struct SparseRows<V> {
 }
 
 impl<V: Copy + Into<f64> + Send + Sync> SparseRows<V> {
+    /// Number of rows.
     pub fn nrows(&self) -> usize {
         self.offsets.len() - 1
     }
+    /// Number of stored entries.
     pub fn nnz(&self) -> usize {
         self.cols.len()
     }
@@ -195,8 +206,11 @@ impl<V: Copy + Into<f64> + Send + Sync> SparseRows<V> {
     }
 }
 
-/// Normalised Gaussian weights `g(d|σ) / Σ g` from squared distances,
-/// computed relative to the nearest neighbour so they never underflow.
+/// Normalised Gaussian weights `w_k = g(d_k|σ) / Σ_l g(d_l|σ)` from squared
+/// distances `d_k²`, computed as `exp(−(d_k² − d_0²)/2σ²)` relative to the
+/// nearest neighbour `d_0`: the common factor cancels in the normalisation,
+/// and the nearest weight is 1, so the weights never all underflow to zero
+/// for far-away points.
 pub(crate) fn gaussian_weights(d2: &[f64], sigma: f64) -> Vec<f64> {
     let d0 = d2.iter().cloned().fold(f64::INFINITY, f64::min);
     let inv = 1.0 / (2.0 * sigma * sigma);

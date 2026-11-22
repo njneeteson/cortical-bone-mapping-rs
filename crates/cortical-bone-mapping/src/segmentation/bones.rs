@@ -1,5 +1,43 @@
 //! Several bones in one image: labelled connected components, hysteresis
-//! growth, and per-bone starting segmentations kept apart.
+//! growth, and per-bone starting segmentations kept apart (ours, built on
+//! standard morphology).
+//!
+//! * **Labelling** ([`label_bones`]): threshold, binary median, 6-connected
+//!   components, kept from the largest. Bones that touch at the threshold
+//!   become one component; [`grow_bones`] and the Python `separate_bones`
+//!   handle the two failure modes of a single threshold.
+//! * **Hysteresis** ([`grow_bones`]): as in Canny's edge detector (Canny 1986),
+//!   a high threshold finds reliable seeds (the bones, told apart) and a low
+//!   threshold decides how far they extend: voxels at or above the low
+//!   threshold that are connected to a seed join it. Thin cortices that fall
+//!   below the high threshold through partial volume are recovered without
+//!   joining neighbouring bones at the low one. Growth is a multi-source
+//!   breadth-first search, so a voxel reachable from several bones goes to the
+//!   geodesically nearest (fewest 6-connected steps; ties to the lower label).
+//! * **Starts** ([`bone_hulls`]): each bone's per-slice convex hull, or its
+//!   morphological closing (Serra 1982) by a ball of radius `r`: dilate by
+//!   `r`, fill the enclosed background, erode by `r`. A closing fills
+//!   concavities narrower than about `2r` and keeps wider ones (a "local
+//!   convex hull"), so it follows a concave bone where a hull would bridge it.
+//!   The background enclosed after the dilation is filled before eroding,
+//!   since a void that the erosion would reopen (sparse marrow below the
+//!   threshold) is inside the bone; slice holes are filled in all three
+//!   orientations because a void reaching the outside through a cortical gap
+//!   wider than the closing is still enclosed in most slices through it.
+//! * **Kept apart**: starts of neighbouring bones overlap where a concave
+//!   surface faces another bone. Each overlapping voxel goes to the bone whose
+//!   thresholded voxels are nearest (Euclidean, physical units, from the
+//!   distance transforms), the voxels touching another bone's start are
+//!   cleared (unless they are their own bone), and pieces cut off from their
+//!   bone are dropped, so that every bone is a separate closed surface that
+//!   still contains its thresholded bone.
+//!
+//! # References
+//!
+//! * J. Canny, *A computational approach to edge detection*, IEEE Transactions
+//!   on Pattern Analysis and Machine Intelligence 8(6):679–698, 1986.
+//! * J. Serra, *Image Analysis and Mathematical Morphology*, Academic Press,
+//!   1982.
 
 use std::collections::VecDeque;
 
@@ -15,7 +53,7 @@ use crate::volume::Voxel;
 /// Options of [`label_bones`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct BoneLabelOptions {
-    /// Bone threshold (image units), e.g. from [`otsu_thresholds`].
+    /// Bone threshold (image units), e.g. from [`otsu_thresholds`](super::otsu_thresholds).
     pub threshold: f64,
     /// Binary median kernel against noise speckle.
     pub median_kernel: [usize; 3],

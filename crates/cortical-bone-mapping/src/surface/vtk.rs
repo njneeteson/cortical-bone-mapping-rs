@@ -1,4 +1,13 @@
-//! Writing meshes as legacy binary VTK PolyData.
+//! Writing meshes as legacy binary VTK PolyData (the "simple legacy format"
+//! of the VTK file formats; big-endian binary `double` data, one
+//! `POLYGONS` cell per triangle, point data as `SCALARS` and `VECTORS`), for
+//! viewing in ParaView or reading with PyVista.
+//!
+//! # References
+//!
+//! * W. Schroeder, K. Martin, B. Lorensen, *The Visualization Toolkit: an
+//!   Object-Oriented Approach to 3D Graphics*, 4th ed., Kitware, 2006
+//!   (file formats appendix).
 
 use std::io::Write;
 

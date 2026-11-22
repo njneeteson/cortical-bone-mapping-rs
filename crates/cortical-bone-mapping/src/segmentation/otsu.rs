@@ -1,4 +1,34 @@
 //! Thresholds from the image histogram by (multi-level) Otsu's method.
+//!
+//! Otsu (1979) chooses the thresholds that split the histogram into classes
+//! with the largest between-class variance. With the normalised histogram `h`
+//! over bins with centres `c_b`, a class `C = [a, b)` of bins has weight
+//! `ω_C = Σ_{b∈C} h_b` and mean `μ_C = Σ_{b∈C} h_b c_b / ω_C`, and the
+//! between-class variance of a split into classes `C_1 … C_K` is
+//!
+//! ```text
+//! σ_B² = Σ_k ω_k (μ_k − μ_T)²,     μ_T = Σ_b h_b c_b
+//! ```
+//!
+//! Maximising it is equivalent to minimising the within-class variance, since
+//! the two add up to the total. With cumulative sums of `h` and `h c` every
+//! class term is O(1) (Liao et al. 2001), so the exhaustive search costs O(B)
+//! for two classes and O(B²) for three (`B` bins). Thresholds are placed at
+//! bin edges; a threshold anywhere in an empty stretch of the histogram gives
+//! the same `σ_B²`, so the middle of the tied candidates is returned.
+//!
+//! For a non-calibrated CT (Hounsfield units) the histogram has peaks for fat
+//! and soft tissue but none for bone, whose values form a long tail: with
+//! `floor` excluding the air, the two-class threshold separates soft tissue
+//! from bone.
+//!
+//! # References
+//!
+//! * N. Otsu, *A threshold selection method from gray-level histograms*, IEEE
+//!   Transactions on Systems, Man, and Cybernetics 9(1):62–66, 1979.
+//! * P.-S. Liao, T.-S. Chen, P.-C. Chung, *A fast algorithm for multilevel
+//!   thresholding*, Journal of Information Science and Engineering
+//!   17(5):713–727, 2001.
 
 use ndarray::ArrayView3;
 use rayon::prelude::*;
@@ -36,7 +66,7 @@ impl Default for OtsuOptions {
 /// fat and soft tissue but none for bone, whose values form a long tail;
 /// with `floor` excluding the air, the two-class threshold separates soft
 /// tissue from bone, and is a reasonable starting threshold for
-/// [`label_bones`] and the hull. With three classes the upper threshold is
+/// [`label_bones`](super::label_bones) and the hull. With three classes the upper threshold is
 /// higher (fat | soft tissue | bone, with the bone class dominated by cortex).
 pub fn otsu_thresholds<T: Voxel>(image: ArrayView3<T>, o: &OtsuOptions) -> Vec<f64> {
     assert!(o.classes == 2 || o.classes == 3, "classes must be 2 or 3");
@@ -112,6 +142,9 @@ struct Moments {
 }
 
 impl Moments {
+    /// Cumulative sums of the normalised histogram and of its first moment over
+    /// the bin centres `lo + (i + ½) w`, so that any class `[a, b)` has weight
+    /// `pc[b] − pc[a]` and moment `mc[b] − mc[a]` (Liao et al. 2001).
     fn new(h: &[f64], lo: f64, w: f64) -> Self {
         let n = h.len();
         let total: f64 = h.iter().sum();
@@ -125,7 +158,8 @@ impl Moments {
         Moments { pc, mc }
     }
 
-    /// The between-class variance term of class `[a, b)`; `None` if empty.
+    /// The between-class variance term `ω_C (μ_C − μ_T)²` of class `[a, b)`;
+    /// `None` if it is empty.
     fn term(&self, a: usize, b: usize) -> Option<f64> {
         let mt = self.mc[self.mc.len() - 1];
         let wk = self.pc[b] - self.pc[a];

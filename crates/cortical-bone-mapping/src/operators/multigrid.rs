@@ -1,5 +1,28 @@
 //! Multigrid control points and the interpolation matrix `A` from control
-//! points to surface nodes.
+//! points to surface nodes (Neeteson & Boyd 2025).
+//!
+//! **Control points.** Visit the nodes in a random order and accept a node if
+//! no accepted node lies within `s`: random sequential selection, also known as
+//! dart throwing for Poisson-disk sampling (Cook 1986). The result is
+//! *maximal*: every node lies within `s` of a control point (else it would have
+//! been accepted), and no two control points are closer than `s`, so the
+//! control points cover the surface evenly at spacing `s` whatever the node
+//! density. A hash grid of cell size `s` makes each test O(1), so selection is
+//! O(N); the order comes from a seeded generator, so it is deterministic.
+//!
+//! **Interpolation.** Node `i` takes the normalised Gaussian-weighted mean of
+//! its `k` nearest control points,
+//! `A_iq = exp(−d_iq²/2s²) / Σ_q' exp(−d_iq'²/2s²)`, so the rows of `A` sum to
+//! one (constants are reproduced exactly) and the interpolated fields vary on
+//! the scale `s`.
+//!
+//! # References
+//!
+//! * N. J. Neeteson, S. K. Boyd, *Advancing Cortical Bone Mapping with global
+//!   optimization*, Computers in Biology and Medicine, 2025,
+//!   doi:10.1016/j.compbiomed.2025.110636.
+//! * R. L. Cook, *Stochastic sampling in computer graphics*, ACM Transactions
+//!   on Graphics 5(1):51–72, 1986.
 
 use std::collections::HashMap;
 
@@ -10,8 +33,8 @@ use crate::kdtree::KdTree;
 use crate::util::{Rng, V3};
 
 /// The multigrid interpolation matrix `A` (N × Q): each point takes a
-/// Gaussian-weighted (σ = `spacing`) average of its `k` nearest control
-/// points.
+/// normalised Gaussian-weighted (σ = `spacing`) average of its `k` nearest
+/// control points (Neeteson & Boyd 2025). Rows sum to one.
 pub fn interpolation_matrix(points: &[V3], controls: &[V3], k: usize, spacing: f64) -> SparseRows<f64> {
     let tree = KdTree::new(controls);
     let k = k.max(1).min(controls.len());
@@ -27,9 +50,12 @@ pub fn interpolation_matrix(points: &[V3], controls: &[V3], k: usize, spacing: f
     SparseRows::from_rows(rows, controls.len())
 }
 
-/// Random sequential selection of control points such that no two are
-/// closer than `spacing` and every point is within `spacing` of a control
-/// point. Returns indices into `points`. Deterministic for a seed.
+/// Random sequential selection of control points (dart throwing; Cook 1986):
+/// in a seeded random order, accept every point with no accepted point within
+/// `spacing`. No two control points are closer than `spacing`, and every point
+/// is within `spacing` of one (the selection is maximal). Returns indices into
+/// `points`. A hash grid of cell size `spacing` limits each test to the 27
+/// surrounding cells.
 pub fn select_control_points(points: &[V3], spacing: f64, seed: u64) -> Vec<u32> {
     let mut order: Vec<u32> = (0..points.len() as u32).collect();
     Rng::new(seed).shuffle(&mut order);

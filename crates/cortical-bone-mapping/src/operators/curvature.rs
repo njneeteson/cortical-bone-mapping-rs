@@ -1,5 +1,71 @@
 //! Curvature penalties on the fitted periosteal and endosteal surfaces (an
 //! extension in this crate), and the surface Laplacians they use.
+//!
+//! The fitted surfaces are `S = V + d n` with `d = m − t/2` (periosteal) or
+//! `d = m + t/2` (endosteal), `V` the node positions and `n` the (inward)
+//! sampling normals. For a discrete Laplace–Beltrami operator `L` of `V`, the
+//! mean-curvature normal is `½ ΔS = H n_S` (Meyer et al. 2003), so the scalar
+//! mean curvature of `S` is approximated by its normal component
+//!
+//! ```text
+//! H_i(S) ≈ n_i · ½ (L S)_i = n_i · ½ [(L V)_i + Σ_k L_ik d_k n_k + L_ii d_i n_i]
+//! ```
+//!
+//! using the fixed operator and normals of the input surface (a first-order
+//! approximation that keeps the penalty linear in `(m, t)`). Taking the normal
+//! component discards the tangential drift that point-cloud Laplacians show on
+//! irregular sampling.
+//!
+//! Modes ([`CurvatureMode`]):
+//!
+//! * **change**: the curvature *added by the fit*, in excess of the parallel
+//!   surface `V_d` at the local offset. A uniform offset moves every point of a
+//!   surface to its parallel surface, whose curvature changes in a way fixed by
+//!   the geometry of `V`; to first order the difference is
+//!   `H(V + d n) − H(V_d) ≈ ½ Δ_S d`, computed as
+//!   `n_i · ½ Σ_k L_ik (d_k − d_i) n_k`. A uniform offset costs nothing, so the
+//!   shape of the bone and a uniform cortex are free and only bumps are
+//!   resisted. (Penalising `H(S) − H(V)` instead biases thickness: the
+//!   endosteal surface of a cylinder is *meant* to be more curved than the
+//!   periosteal one.) With `q_i = ½ Σ_k L_ik (d_k − d_i) n_k`, the residual is
+//!   `r_i = c · n_i · q_i` (`c` the residual scale of
+//!   [`crate::fit::regularized`]), linear in `(m, t)`.
+//! * **excess**: absolute mean curvature above a threshold,
+//!   `r_i = c · max(0, |H_i(S)| − κ)`, leaving curvature below `κ` free; the
+//!   active set and the sign are re-evaluated at every Gauss–Newton
+//!   linearisation.
+//!
+//! Laplacians ([`SurfaceLaplacian`]):
+//!
+//! * **cotangent** (Pinkall & Polthier 1993; Meyer et al. 2003): curvature at
+//!   mesh resolution ([`crate::surface::cotan`]);
+//! * **Gaussian point cloud** at physical scale `σ` (after Belkin et al. 2009,
+//!   ours in the details): `(L f)_i = 4 (Σ_k w_ik f_k − f_i) / M2_i` with
+//!   `w_ik ∝ exp(−d_ik²/2σ²)` over the points within `cutoff · σ` and
+//!   `M2_i = Σ_k w_ik d_ik²`. Justification: on a locally flat surface a
+//!   second-order Taylor expansion gives
+//!   `Σ_k w_ik f_k − f_i ≈ ∇f · Σ w d + ½ Σ_k w_ik d_kᵀ ∇²f d_k`; for an
+//!   isotropic neighbourhood the first moment vanishes and the second is
+//!   `(M2/2) I` in the tangent plane, so the average minus the value is
+//!   `(M2/4) Δf`. Normalising by the actual `M2_i` makes this hold for any
+//!   truncation and sampling. When there are more than `k` candidates, the
+//!   weighted mean is estimated by importance sampling `k` neighbours with
+//!   probability `∝ w_ik` (each draw weighing `1/k`), deterministically per
+//!   node, so every row has at most `k` entries and the operator keeps its
+//!   physical scale whatever the node density (taking the `k` nearest
+//!   instead would shrink the scale to the radius they cover).
+//!
+//! # References
+//!
+//! * U. Pinkall, K. Polthier, *Computing discrete minimal surfaces and their
+//!   conjugates*, Experimental Mathematics 2(1):15–36, 1993.
+//! * M. Meyer, M. Desbrun, P. Schröder, A. H. Barr, *Discrete
+//!   differential-geometry operators for triangulated 2-manifolds*, in
+//!   H.-C. Hege, K. Polthier (eds.), Visualization and Mathematics III,
+//!   Springer, 2003, pp. 35–57.
+//! * M. Belkin, J. Sun, Y. Wang, *Constructing Laplace operator from point
+//!   clouds in Rᵈ*, Proceedings of the 20th ACM-SIAM Symposium on Discrete
+//!   Algorithms (SODA), 2009, pp. 1031–1040.
 
 use rayon::prelude::*;
 
@@ -36,7 +102,8 @@ pub struct SurfaceLaplacian {
 }
 
 impl SurfaceLaplacian {
-    /// Cotangent Laplacian of the mesh (one-ring, mesh resolution).
+    /// Cotangent Laplacian of the mesh (one-ring, mesh resolution; Pinkall &
+    /// Polthier 1993, Meyer et al. 2003).
     pub fn cotangent(mesh: &Mesh) -> Self {
         let c = CotanLaplacian::new(mesh);
         let n = mesh.vertices.len();
@@ -52,18 +119,12 @@ impl SurfaceLaplacian {
         }
     }
 
-    /// Point-cloud Laplacian at physical scale `sigma`.
-    ///
-    /// The Gaussian-weighted neighbourhood average `Σ_k w_ik f_k` over all
-    /// points within `cutoff · σ` is estimated by importance sampling `k`
-    /// neighbours with probability ∝ `exp(−d²/2σ²)` (deterministic per node),
-    /// so the operator acts at the requested physical scale whatever the node
-    /// density, with `k` entries per row. (Taking the `k` *nearest*
-    /// neighbours instead would shrink the scale to the radius they cover,
-    /// e.g. 0.27 mm for k = 64 at 60 µm node spacing, and make the
-    /// penalty stiff at the node scale.) Rows are normalised by the weighted
-    /// second moment `M2_i = Σ w_ik |p_k − p_i|²` so that
-    /// `(L f)_i = 4 (Σ w_ik f_k − f_i) / M2_i ≈ Δf` on a surface.
+    /// Point-cloud Laplacian at physical scale `sigma` (module documentation):
+    /// `(L f)_i = 4 (Σ_k w_ik f_k − f_i) / M2_i`, with the Gaussian-weighted
+    /// neighbourhood average over the points within `cutoff · σ` taken exactly
+    /// when there are at most `k` of them and estimated by importance sampling `k`
+    /// of them otherwise (`sampled_row`). Isolated points use their nearest
+    /// neighbour.
     pub fn gaussian(points: &[V3], k: usize, sigma: f64, cutoff: f64) -> Self {
         let n = points.len();
         let tree = KdTree::new(points);
@@ -181,6 +242,10 @@ pub struct CurvatureState {
 }
 
 impl CurvatureOperator {
+    /// Precompute, for the input surface `V` with normals `n`, the base term
+    /// `½ (L V)_i` (the curvature normal of `V`) and `u_i = Σ_{k≠i} L_ik n_k`, so
+    /// that `q_i` for any offsets `d` is one pass over the rows:
+    /// `½ (L (V + d n))_i = base_i + ½ (Σ_k L_ik d_k n_k + L_ii d_i n_i)`.
     pub fn new(
         lap: SurfaceLaplacian,
         points: &[V3],
@@ -214,10 +279,12 @@ impl CurvatureOperator {
         }
     }
 
+    /// Number of nodes.
     pub fn n(&self) -> usize {
         self.normals.len()
     }
 
+    /// The change mode, which measures curvature relative to the parallel surface.
     fn relative(&self) -> bool {
         matches!(self.mode, CurvatureMode::Change)
     }
@@ -280,8 +347,10 @@ impl CurvatureOperator {
         }
     }
 
-    /// Cost and gradient with respect to `(m, t)`; updates `state`.
-    /// Gradients are *added* to `gm`, `gt`.
+    /// Cost `½ Σ_surfaces Σ_i r_i²` and its gradient with respect to `(m, t)`
+    /// (`d = m ∓ t/2`, so `∂/∂m = ∂/∂d` and `∂/∂t = ∓½ ∂/∂d`), via the adjoint of
+    /// `q`; records each row's residual direction in `state` for the Gauss–Newton
+    /// products. Gradients are *added* to `gm`, `gt`.
     pub fn eval(&self, m: &[f64], t: &[f64], state: &mut CurvatureState, gm: &mut [f64], gt: &mut [f64]) -> f64 {
         let n = self.n();
         let mut cost = 0.0;
@@ -321,6 +390,7 @@ impl CurvatureOperator {
         cost
     }
 
+    /// An empty Gauss–Newton state (no active rows).
     pub fn new_state(&self) -> CurvatureState {
         CurvatureState {
             dir: [vec![[0.0; 3]; self.n()], vec![[0.0; 3]; self.n()]],

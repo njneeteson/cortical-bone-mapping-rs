@@ -1,15 +1,69 @@
 //! The local method: an independent bounded least-squares fit per node.
 //!
-//! Each profile is fitted with a projected Levenberg–Marquardt iteration on
-//! at most five parameters. The normal equations are formed directly
-//! (5×5) and solved by Cholesky, with Marquardt diagonal scaling (so the
-//! iteration is invariant to the very different scales of positions and
-//! densities) and Nielsen's damping update. Bounds are handled by clamping
-//! the step and freezing variables that sit on a bound with the gradient
-//! pointing out of the feasible box. This is the classic CBM formulation
-//! (Treece et al. 2010, 2012) as re-implemented by Neeteson & Boyd (2025,
-//! "local method"); every node is independent, so nodes are fitted in
-//! parallel with no shared state.
+//! This is the classic CBM formulation (Treece et al. 2010), the "local method"
+//! of our paper (Neeteson & Boyd 2025). Each profile is fitted by minimising
+//!
+//! ```text
+//! F(p) = ½ Σ_j w_j r_j²,    r_j = f(x_j; p) − f_j,    Σ_j w_j = 1
+//! ```
+//!
+//! over at most five parameters `p` within box bounds `l ≤ p ≤ u`, with a
+//! projected Levenberg–Marquardt iteration (Levenberg 1944; Marquardt 1963):
+//!
+//! 1. **Normal equations.** With `J` the Jacobian (from the analytic gradient
+//!    of [`crate::model::eval_grad`]), form `H = JᵀWJ` (5×5, packed) and
+//!    `g = JᵀWr` directly; `H` is the Gauss–Newton approximation of the
+//!    Hessian of `F`.
+//! 2. **Active set.** Variables at a bound whose gradient points out of the
+//!    box (`p_a = l_a, g_a > 0` or `p_a = u_a, g_a < 0`) are held for this step
+//!    (a projected Newton step; Bertsekas 1982).
+//! 3. **Damped step.** Solve `(H + μD) δ = −g` on the active variables by
+//!    Cholesky, with Marquardt's scaling `D = diag(H)` (floored at
+//!    `10⁻¹² max D`), which makes the iteration invariant to the very different
+//!    scales of positions (mm) and densities (hundreds); then project:
+//!    `p' = clamp(p + δ, l, u)`.
+//! 4. **Gain ratio.** `ρ = (F(p) − F(p')) / L(s)`, with `s = p' − p` the actual
+//!    (projected) step and `L(s) = −gᵀs − ½ sᵀHs` the decrease predicted by
+//!    the quadratic model.
+//! 5. **Damping update** (Nielsen 1999; Madsen et al. 2004): if `ρ > 10⁻⁴`
+//!    accept `p'` and set `μ ← μ · max(1/3, 1 − (2ρ − 1)³)`, `ν ← 2`;
+//!    otherwise `μ ← μ ν`, `ν ← 2ν`. Unlike the classic ×10/÷10 rule this
+//!    changes `μ` smoothly with the quality of the model.
+//!
+//! Stopping (as in MINPACK; Moré 1978): the scaled gradient
+//! `max_a |g_a| / (‖J_a‖ ‖r‖)` over the active variables, the cosine of the
+//! angle between the residual and a Jacobian column, below `gtol`; an accepted
+//! step reducing `F` by less than `ftol` (relative); the step, scaled by the
+//! column norms `‖J_a‖ = √H_aa`, below `xtol` relative to `p`; `μ > 10¹⁶`; or
+//! `max_iterations` trial steps.
+//!
+//! Every node is independent, so nodes are fitted in parallel with no shared
+//! state.
+//!
+//! # References
+//!
+//! * G. M. Treece, A. H. Gee, P. M. Mayhew, K. E. S. Poole, *High resolution
+//!   cortical bone thickness measurement from clinical CT data*, Medical Image
+//!   Analysis 14(3):276–290, 2010, doi:10.1016/j.media.2010.01.003.
+//! * N. J. Neeteson, S. K. Boyd, *Advancing Cortical Bone Mapping with global
+//!   optimization*, Computers in Biology and Medicine, 2025,
+//!   doi:10.1016/j.compbiomed.2025.110636.
+//! * K. Levenberg, *A method for the solution of certain non-linear problems in
+//!   least squares*, Quarterly of Applied Mathematics 2(2):164–168, 1944.
+//! * D. W. Marquardt, *An algorithm for least-squares estimation of nonlinear
+//!   parameters*, Journal of the Society for Industrial and Applied
+//!   Mathematics 11(2):431–441, 1963.
+//! * J. J. Moré, *The Levenberg–Marquardt algorithm: implementation and
+//!   theory*, in G. A. Watson (ed.), Numerical Analysis, Lecture Notes in
+//!   Mathematics 630, Springer, 1978, pp. 105–116.
+//! * H. B. Nielsen, *Damping parameter in Marquardt's method*, Technical
+//!   Report IMM-REP-1999-05, Technical University of Denmark, 1999.
+//! * K. Madsen, H. B. Nielsen, O. Tingleff, *Methods for non-linear least
+//!   squares problems*, 2nd ed., Informatics and Mathematical Modelling,
+//!   Technical University of Denmark, 2004.
+//! * D. P. Bertsekas, *Projected Newton methods for optimization problems with
+//!   simple constraints*, SIAM Journal on Control and Optimization
+//!   20(2):221–246, 1982.
 
 use rayon::prelude::*;
 
@@ -47,6 +101,7 @@ pub enum Status {
 }
 
 impl Status {
+    /// Whether the fit stopped on a convergence test (not on its budget).
     pub fn converged(self) -> bool {
         self != Status::MaxIterations
     }
@@ -68,6 +123,9 @@ struct Normal {
     h: [f64; 15],
 }
 
+/// The cost `F = ½ Σ_j w_j r_j²`, the gradient `g = Jᵀ W r` and the packed
+/// Gauss–Newton matrix `H = Jᵀ W J` at `p` (step 1 of the module
+/// documentation).
 fn normal_eq(y: &[f32], x: &[f64], w: &[f64], rho_c: f64, p: &Params) -> Normal {
     let mut cost = 0.0;
     let mut g = [0.0; NPARAM];
@@ -88,6 +146,7 @@ fn normal_eq(y: &[f32], x: &[f64], w: &[f64], rho_c: f64, p: &Params) -> Normal 
     Normal { cost, g, h }
 }
 
+/// The cost `F = ½ Σ_j w_j r_j²` alone, for trial points.
 fn cost_only(y: &[f32], x: &[f64], w: &[f64], rho_c: f64, p: &Params) -> f64 {
     let mut c = 0.0;
     for j in 0..x.len() {
@@ -98,7 +157,9 @@ fn cost_only(y: &[f32], x: &[f64], w: &[f64], rho_c: f64, p: &Params) -> f64 {
 }
 
 /// Fit one profile `y` sampled at `x` with weights `w` (normalised by the
-/// caller), starting from `init`.
+/// caller), starting from `init` clamped into the bounds: the projected
+/// Levenberg–Marquardt iteration of the module documentation (steps 2–5 per
+/// trial step, with Nielsen's damping update).
 pub fn fit_profile(y: &[f32], x: &[f64], w: &[f64], rho_c: f64, init: &Params, s: &FitSettings) -> LocalFit {
     let mut p = *init;
     for a in 0..NPARAM {
@@ -164,6 +225,9 @@ struct Active {
 }
 
 impl Active {
+    /// The active set at `p` (step 2 of the module documentation: free variables
+    /// not held at a bound by the gradient) and the MINPACK scaled gradient
+    /// `max_a |g_a| / (√H_aa ‖r‖)` over it, `‖r‖ = √(2F)`.
     fn new(p: &Params, ne: &Normal, s: &FitSettings) -> Self {
         let mut vars = [0usize; NPARAM];
         let mut n = 0;
@@ -188,8 +252,9 @@ impl Active {
         Active { vars, n, gmax }
     }
 
-    /// Solve `(H + μ D) δ = −g` on the active variables and project `p + δ`
-    /// onto the bounds.
+    /// Solve `(H + μ D) δ = −g` on the active variables by Cholesky, with
+    /// Marquardt's scaling `D_aa = max(H_aa, 10⁻¹² max H)`, and project `p + δ`
+    /// onto the bounds (step 3).
     fn trial_point(&self, p: &Params, ne: &Normal, mu: f64, s: &FitSettings) -> Params {
         let (vars, nv) = (&self.vars, self.n);
         let mut a_mat = [0.0; 25];
@@ -213,7 +278,8 @@ impl Active {
     }
 }
 
-/// The step, scaled by the Jacobian column norms, is negligible next to `p`.
+/// The step, scaled by the Jacobian column norms `√H_aa`, is below `xtol`
+/// relative to `p` in the same norm: `‖D s‖ ≤ xtol (‖D p‖ + xtol)`.
 fn negligible(ne: &Normal, p: &Params, step: &Params, xtol: f64) -> bool {
     let mut snorm = 0.0;
     let mut pnorm = 0.0;
@@ -225,7 +291,8 @@ fn negligible(ne: &Normal, p: &Params, step: &Params, xtol: f64) -> bool {
     snorm.sqrt() <= xtol * (pnorm.sqrt() + xtol)
 }
 
-/// The cost decrease the quadratic model predicts for `step`.
+/// The cost decrease the Gauss–Newton model predicts for the actual step `s`,
+/// `L(s) = −gᵀs − ½ sᵀHs` (the denominator of the gain ratio, step 4).
 fn predicted_decrease(ne: &Normal, step: &Params) -> f64 {
     let mut pred = 0.0;
     for a in 0..NPARAM {
@@ -237,8 +304,10 @@ fn predicted_decrease(ne: &Normal, step: &Params) -> f64 {
     pred
 }
 
-/// Fit every profile independently in parallel. `init` and `fixed_sigma`
-/// may be per node (length n) or a single value (length 1).
+/// Fit every profile independently in parallel. `init` may be per node
+/// (length n) or a single value (length 1). The weights are normalised to sum
+/// to one per profile, after setting unused samples to zero, so that every
+/// profile's cost is a weighted mean square whatever samples it lost.
 pub fn fit_all(
     profiles: &Profiles,
     x: &[f64],

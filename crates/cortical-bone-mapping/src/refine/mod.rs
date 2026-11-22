@@ -11,29 +11,35 @@
 //!
 //! then recomputes normals, resamples the profiles and refits (warm-started,
 //! with `m` shifted by the move), until the RMS displacement falls below a
-//! tolerance. Under-relaxation damps the oscillation that a full step can
-//! cause when the normals change between iterations. The output is the
-//! refined periosteal surface and masks of the periosteal, endosteal and
-//! cortical regions.
+//! tolerance. This is a damped fixed-point iteration `v ← v + α (F(v) − v)`
+//! whose fixed point is a surface on which every trusted fit puts the edge at
+//! the node (`m = t/2`): with `α = ½` the remaining displacement roughly halves
+//! each iteration, and damping prevents the oscillation that a full step can
+//! cause when the normals, and hence the profiles, change between iterations.
+//! The output is the refined periosteal surface and masks of the periosteal,
+//! endosteal and cortical regions.
 //!
 //! **Inexact inner fits.** While the surface still moves, a fit only needs
 //! the edges to a fraction of the next move: the global solve stops once its
 //! steps change the edges by less than `edge_ratio` × the last displacement
-//! (RMS). The initial fit and the final one are full solves: refinement has
-//! converged only when a full solve, itself converged, moves the surface by
-//! less than the tolerance. If the displacement stops decreasing (and no
-//! region converges) for `stall_iterations` iterations, refinement stops as
-//! *stalled*, with a diagnosis of the profiles that miss the cortex.
+//! (RMS), as an inexact Newton method stops its linear solves early. The
+//! initial fit and the final one are full solves: refinement has converged
+//! only when a full solve, itself converged, moves the surface by less than
+//! the tolerance, both overall and in every region of radius `region_radius`
+//! (an RMS over the whole surface can hide a small region that still moves).
+//! If the displacement stops decreasing (and no region converges) for
+//! `stall_iterations` iterations, refinement stops as *stalled*, with a
+//! diagnosis of the profiles that miss the cortex (`diagnosis`).
 //!
 //! Two options change how the surface is carried between iterations:
 //!
 //! * **Level set** ([`RefineOptions::level_set`]): the surface is the zero
-//!   level of a signed distance ([`crate::surface::levelset`]); every
-//!   iteration moves the level set and extracts a new mesh ([`motion`]), so
-//!   the node spacing stays at the grid spacing and the surface cannot fold,
-//!   however far it travels.
+//!   level of a signed distance ([`crate::surface::levelset`]; Osher & Sethian
+//!   1988); every iteration moves the level set and extracts a new mesh
+//!   (`motion`), so the node spacing stays at the grid spacing and the
+//!   surface cannot fold, however far it travels.
 //! * **Regional convergence** ([`RefineOptions::freeze`]): regions whose nodes
-//!   have stopped moving (in position and thickness) are frozen ([`state`]).
+//!   have stopped moving (in position and thickness) are frozen (`state`).
 //!   They are no longer refitted, except near moving regions, where they are
 //!   refitted as fixed values: boundary conditions for the regularisation.
 //!   The verifying full solve covers the whole surface and unfreezes what
@@ -42,6 +48,14 @@
 //! Next to other structures ([`refine_segmentation_excluding`]), their
 //! voxels are excluded: profile samples there get zero weight and the surface
 //! is never moved into them.
+//!
+//! The whole procedure is ours; no published method is reproduced here.
+//!
+//! # References
+//!
+//! * S. Osher, J. A. Sethian, *Fronts propagating with curvature-dependent
+//!   speed: algorithms based on Hamilton–Jacobi formulations*, Journal of
+//!   Computational Physics 79(1):12–49, 1988.
 
 mod diagnosis;
 mod motion;
@@ -157,6 +171,10 @@ struct Limits {
 }
 
 impl Limits {
+    /// Defaults: tolerance a tenth of the smallest voxel spacing, the regional
+    /// tolerance twice that over a radius of 5 voxels, and a move capped at `α`
+    /// times the longer sampling half-range (a fitted edge beyond the profile is
+    /// not measured).
     fn new(options: &Options, refine: &RefineOptions) -> Self {
         let geom = &options.geometry;
         let max_spacing = geom.spacing.iter().cloned().fold(0.0, f64::max);
@@ -188,6 +206,10 @@ struct Shared {
 }
 
 impl Shared {
+    /// From the first, full fit: with freezing (and a cortical density that is
+    /// one value), hold `ρc` and, for the regularised method, global densities and
+    /// a global `σ` at the whole surface's values, so that partial fits measure on
+    /// the same scale; otherwise only warm-start them.
     fn new(first: &CbmResult, options: &Options, freezing: bool) -> Self {
         let fixed_rho = freezing && options.model.rho_c_mode != RhoCMode::ProfileMax;
         let global_method = matches!(options.method, Method::Regularized { .. });

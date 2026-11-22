@@ -3,6 +3,16 @@
 //! Coordinates follow the array axis order (axis 0, axis 1, axis 2), i.e.
 //! `(z, y, x)` for a NumPy array. A voxel with index `(i, j, k)` has its
 //! centre at `origin + (i, j, k) ⊙ spacing`.
+//!
+//! * **Trilinear interpolation**: the tensor product of linear interpolation
+//!   along each axis, exact for fields linear in each coordinate; positions
+//!   outside the image are clamped to the edge voxels (profiles that leave the
+//!   image see the edge value, not zeros, which would look like a tissue
+//!   boundary).
+//! * **Gaussian filtering**: a Gaussian is separable, so a 3D filter is three
+//!   1D convolutions. Kernels are sampled at integer offsets, truncated at
+//!   `4σ` (where the tail beyond is below 7·10⁻⁵ of the mass) and normalised to
+//!   sum to one, so constants are preserved; edges are replicated.
 
 use ndarray::{Array3, ArrayView3, Axis, Zip};
 use rayon::prelude::*;
@@ -12,6 +22,7 @@ use crate::util::V3;
 /// A scalar voxel type the image may be stored as. The image is never
 /// converted or copied: values are converted to `f64` as they are sampled.
 pub trait Voxel: Copy + Send + Sync + 'static {
+    /// The value as `f64` (`true` = 1).
     fn to_f64(self) -> f64;
 }
 
@@ -45,12 +56,14 @@ impl Default for Geometry {
 }
 
 impl Geometry {
+    /// A grid with the given spacing and its origin at zero.
     pub fn new(spacing: V3) -> Self {
         Geometry {
             spacing,
             origin: [0.0; 3],
         }
     }
+    /// Continuous index position of the physical point `p`.
     #[inline]
     pub fn to_index(&self, p: V3) -> V3 {
         [
@@ -59,6 +72,7 @@ impl Geometry {
             (p[2] - self.origin[2]) / self.spacing[2],
         ]
     }
+    /// Physical position of the continuous index `idx`.
     #[inline]
     pub fn to_physical(&self, idx: V3) -> V3 {
         [
@@ -67,13 +81,16 @@ impl Geometry {
             self.origin[2] + idx[2] * self.spacing[2],
         ]
     }
+    /// The smallest voxel spacing.
     pub fn min_spacing(&self) -> f64 {
         self.spacing.iter().cloned().fold(f64::INFINITY, f64::min)
     }
 }
 
-/// Trilinear interpolation at a continuous index position. Positions
-/// outside the image are clamped to the nearest edge voxel.
+/// Trilinear interpolation at a continuous index position: linear
+/// interpolation along axis 2, then axis 1, then axis 0 between the 8
+/// surrounding voxels. Positions outside the image are clamped to the nearest
+/// edge voxel.
 #[inline]
 pub fn trilinear<T: Voxel>(img: &ArrayView3<T>, idx: V3) -> f64 {
     let (d0, d1, d2) = img.dim();
@@ -111,7 +128,8 @@ pub fn trilinear<T: Voxel>(img: &ArrayView3<T>, idx: V3) -> f64 {
 }
 
 /// Normalised 1D Gaussian kernel with standard deviation `sigma` (in
-/// samples), truncated at `4σ`.
+/// samples), sampled at integer offsets and truncated at `4σ`; `[1]` for
+/// `sigma ≤ 0`.
 pub fn gaussian_kernel(sigma: f64) -> Vec<f64> {
     if !(sigma > 0.0) {
         return vec![1.0];

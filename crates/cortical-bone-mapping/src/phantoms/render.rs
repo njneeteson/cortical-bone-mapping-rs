@@ -1,6 +1,38 @@
 //! Rendering shared by the phantoms: smooth random fields, supersampled
 //! voxel integration with a Gaussian PSF and noise, and root finding along
 //! lines for the ground truth.
+//!
+//! * **Random fields**: `f(p) = √(2/N) Σ_{n=1..N} cos(k_n · p + φ_n)` with wave
+//!   vectors of fixed length `|k_n| = 2π/λ`, random directions and uniform
+//!   random phases, the spectral representation of a Gaussian random field
+//!   (Shinozuka & Deodatis 1991) with a single wavelength, as in Berk's (1987)
+//!   model of bicontinuous structures. Each term has variance ½, so the factor
+//!   `√(2/N)` gives unit variance, and for large `N` the field is close to
+//!   Gaussian. Stretching the directions along an axis elongates the pattern
+//!   there (trabeculae aligned with the shaft).
+//! * **Level cuts**: for a unit Gaussian `f`, `P(|f| < w) = erf(w/√2)`, so the
+//!   shell `|f| < √2 erf⁻¹(V)` has volume fraction `V` (a two-level cut; Berk
+//!   1987): a connected, sheet- and rod-like network whose separation is set
+//!   by `λ`, used for trabeculae; `f > √2 erf⁻¹(1 − 2P)` has fraction `P`,
+//!   used for pores. `erf⁻¹` is Giles' approximation
+//!   (Giles 2011), of single-precision accuracy, ample for a volume fraction.
+//! * **Imaging**: the density is integrated over each voxel by `s³`-point
+//!   supersampling (the partial-volume effect of a finite detector element),
+//!   blurred with a separable Gaussian PSF and given independent Gaussian
+//!   noise, the image formation model that CBM inverts.
+//! * **Ground truth** along a line: the first sign change of an implicit
+//!   function, bracketed by stepping and refined by 50 bisections (to
+//!   `h / 2⁵⁰`, below the precision of a double).
+//!
+//! # References
+//!
+//! * N. F. Berk, *Scattering properties of a model bicontinuous structure with
+//!   a well defined length scale*, Physical Review Letters 58(25):2718–2721,
+//!   1987.
+//! * M. Shinozuka, G. Deodatis, *Simulation of stochastic processes by
+//!   spectral representation*, Applied Mechanics Reviews 44(4):191–204, 1991.
+//! * M. Giles, *Approximating the erfinv function*, in W.-m. W. Hwu (ed.), GPU
+//!   Computing Gems, Jade Edition, Morgan Kaufmann, 2011, pp. 109–116.
 
 use ndarray::Array3;
 use rayon::prelude::*;
@@ -8,7 +40,8 @@ use rayon::prelude::*;
 use crate::util::{Rng, V3};
 use crate::volume::{gaussian_filter, Geometry};
 
-/// Inverse of erf for the level-set widths (Giles' approximation).
+/// The inverse error function by Giles' (2011) single-precision polynomial
+/// approximation in `w = −ln(1 − x²)`, two branches (`w < 5`, `w ≥ 5`).
 pub(crate) fn erfinv(x: f64) -> f64 {
     let w = -((1.0 - x) * (1.0 + x)).ln();
     if w < 5.0 {
@@ -46,6 +79,9 @@ pub(crate) fn erfinv(x: f64) -> f64 {
     }
 }
 
+/// `n` random plane waves `(k, φ)` of wavelength `wavelength` (`|k| = 2π/λ`)
+/// with random directions, the axis-0 component shrunk by `axial_stretch` so
+/// that the pattern is elongated along axis 0, and uniform random phases.
 pub(crate) fn waves(rng: &mut Rng, n: usize, wavelength: f64, axial_stretch: f64) -> Vec<(V3, f64)> {
     let k = 2.0 * std::f64::consts::PI / wavelength;
     (0..n)
@@ -57,6 +93,8 @@ pub(crate) fn waves(rng: &mut Rng, n: usize, wavelength: f64, axial_stretch: f64
         .collect()
 }
 
+/// The random field `√(2/N) Σ_n cos(k_n · p + φ_n)` at `p`: zero mean, unit
+/// variance, close to Gaussian (module documentation).
 #[inline]
 pub(crate) fn field(w: &[(V3, f64)], p: V3) -> f64 {
     let s: f64 = w.iter().map(|(k, ph)| (crate::util::dot(*k, p) + ph).cos()).sum();

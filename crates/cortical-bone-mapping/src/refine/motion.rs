@@ -1,6 +1,29 @@
 //! Moving the surface: the displacement each fit implies, its smooth
 //! extension to unfitted vertices, and the move itself, either of the same
-//! vertices or of a level set from which a new mesh is extracted.
+//! vertices or of a level set from which a new mesh is extracted (ours).
+//!
+//! * **Displacement** of a trusted node: `d_i = α (m_i − t_i/2) n_i`, capped at
+//!   `max_step`. Its warm start for the next fit has `m` shifted by the move
+//!   (`m ← m − α (m − t/2)`), since the profile origin moves with the node.
+//! * **Extension** to untrusted, unfitted and excluded vertices: harmonic
+//!   interpolation, i.e. the solution of the discrete Laplace equation
+//!   `u_i = mean_{j ∈ N(i)} u_j` on the unknown vertices with the known
+//!   displacements as Dirichlet boundary values, by Jacobi iteration. The
+//!   harmonic extension is the smoothest one (it minimises the Dirichlet
+//!   energy `Σ_edges |u_i − u_j|²`), so regions without a usable fit follow
+//!   their neighbours instead of tearing away from them. A fixed number of
+//!   iterations is enough: the unknown regions are small, and the residual
+//!   error only delays their move to a later iteration (50 iterations are used).
+//! * **Caps** (vertices outside the image, where the mask is cut by the image
+//!   edge) may only slide within their cap: the displacement is zeroed along
+//!   the axes on which they lie outside.
+//! * **Exclusion as a hard constraint**: a same-vertex move into an excluded
+//!   voxel is halved up to six times (to 1/64 of the step) until it stays out,
+//!   else dropped; with a level set the excluded voxels are kept outside
+//!   (`φ ≥ h/2`) after every move.
+//! * **State transfer** to a new mesh: every new vertex takes the state of the
+//!   nearest *moved* old vertex, with its warm `m` shifted by how much farther
+//!   inside it lies along that vertex's normal.
 
 use ndarray::{Array3, ArrayView3};
 use rayon::prelude::*;
@@ -76,8 +99,9 @@ pub(super) fn displacements(
     step
 }
 
-/// Jacobi iterations of neighbour averaging over the vertices without a
-/// known value, so that unknown displacements interpolate the known ones.
+/// Harmonic interpolation of the unknown displacements (module
+/// documentation): Jacobi iterations of `u_i ← mean_{j ∈ N(i)} u_j` over the
+/// vertices without a known value, the known ones fixed.
 pub(super) fn harmonic_fill(adj: &Adjacency, known: &[bool], vals: &mut [V3], iterations: usize) {
     if known.iter().all(|&k| k) {
         return;

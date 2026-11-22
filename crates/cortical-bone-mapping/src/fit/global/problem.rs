@@ -1,10 +1,35 @@
 //! The global problem: cost, gradient, Gauss–Newton products and diagonal
 //! blocks of the data term and the penalties.
 //!
-//! Gradients are built in node space first (`gnode`: all five parameters per
-//! node from the data term; `gfield`: per field channel, data plus
-//! penalties) and then mapped to the variables (`Aᵀ` for multigrid, sums
-//! over nodes for globals).
+//! Notation: node `i` has parameters `p_i` (fields from the variables, the
+//! rest global or fixed), residuals `r_ij = f̂(x_j; p_i) − f_ij` with weights
+//! `w_ij = γ_j / (NM)` (zero for unused samples) and Jacobian rows
+//! `∇f̂_ij = ∂f̂(x_j; p_i)/∂p_i`. For a field channel `c` the node values are
+//! `v_c = A u_c` (multigrid) or `v_c = u_c` (one dof per node).
+//!
+//! **Data term.** `D = ½ Σ_ij w_ij r_ij²`; per node the gradient
+//! `g_i = Σ_j w_ij r_ij ∇f̂_ij` and the Gauss–Newton block
+//! `B_i = Σ_j w_ij ∇f̂_ij ∇f̂_ijᵀ` (5×5 symmetric, packed in 15 entries).
+//!
+//! **Smoothing.** `S = ½ Σ_c κ_c ‖ω v_c‖²`; gradient `κ_c ωᵀω v_c` and
+//! Gauss–Newton (here exact) Hessian `κ_c ωᵀω`.
+//!
+//! **Curvature.** Residuals linear (change mode) or piecewise linear (excess
+//! mode) in `(m, t)`; see [`crate::operators::CurvatureOperator`].
+//!
+//! **Mapping to variables.** Node-space gradients of field channel `c` map to
+//! its dofs by `Aᵀ` (or the identity); a global parameter's gradient is the sum
+//! over nodes of its node-space gradient (chain rule: every node uses the same
+//! value). The Gauss–Newton product `JᵀJ v` maps `v` to node space the same
+//! way (`A v`, and the global values broadcast), applies `B_i` per node and the
+//! penalty Hessians, and maps back. Its diagonal blocks (for the
+//! preconditioner) are `Σ_i a_ik² B_i` per dof (multigrid; the off-diagonal
+//! couplings of `A` are dropped, which is what a block-Jacobi preconditioner
+//! does) plus the diagonals of the penalty Hessians, and for the globals the
+//! sums `Σ_i B_i` restricted to the global channels.
+//!
+//! All sums over nodes use fixed-size chunks in a fixed order
+//! ([`crate::util::det_sum`]), so results do not depend on the thread count.
 
 use rayon::prelude::*;
 

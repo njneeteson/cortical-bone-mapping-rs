@@ -1,16 +1,45 @@
-//! Surface extraction from a binary mask with (naive) surface nets.
+//! Surface extraction from a binary mask or a level set with (naive)
+//! surface nets.
 //!
-//! Each grid cell (a cube whose 8 corners are voxel centres) that straddles
-//! the boundary gets one vertex, at the mean of the boundary crossings on its
-//! edges. Each voxel edge whose endpoints differ emits a quad joining the four
-//! cells around it, oriented so the normal points out of the foreground. The
-//! quads are split into triangles along their shorter diagonal.
+//! Surface nets (Gibson 1998) are a dual method: the iso-surface of a sampled
+//! field `f` at level `ISO` gets one vertex per grid cell (a cube whose 8
+//! corners are voxel centres) that straddles the level, and one quad per grid
+//! edge whose endpoints straddle it, joining the four cells around that edge.
+//! Gibson then relaxes the vertices iteratively within their cells; the
+//! "naive" variant used here places each vertex once, at the mean of the
+//! level crossings on its cell's edges, found by linear interpolation along
+//! each edge,
 //!
-//! Compared with marching cubes this produces about half as many, much
-//! better-shaped triangles and needs no lookup tables. The cell→vertex index
-//! is kept for only two cell layers at a time, so memory is
-//! `O(slice)` + output, regardless of the image size. Voxels outside the
-//! image count as background, so the surface is always closed.
+//! ```text
+//! v = cell corner + mean over crossing edges (p, q) of  c_p + t (c_q − c_p),
+//! t = (ISO − f_p) / (f_q − f_p)
+//! ```
+//!
+//! as in dual contouring without the quadric fit (Ju et al. 2002). For a
+//! binary mask `t = ½` on every edge; blurring the mask first
+//! (`smoothing_sigma`) gives sub-voxel positions. Quads are oriented so that
+//! the normal points out of the foreground and split into two triangles along
+//! their shorter diagonal, which avoids the slivers of the longer one.
+//!
+//! Compared with marching cubes (Lorensen & Cline 1987) this needs no lookup
+//! tables and gives about half as many, much better-shaped triangles, which
+//! matters because every vertex becomes a CBM node. The cell→vertex index is kept for two
+//! cell layers at a time, so memory is `O(slice)` + output. Voxels outside the
+//! image count as background, so the surface is always closed; vertices whose
+//! cell reaches outside the image are flagged as `border` (the caps where the
+//! mask is cut by the image edge, which carry no periosteum).
+//!
+//! # References
+//!
+//! * S. F. F. Gibson, *Constrained elastic surface nets: generating smooth
+//!   surfaces from binary segmented data*, Medical Image Computing and
+//!   Computer-Assisted Intervention (MICCAI 1998), Lecture Notes in Computer
+//!   Science 1496, Springer, 1998, pp. 888–898.
+//! * T. Ju, F. Losasso, S. Schaefer, J. Warren, *Dual contouring of Hermite
+//!   data*, ACM Transactions on Graphics 21(3):339–346, 2002.
+//! * W. E. Lorensen, H. E. Cline, *Marching cubes: a high resolution 3D surface
+//!   construction algorithm*, Computer Graphics (SIGGRAPH 87) 21(4):163–169,
+//!   1987.
 
 use ndarray::{Array3, ArrayView3};
 
@@ -118,6 +147,7 @@ pub fn extract_level_set(phi: &ArrayView3<f32>, lo: [usize; 3], dims: [usize; 3]
 }
 
 impl Extracted {
+    /// No surface.
     fn empty() -> Self {
         Extracted {
             mesh: Mesh::default(),
@@ -153,6 +183,7 @@ const EDGES: [(usize, usize); 12] = [
 ];
 const NONE: u32 = u32::MAX;
 
+/// A field value inside the surface.
 fn inside(v: f64) -> bool {
     v > ISO
 }
@@ -197,6 +228,7 @@ struct Nets {
 }
 
 impl Nets {
+    /// Cells over the voxels `lo..=hi`, one cell layer beyond them on the low side.
     fn new(lo: [usize; 3], hi: [usize; 3], dims: [isize; 3]) -> Self {
         let n1 = (hi[1] - lo[1] + 2) as isize;
         let n2 = (hi[2] - lo[2] + 2) as isize;
@@ -213,6 +245,7 @@ impl Nets {
         }
     }
 
+    /// Index of cell `(b, c)` within a layer.
     fn lidx(&self, b: isize, c: isize) -> usize {
         ((b - self.c0[1]) * self.n2 + (c - self.c0[2])) as usize
     }

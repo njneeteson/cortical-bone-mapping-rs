@@ -4,7 +4,8 @@
 //! surface normal, the true density is modelled as three constant levels
 //! separated by two step edges (soft tissue → cortex → trabecular/marrow).
 //! The imaging system blurs these steps with a Gaussian of standard deviation
-//! `σ`, giving (Treece et al. 2010, 2012; Neeteson & Boyd 2025):
+//! `σ`, giving the model of Treece et al. (2010), in the notation of our paper
+//! (Neeteson & Boyd 2025):
 //!
 //! ```text
 //! f(x) = ρs + (ρc − ρs)/2 · [1 + erf((x − m + t/2) / (σ√2))]
@@ -15,8 +16,40 @@
 //! positive inside), `m` the position of the cortical mid-line, `t` the
 //! cortical thickness, `ρs`, `ρc`, `ρb` the soft tissue, cortical and
 //! trabecular densities. The periosteal edge is at `m − t/2` and the
-//! endosteal edge at `m + t/2`. `ρc` is always held fixed, since `ρc` and `σ`
-//! cannot both be estimated from a thin cortex.
+//! endosteal edge at `m + t/2`. Each term is a unit step at an edge convolved
+//! with the Gaussian line-spread function `N(0, σ²)`, which integrates to
+//! `½ [1 + erf(u/√2)]` with `u` the distance from the edge in units of `σ`.
+//!
+//! `ρc` is always held fixed: a thinner, denser cortex blurs into nearly the
+//! same profile as a thicker, less dense one, so `ρc` and `t` (and `σ`) cannot
+//! all be estimated from a thin cortex (Treece et al. 2012).
+//!
+//! **Gradient.** With `u₁ = (x − m + t/2)/σ`, `u₂ = (x − m − t/2)/σ`,
+//! `φ(u) = exp(−u²/2)/√(2π)` the standard normal density, step heights
+//! `a₁ = ρc − ρs`, `a₂ = ρb − ρc` and `g_k = a_k φ(u_k)/σ`, and using
+//! `d/du ½[1 + erf(u/√2)] = φ(u)`:
+//!
+//! ```text
+//! ∂f/∂m = −g₁ − g₂            ∂f/∂ρs = ½ (1 − erf(u₁/√2))
+//! ∂f/∂t = ½ (g₁ − g₂)         ∂f/∂ρb = ½ (1 + erf(u₂/√2))
+//! ∂f/∂σ = −(g₁ u₁ + g₂ u₂)
+//! ```
+//!
+//! (`∂u₁/∂m = −1/σ`, `∂u₁/∂t = 1/(2σ)`, `∂u_k/∂σ = −u_k/σ`, and the same for
+//! `u₂` with the sign of the `t` term reversed.) The gradient is checked
+//! against central differences in the tests.
+//!
+//! # References
+//!
+//! * G. M. Treece, A. H. Gee, P. M. Mayhew, K. E. S. Poole, *High resolution
+//!   cortical bone thickness measurement from clinical CT data*, Medical Image
+//!   Analysis 14(3):276–290, 2010, doi:10.1016/j.media.2010.01.003.
+//! * G. M. Treece, K. E. S. Poole, A. H. Gee, *Imaging the femoral cortex:
+//!   thickness, density and mass from clinical CT*, Medical Image Analysis
+//!   16(5):952–965, 2012.
+//! * N. J. Neeteson, S. K. Boyd, *Advancing Cortical Bone Mapping with global
+//!   optimization*, Computers in Biology and Medicine, 2025,
+//!   doi:10.1016/j.compbiomed.2025.110636.
 
 /// Index of the cortical mid-line position `m` in a parameter vector.
 pub const M: usize = 0;
@@ -41,7 +74,7 @@ const FRAC_1_SQRT_2: f64 = std::f64::consts::FRAC_1_SQRT_2;
 /// 1 / sqrt(2π)
 const INV_SQRT_2PI: f64 = 0.398_942_280_401_432_7;
 
-/// Model density at distance `x`.
+/// The model density `f(x)` of the module documentation (Treece et al. 2010).
 #[inline]
 pub fn eval(x: f64, p: &Params, rho_c: f64) -> f64 {
     let (m, t, s, rs, rb) = (p[M], p[T], p[SIGMA], p[RHO_S], p[RHO_B]);
@@ -50,7 +83,9 @@ pub fn eval(x: f64, p: &Params, rho_c: f64) -> f64 {
     rs + 0.5 * (rho_c - rs) * (1.0 + e1) + 0.5 * (rb - rho_c) * (1.0 + e2)
 }
 
-/// Model density at `x` and its gradient with respect to `[m, t, σ, ρs, ρb]`.
+/// `f(x)` and its gradient with respect to `[m, t, σ, ρs, ρb]`, in one pass
+/// (the shared `erf` and normal-density terms are computed once). See the
+/// module documentation for the derivation.
 #[inline]
 pub fn eval_grad(x: f64, p: &Params, rho_c: f64) -> (f64, Params) {
     let (m, t, s, rs, rb) = (p[M], p[T], p[SIGMA], p[RHO_S], p[RHO_B]);

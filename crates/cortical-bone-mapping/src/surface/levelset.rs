@@ -2,14 +2,48 @@
 //! (extension).
 //!
 //! The surface is the zero level of a signed distance `φ` (negative inside)
-//! on a box of the image grid, clamped to `±band`. Moving the surface by a
-//! displacement `s` along its inward normal is `φ ← φ + s_ext`, where `s_ext`
-//! extends the per-vertex displacements to the grid; for a signed distance
-//! with `s_ext` constant along the normals this moves the zero level by
-//! exactly `s`. The surface is then extracted again from `φ` (surface nets),
-//! which keeps the node spacing at the grid spacing however much the surface
-//! stretches, and cannot fold or self-intersect. Finally `φ` is reset to the
-//! distance to the new mesh where it changed, so it stays a signed distance.
+//! on a box of the image grid, clamped to `±band` (a narrow band: only values
+//! near the surface matter; Osher & Sethian 1988). Moving the surface by a
+//! displacement `s` along its inward normal is
+//!
+//! ```text
+//! φ ← φ + s_ext
+//! ```
+//!
+//! where `s_ext` extends the per-vertex displacements to the grid. For a
+//! signed distance (`|∇φ| = 1`) and `s_ext` constant along the normals, this
+//! moves the zero level by exactly `s`: a point `y` at distance `s` inside the
+//! surface has `φ(y) = −s`, and after the update `φ(y) = 0`. The surface is then
+//! extracted again from `φ` ([`super::nets`]), which keeps the node spacing at
+//! the grid spacing however much the surface stretches, and cannot fold or
+//! self-intersect, unlike moving mesh vertices.
+//!
+//! **Extension** (ours). The standard construction solves `∇s_ext · ∇φ = 0`
+//! from the surface outwards (Adalsteinsson & Sethian 1999). Here each grid
+//! point instead takes the Gaussian-weighted mean of the displacements of its
+//! `k` nearest vertices (width about the mean edge length, weights relative to
+//! the nearest vertex so they never underflow). Within the band this is
+//! nearly constant along the normals, as required, and it also smooths the
+//! displacements over about one edge length, which the noisy per-node fits
+//! need anyway.
+//!
+//! **Re-distancing**. After a move `φ` is no longer a distance where the
+//! displacement varied; it is reset to the exact distance to the new mesh
+//! (the closest point over the faces around the 4 nearest vertices;
+//! Ericson 2005) on the voxels that changed, keeping its sign. Exact distances
+//! avoid the slow drift of PDE-based re-initialisation, at the cost of a
+//! nearest-vertex search per voxel, which only the changed band pays.
+//!
+//! # References
+//!
+//! * S. Osher, J. A. Sethian, *Fronts propagating with curvature-dependent
+//!   speed: algorithms based on Hamilton–Jacobi formulations*, Journal of
+//!   Computational Physics 79(1):12–49, 1988.
+//! * D. Adalsteinsson, J. A. Sethian, *The fast construction of extension
+//!   velocities in level set methods*, Journal of Computational Physics
+//!   148(1):2–22, 1999.
+//! * C. Ericson, *Real-Time Collision Detection*, Morgan Kaufmann, 2005,
+//!   §5.1.5.
 
 use ndarray::{Array3, ArrayView3, Zip};
 use rayon::prelude::*;
@@ -32,8 +66,10 @@ pub struct LevelSet {
 }
 
 impl LevelSet {
-    /// The signed distance to a closed mesh on the image voxels within
-    /// `margin` (physical units) of its bounding box.
+    /// The signed distance to a closed mesh on the image voxels within `margin`
+    /// (physical units) of its bounding box: the sign from rasterising the mesh
+    /// (even–odd rule), the magnitude from the exact distance to the mesh,
+    /// clamped to `band`.
     pub fn from_mesh(mesh: &Mesh, dims: [usize; 3], geom: &Geometry, margin: f64, band: f64) -> LevelSet {
         let mut lo = [usize::MAX; 3];
         let mut hi = [0usize; 3];
@@ -79,11 +115,11 @@ impl LevelSet {
         extract_level_set(&self.phi.view(), self.lo, self.dims, &self.geom)
     }
 
-    /// Move the surface: `s[v]` is the displacement of mesh vertex `v` along
-    /// the inward normal (physical units; negative = outwards). It is
-    /// extended to the grid by Gaussian-weighted averaging over the
-    /// `neighbours` nearest vertices (width `width`). Returns the voxels
-    /// that changed.
+    /// Move the surface: `s[v]` is the displacement of mesh vertex `v` along the
+    /// inward normal (physical units; negative = outwards). It is extended to the
+    /// grid by Gaussian-weighted averaging over the `neighbours` nearest vertices
+    /// (width `width`; module documentation) and added to `φ` within the band,
+    /// `φ ← clamp(φ + s_ext, ±band)`. Returns the voxels that changed.
     pub fn advance(&mut self, points: &[V3], s: &[f64], width: f64, neighbours: usize) -> Array3<bool> {
         let tree = KdTree::new(points);
         let band = self.band as f32;
@@ -118,9 +154,10 @@ impl LevelSet {
         changed
     }
 
-    /// Keep the voxels marked in `forbidden` (image-shaped) outside the
-    /// surface: `φ ≥ h/2` there (`h` the smallest spacing). Changed voxels are
-    /// marked in `changed`.
+    /// Keep the voxels marked in `forbidden` (image-shaped) outside the surface,
+    /// `φ ← max(φ, h/2)` there (`h` the smallest spacing): half a voxel keeps the
+    /// extracted surface between the forbidden voxel and its neighbours. Changed
+    /// voxels are marked in `changed`.
     pub fn forbid(&mut self, forbidden: &ArrayView3<bool>, changed: &mut Array3<bool>) {
         let h = 0.5 * self.geom.min_spacing() as f32;
         let lo = self.lo;
@@ -134,8 +171,12 @@ impl LevelSet {
             });
     }
 
-    /// Reset `φ` to the signed distance to `mesh` (the sign is kept) on the
-    /// voxels `only` (all if `None`).
+    /// Reset `φ` to the signed distance to `mesh` on the voxels `only` (all if
+    /// `None`), keeping the sign: the distance to the closest point on the faces
+    /// around the 4 nearest vertices (a closest point on a mesh lies on a face of
+    /// a nearby vertex; 4 guards against the nearest vertex not owning the
+    /// closest face), clamped to `band`; voxels farther than the band from every
+    /// vertex get `±band`.
     pub fn redistance(&mut self, mesh: &Mesh, only: Option<&Array3<bool>>) {
         if mesh.vertices.is_empty() {
             return;
@@ -186,6 +227,7 @@ struct VertexFaces {
 }
 
 impl VertexFaces {
+    /// The faces of every vertex, in compressed rows.
     fn new(mesh: &Mesh) -> Self {
         let n = mesh.vertices.len();
         let mut offsets = vec![0usize; n + 1];
@@ -207,6 +249,7 @@ impl VertexFaces {
         }
         VertexFaces { offsets, faces }
     }
+    /// The faces incident to vertex `v`.
     fn of(&self, v: usize) -> &[u32] {
         &self.faces[self.offsets[v]..self.offsets[v + 1]]
     }

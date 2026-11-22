@@ -1,13 +1,51 @@
 //! Binary morphology on 3D masks: median, exact (anisotropic) distance
 //! transforms, ellipsoidal dilation/erosion, connected components, region
 //! and hole fills, and VTK-style truncated Gaussian smoothing.
+//!
+//! * **Binary median**: a voxel is set if more than half of the voxels of the
+//!   box kernel around it are (a majority vote; edges replicated), which
+//!   removes speckle smaller than half the kernel without moving straight
+//!   edges.
+//! * **Distance transform**: the exact squared Euclidean distance to the
+//!   nearest set voxel with per-axis scales, computed separably, axis by axis,
+//!   as the lower envelope of parabolas (Felzenszwalb & Huttenlocher 2012):
+//!   after processing axes `0 … a−1`, `D_a(q) = min_p [w_a (q − p)² + D_{a−1}(p)]`
+//!   along each line of axis `a`. The minimisation over a line is linear in
+//!   its length, so the transform is O(voxels) whatever the distances, and
+//!   exact (a squared distance is a sum of per-axis terms, so separable
+//!   minimisation is exact).
+//! * **Dilation / erosion** with an ellipsoidal footprint of semi-axes
+//!   `r_a = (k_a − 1)/2` voxels, as `vtkImageDilateErode3D`: a voxel is in the
+//!   dilation if `Σ_a (Δ_a / r_a)² ≤ 1` for some set voxel, i.e. if the
+//!   distance transform with weights `1/r_a²` is ≤ 1; erosion is the dilation
+//!   of the complement (Serra 1982). Cost is independent of the kernel size.
+//! * **Connected components**: breadth-first flood fill over 6-neighbours (4
+//!   within a slice), one pass over the voxels (Rosenfeld & Pfaltz 1966).
+//! * **Outer region**: the components touching the in-plane faces of the
+//!   volume (axes 1 and 2), which is the background around a bone in an
+//!   axial stack even when the bone is cut by the first or last slice.
+//!   Filling holes is taking the complement of the outer region of the
+//!   complement.
+//! * **Truncated Gaussian smoothing** of a 0/1 mask, as
+//!   `vtkImageGaussianSmooth`: kernel radius `r` voxels per axis, weights
+//!   normalised over the truncated support, edges replicated.
+//!
+//! # References
+//!
+//! * P. F. Felzenszwalb, D. P. Huttenlocher, *Distance transforms of sampled
+//!   functions*, Theory of Computing 8:415–428, 2012.
+//! * J. Serra, *Image Analysis and Mathematical Morphology*, Academic Press,
+//!   1982.
+//! * A. Rosenfeld, J. L. Pfaltz, *Sequential operations in digital picture
+//!   processing*, Journal of the ACM 13(4):471–494, 1966.
 
 use std::collections::VecDeque;
 
 use ndarray::{Array3, Axis, Zip};
 use rayon::prelude::*;
 
-/// Binary median (majority vote) over a box kernel, edges clamped.
+/// Binary median (majority vote) over a box kernel of `k` voxels per axis,
+/// edges replicated: set where more than half of the kernel's voxels are.
 pub fn binary_median(m: &Array3<bool>, k: [usize; 3]) -> Array3<bool> {
     let (d0, d1, d2) = m.dim();
     let r = k.map(|v| (v / 2) as isize);
@@ -59,7 +97,12 @@ pub fn scaled_sq_distance(m: &Array3<bool>, radii: [f64; 3]) -> Array3<f32> {
     d
 }
 
-/// 1D lower envelope of parabolas `w (q − p)² + f(p)`.
+/// The 1D lower envelope of parabolas `D(q) = min_p [w (q − p)² + f(p)]`
+/// (Felzenszwalb & Huttenlocher 2012, algorithm DT(f)): parabolas are added
+/// left to right, dropping those hidden by the new one, using the abscissa
+/// `s` where two parabolas intersect; then each `q` reads off the parabola
+/// whose interval contains it. Linear in the length of the line. Infinite
+/// `f(p)` (no set voxel) contribute no parabola.
 fn edt_1d(f: &[f64], w: f64, out: &mut [f64]) {
     let n = f.len();
     let mut v: Vec<usize> = Vec::with_capacity(n);
@@ -109,19 +152,22 @@ fn edt_1d(f: &[f64], w: f64, out: &mut [f64]) {
     }
 }
 
+/// Semi-axes `(k − 1)/2` of the ellipsoidal footprint of a `k`-voxel kernel
+/// (as `vtkImageDilateErode3D`).
 pub(super) fn radii(k: [usize; 3]) -> [f64; 3] {
     k.map(|v| (v.max(1) - 1) as f64 / 2.0)
 }
 
 /// Binary dilation with an ellipsoidal footprint of `kernel` voxels per axis
-/// (as `vtkImageDilateErode3D`).
+/// (as `vtkImageDilateErode3D`): the voxels whose scaled squared distance
+/// `Σ_a (Δ_a / r_a)²` to a set voxel is at most 1.
 pub fn dilate(m: &Array3<bool>, kernel: [usize; 3]) -> Array3<bool> {
     let d = scaled_sq_distance(m, radii(kernel));
     d.mapv(|v| v <= 1.0 + 1e-6)
 }
 
-/// Binary erosion with an ellipsoidal footprint (voxels outside the image do
-/// not erode).
+/// Binary erosion with an ellipsoidal footprint, the dual of dilation:
+/// `erode(m) = ¬dilate(¬m)` (voxels outside the image do not erode).
 pub fn erode(m: &Array3<bool>, kernel: [usize; 3]) -> Array3<bool> {
     let inv = m.mapv(|b| !b);
     dilate(&inv, kernel).mapv(|b| !b)
@@ -145,8 +191,10 @@ pub(super) fn neighbours6(p: [usize; 3], dim: (usize, usize, usize)) -> impl Ite
     })
 }
 
-/// Label 6-connected components (4-connected within slices if `two_d`).
-/// Returns labels (0 = background) and component sizes (index = label).
+/// Label 6-connected components (4-connected within slices if `two_d`) by
+/// breadth-first flood fill. Returns labels (0 = background) in standard
+/// layout and component sizes (index = label), labels in order of first
+/// voxel.
 pub(super) fn label_components(m: &Array3<bool>, two_d: bool) -> (Vec<u32>, Vec<usize>) {
     let (d0, d1, d2) = m.dim();
     let n = d0 * d1 * d2;
@@ -230,6 +278,8 @@ pub(super) fn fill_slice_holes(m: &Array3<bool>, axis: usize) -> Array3<bool> {
     filled.permuted_axes(inv).as_standard_layout().to_owned()
 }
 
+/// Apply a 3D operation to every slice along axis 0 separately (in
+/// parallel), each as a one-slice volume.
 fn per_slice(m: &Array3<bool>, f: impl Fn(&Array3<bool>) -> Array3<bool> + Sync) -> Array3<bool> {
     let mut out = Array3::from_elem(m.dim(), false);
     out.axis_iter_mut(Axis(0))
@@ -243,8 +293,9 @@ fn per_slice(m: &Array3<bool>, f: impl Fn(&Array3<bool>) -> Array3<bool> + Sync)
 }
 
 /// Gaussian smoothing of a binary mask with standard deviation `sigma`
-/// (voxels) and kernel radius `r` voxels per axis (0 = no smoothing along
-/// that axis), edges clamped, as `vtkImageGaussianSmooth`.
+/// (voxels) and kernel radius `r` voxels per axis (0 = no smoothing along that
+/// axis), weights normalised over the truncated kernel and edges clamped, as
+/// `vtkImageGaussianSmooth` (step 12 of Buie et al. 2007).
 pub fn gaussian_truncated(m: &Array3<bool>, sigma: f64, r: [usize; 3]) -> Array3<f32> {
     let mut f = m.mapv(|b| b as u8 as f32);
     for (axis, &ra) in r.iter().enumerate() {

@@ -1,10 +1,28 @@
 //! A compact static k-d tree over 3D points for k-nearest-neighbour and
-//! radius queries.
+//! radius queries (Bentley 1975; Friedman et al. 1977).
 //!
 //! The tree is stored implicitly: points are permuted so that each node is a
-//! contiguous range whose median (the pivot) sits in the middle, so the only memory beyond the input
-//! is one permutation (`u32` per point) and a copy of the coordinates in tree
-//! order (for cache-friendly leaf scans).
+//! contiguous range whose median along the node's axis (cycling through the
+//! three axes with depth) sits in the middle as the pivot, found by
+//! `select_nth` in linear time. The only memory beyond the input is one
+//! permutation (`u32` per point) and a copy of the coordinates in tree order
+//! (for cache-friendly leaf scans); median splits make the tree balanced, with
+//! depth `log₂(N/16)`.
+//!
+//! Queries descend first into the half containing the query point and visit
+//! the other half only if the splitting plane is closer than the current
+//! `k`-th best distance (branch and bound), which for well-distributed points
+//! costs O(log N + k) per query (Friedman et al. 1977). Candidates are ordered
+//! by distance and then index, so ties, which are common on voxel-lattice
+//! points, are broken deterministically.
+//!
+//! # References
+//!
+//! * J. L. Bentley, *Multidimensional binary search trees used for associative
+//!   searching*, Communications of the ACM 18(9):509–517, 1975.
+//! * J. H. Friedman, J. L. Bentley, R. A. Finkel, *An algorithm for finding
+//!   best matches in logarithmic expected time*, ACM Transactions on
+//!   Mathematical Software 3(3):209–226, 1977.
 
 use std::collections::BinaryHeap;
 
@@ -38,6 +56,8 @@ impl Ord for Cand {
 }
 
 impl KdTree {
+    /// Build the tree by recursive median splits (in parallel for large
+    /// subtrees).
     pub fn new(points: &[V3]) -> Self {
         let mut idx: Vec<u32> = (0..points.len() as u32).collect();
         build(points, &mut idx, 0);
@@ -45,10 +65,12 @@ impl KdTree {
         KdTree { pts, idx }
     }
 
+    /// Number of points.
     pub fn len(&self) -> usize {
         self.pts.len()
     }
 
+    /// Whether there are no points.
     pub fn is_empty(&self) -> bool {
         self.pts.is_empty()
     }
@@ -65,6 +87,9 @@ impl KdTree {
         out
     }
 
+    /// Branch and bound: scan a leaf; otherwise test the pivot, descend into the
+    /// half containing `q`, and into the other half only while it can still hold
+    /// a point closer than the current `k`-th best (`Δ² < d_k²`).
     #[allow(clippy::too_many_arguments)]
     fn knn_rec(
         &self,
@@ -127,6 +152,8 @@ impl KdTree {
         }
     }
 
+    /// As [`Self::knn_rec`] with a fixed radius: visit a half only if the
+    /// splitting plane is within `r` of `q`.
     fn within_rec(&self, q: V3, r2: f64, lo: usize, hi: usize, depth: usize, out: &mut Vec<(u32, f64)>) {
         if hi - lo <= LEAF {
             for t in lo..hi {
@@ -153,6 +180,9 @@ impl KdTree {
     }
 }
 
+/// Order `idx` into the implicit tree: the median along the node's axis
+/// (depth mod 3) at the middle, the lower half before it and the upper half
+/// after it, recursively down to leaves of `LEAF` points.
 fn build(points: &[V3], idx: &mut [u32], depth: usize) {
     if idx.len() <= LEAF {
         return;

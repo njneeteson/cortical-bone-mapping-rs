@@ -2,15 +2,34 @@
 //!
 //! [`fit_surface`] runs the stages in order:
 //!
-//! 1. sample a profile along each node's inward normal ([`profiles`]);
+//! 1. sample a profile along each node's inward normal ([`profiles`]),
+//!    following Treece et al. (2010);
 //! 2. set the cortical density ([`density`]);
 //! 3. set the blur: free, fixed, from a PSF or a PSF estimated from the
 //!    profiles ([`psf`]);
-//! 4. fit one model to all profiles (the global initialisation);
+//! 4. fit one model to all profiles (the global initialisation of our paper,
+//!    Neeteson & Boyd 2025): every parameter takes one value shared by all
+//!    nodes, which gives each method a robust start where individual profiles
+//!    are noisy;
 //! 5. fit with the chosen method: [`local`] (one fit per node, Treece et
-//!    al.), [`multigrid`] or [`regularized`] (Neeteson & Boyd), the latter two
-//!    on the [`global`] solver;
-//! 6. compute the residuals.
+//!    al. 2010), [`multigrid`] or [`regularized`] (Neeteson & Boyd 2025), the
+//!    latter two on the [`global`] solver;
+//! 6. compute the residuals, `r_i = √(Σ_j w_ij (f(x_j) − f_ij)² / Σ_j w_ij)`
+//!    (the weighted RMS over the samples used), and scale per-node densities
+//!    back ([`density`]).
+//!
+//! All methods minimise the same weighted least-squares data term (with the
+//! residual weights of [`crate::model::residual_weights`]), so results differ
+//! only by what links the nodes.
+//!
+//! # References
+//!
+//! * G. M. Treece, A. H. Gee, P. M. Mayhew, K. E. S. Poole, *High resolution
+//!   cortical bone thickness measurement from clinical CT data*, Medical Image
+//!   Analysis 14(3):276–290, 2010, doi:10.1016/j.media.2010.01.003.
+//! * N. J. Neeteson, S. K. Boyd, *Advancing Cortical Bone Mapping with global
+//!   optimization*, Computers in Biology and Medicine, 2025,
+//!   doi:10.1016/j.compbiomed.2025.110636.
 
 pub mod density;
 pub mod global;

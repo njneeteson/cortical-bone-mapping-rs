@@ -1,4 +1,14 @@
 //! The result of cortical bone mapping and the diagnostics of a fit.
+//!
+//! The fitted surfaces are the nodes displaced along their sampling normals,
+//! `p + (m − t/2) n` (periosteal) and `p + (m + t/2) n` (endosteal), on the
+//! mesh of the input surface. Region masks are the voxels enclosed by these
+//! surfaces by the even–odd ray rule ([`crate::surface::voxelize`]), and the
+//! cortical mask is the periosteal region minus the endosteal one. A fitted
+//! surface can self-intersect where the cortex is thick relative to the
+//! surface's curvature (e.g. the endosteal surface in a tight concavity); the
+//! parity rule then leaves the doubly covered region out. Such folds are local
+//! and rare at CBM resolutions.
 
 use crate::fit::global::SolveInfo;
 use crate::fit::local::Status;
@@ -63,12 +73,15 @@ pub struct CbmResult {
 }
 
 impl CbmResult {
+    /// Number of fitted nodes.
     pub fn n(&self) -> usize {
         self.points.len()
     }
+    /// Parameter `c` ([`crate::model::M`] …) of every node.
     pub fn param(&self, c: usize) -> Vec<f64> {
         self.params.iter().map(|p| p[c]).collect()
     }
+    /// The cortical thickness `t` of every node.
     pub fn thickness(&self) -> Vec<f64> {
         self.param(T)
     }
@@ -85,9 +98,11 @@ impl CbmResult {
             .map(|((&p, &n), q)| add(p, scale(n, q[M] + side * 0.5 * q[T])))
             .collect()
     }
+    /// The fitted periosteal points `p + (m − t/2) n`.
     pub fn periosteal_points(&self) -> Vec<V3> {
         self.offset_points(-1.0)
     }
+    /// The fitted endosteal points `p + (m + t/2) n`.
     pub fn endosteal_points(&self) -> Vec<V3> {
         self.offset_points(1.0)
     }

@@ -1,6 +1,26 @@
 //! The per-node state refinement carries from fit to fit, and regional
 //! convergence: which regions are frozen, when they thaw, and which frozen
-//! nodes are refitted as boundary conditions.
+//! nodes are refitted as boundary conditions (ours).
+//!
+//! Refitting the whole surface every iteration wastes most of the work once
+//! most of it has settled, as it typically does long before a deep concavity
+//! has been reached. The rules:
+//!
+//! * a node is **still** after a fit if it moved less than `dtol` and (if
+//!   fitted and free) its thickness changed by less than `ttol`; a node whose
+//!   fit could not be trusted is never still, so a failure cannot freeze;
+//! * a node **freezes** once it and every node within `radius` have been still
+//!   for `patience` fits: freezing by region, not node by node, keeps a moving
+//!   front from being pinned by a single still node;
+//! * a frozen node **thaws** when the accumulated largest displacement of the
+//!   moving nodes within `radius` exceeds `thaw` (default one voxel): the
+//!   surface next to it has moved enough to change its profile, and its
+//!   neighbours' regularisation;
+//! * frozen nodes within `halo` of a moving node are refitted as **held**
+//!   values, boundary conditions of the smoothing penalty. The default halo is
+//!   the reach of the regularisation (`σ · cutoff` of `ω`), beyond which a
+//!   frozen value no longer affects a moving one;
+//! * the verifying full fit covers every node and thaws those it moves.
 
 use rayon::prelude::*;
 
@@ -28,6 +48,7 @@ pub(super) struct NodeState {
 }
 
 impl NodeState {
+    /// The state of `n` vertices before any fit.
     pub fn new(n: usize) -> Self {
         NodeState {
             warm: vec![None; n],
@@ -75,6 +96,10 @@ pub(super) struct Freeze {
 }
 
 impl Freeze {
+    /// Resolve the freezing rules (module documentation): radius 3 voxels, halo
+    /// the reach of the regularisation (`σ · cutoff`, `3σ` without a cut-off) or
+    /// the radius, thaw after one voxel of nearby motion, and the refinement
+    /// tolerance for position and thickness, unless given.
     pub fn new(f: &FreezeOptions, options: &Options, tol: f64, max_spacing: f64) -> Self {
         let radius = f.radius.unwrap_or(3.0 * max_spacing);
         let halo = f.halo.unwrap_or(match &options.method {

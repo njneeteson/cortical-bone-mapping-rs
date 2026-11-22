@@ -1,5 +1,28 @@
 //! Diagnosing fits during refinement: which fits locate an edge, why a
-//! refinement stalled, and where the surface still moves.
+//! refinement stalled, and where the surface still moves (ours).
+//!
+//! A fit is **trusted** to locate the periosteal edge when it passes all six
+//! tests listed in `REASONS`:
+//!
+//! * the edge `m − t/2` lies inside the sampled range by more than `σ` at the
+//!   inner and at the outer end (an edge at the end of a profile is
+//!   extrapolated, not measured);
+//! * `m` is off its bounds (a bounded `m` means the optimum lies outside);
+//! * `t` is below its upper bound (a thickness at its *lower* bound is a
+//!   cortex thinner than resolvable, whose blurred step still locates the
+//!   edge, so that is allowed);
+//! * the cortex is denser than both neighbouring tissues (`ρc > ρs, ρb`),
+//!   otherwise the profile does not show a cortex the model can place;
+//! * the residual is at most 3× the median residual.
+//!
+//! Profiles that miss the cortex, e.g. lines running along the flank of a
+//! gross segmentation error, fail these tests; without the gate, such fits
+//! pushed bumps outward. Untrusted nodes move with their trusted neighbours
+//! ([`super::motion`]).
+//!
+//! The **regional RMS** of the displacement is the RMS over the nodes within a
+//! radius of each node, maximised over nodes: it catches a small region that
+//! still moves while the surface-wide RMS is already small.
 
 use rayon::prelude::*;
 

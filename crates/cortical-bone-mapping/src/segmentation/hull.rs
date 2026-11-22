@@ -1,5 +1,26 @@
 //! Convex-hull starting segmentations: the per-slice convex hull of a mask,
-//! and the single-bone hull segmentation built on it.
+//! and the single-bone hull segmentation built on it (ours).
+//!
+//! A starting segmentation for refinement has to be *topologically* right (one
+//! closed surface around the bone) and close enough that the profiles cross
+//! the cortex. A thresholded bone leaks into the marrow through cortical
+//! breaks and porous cortex; its convex hull cannot: the hull of a slice
+//! contains the slice's bone, so its only errors are outward ones over
+//! concave parts of the periosteum, which refinement pulls in. Hulls are taken
+//! per slice (along axis 0) because a long bone is convex in cross-section
+//! far more often than in 3D.
+//!
+//! The hull of a slice needs only the first and last set pixel of every row
+//! (any other set pixel lies on a segment between them). It is computed by
+//! Andrew's monotone chain (Andrew 1979): sort the points, build the lower and
+//! upper chains keeping only left turns (cross product > 0), O(n log n). The
+//! polygon is filled row by row between its edge crossings, pixel centres on
+//! the boundary included.
+//!
+//! # References
+//!
+//! * A. M. Andrew, *Another efficient algorithm for convex hulls in two
+//!   dimensions*, Information Processing Letters 9(5):216–219, 1979.
 
 use ndarray::{Array3, ArrayView3, Axis, Zip};
 use rayon::prelude::*;
@@ -81,7 +102,10 @@ fn row_extremes(sl: &ndarray::ArrayView2<bool>) -> Vec<(f64, f64)> {
     pts
 }
 
-/// Andrew's monotone chain; counter-clockwise, without collinear points.
+/// The convex hull by Andrew's monotone chain (Andrew 1979): sort the points
+/// lexicographically, then build the lower and the upper chain, popping the
+/// last point while it does not make a strict left turn (cross product
+/// `≤ 0`, which also drops collinear points). Counter-clockwise.
 pub(super) fn convex_hull(pts: &[(f64, f64)]) -> Vec<(f64, f64)> {
     let mut p = pts.to_vec();
     p.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
@@ -109,7 +133,9 @@ pub(super) fn convex_hull(pts: &[(f64, f64)]) -> Vec<(f64, f64)> {
     h
 }
 
-/// Set the pixels whose centres lie in the convex polygon `hull` (inclusive).
+/// Set the pixels whose centres lie in the convex polygon `hull` (boundary
+/// included, with a tolerance of 10⁻⁹): per row, the extent between the
+/// polygon's crossings of that row.
 pub(super) fn fill_convex(hull: &[(f64, f64)], out: &mut ndarray::ArrayViewMut2<bool>) {
     if hull.is_empty() {
         return;
