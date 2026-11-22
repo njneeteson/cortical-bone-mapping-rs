@@ -246,20 +246,6 @@ def remeasure(args):
         print(name, s["notch_still_inside_cm3"], flush=True)
 
 
-def mesh_cut(verts, faces, axis, k, sp):
-    q = verts / np.array(sp)
-    f = q[faces]
-    dv = f[:, :, axis] - k
-    segs = []
-    for tri, d in zip(f, dv):
-        pts = [tri[a] + d[a] / (d[a] - d[b]) * (tri[b] - tri[a])
-               for a, b in ((0, 1), (1, 2), (2, 0)) if (d[a] < 0) != (d[b] < 0)]
-        if len(pts) == 2:
-            segs.append(pts)
-    other = [a for a in range(3) if a != axis]
-    return np.array(segs)[:, :, other][:, :, ::-1] if segs else np.zeros((0, 2, 2))
-
-
 CUTS = [(0, 40, "axial"), (0, 60, "axial"), (2, 70, "sagittal"), (1, 110, "coronal"), (2, 40, "sagittal")]
 
 
@@ -287,7 +273,7 @@ def figures(args):
             ax.imshow(np.take(shown, k, axis=axis), cmap="gray", vmin=-200, vmax=1400, origin="lower")
             ax.contour(np.take(start, k, axis=axis), [0.5], colors="y", linewidths=0.7, linestyles="--")
             for v, c, lw in ((r.surface_vertices, "r", 0.9), (r.displaced_surface("endosteal"), "c", 0.6)):
-                seg = mesh_cut(v, r.surface_faces, axis, k, sp)
+                seg = cbm.mesh_section(v, r.surface_faces, axis, k, sp)[:, :, ::-1]
                 if len(seg):
                     ax.add_collection(LineCollection(seg, colors=c, linewidths=lw))
             ax.set_xticks([]), ax.set_yticks([])

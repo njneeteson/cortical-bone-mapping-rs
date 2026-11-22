@@ -4,7 +4,7 @@ use ndarray::ArrayView3;
 use rayon::prelude::*;
 
 use crate::util::{add, dot, norm, scale, sub, V3};
-use crate::volume::{convolve_1d, gaussian_kernel, trilinear, Geometry, Voxel};
+use crate::volume::{convolve_1d, gaussian_kernel, is_set_at, trilinear, Geometry, Voxel};
 
 /// Restrict the direction of the sampling lines.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
@@ -118,43 +118,28 @@ impl Profiles {
         line: &SampleLine,
         min_inside: f64,
     ) {
-        let m = self.m;
-        let (d0, d1, d2) = region.dim();
-        let inside = |p: V3| -> bool {
-            let r = geom.to_index(p).map(|v| v.round());
-            if r[0] < 0.0 || r[1] < 0.0 || r[2] < 0.0 {
-                return false;
+        self.unuse(points, normals, |u, p, nrm| {
+            // first inside sample (x > 0) that is outside the region, after
+            // the line has entered it
+            let mut entered = false;
+            let mut exit = None;
+            for &x in line.x.iter().filter(|&&x| x > 0.0) {
+                if is_set_at(region, geom, add(p, scale(nrm, x))) {
+                    entered = true;
+                } else if entered {
+                    exit = Some(x);
+                    break;
+                }
             }
-            let (a, b, c) = (r[0] as usize, r[1] as usize, r[2] as usize);
-            a < d0 && b < d1 && c < d2 && region[[a, b, c]].to_f64() != 0.0
-        };
-        let mut used = self.used.take().unwrap_or_else(|| vec![true; self.n * m]);
-        used.par_chunks_mut(m)
-            .zip(points.par_iter().zip(normals.par_iter()))
-            .for_each(|(u, (&p, &nrm))| {
-                // first inside sample (x > 0) that is outside the region,
-                // after the line has entered it
-                let mut entered = false;
-                let mut exit = None;
-                for &x in line.x.iter().filter(|&&x| x > 0.0) {
-                    let ins = inside(add(p, scale(nrm, x)));
-                    if ins {
-                        entered = true;
-                    } else if entered {
-                        exit = Some(x);
-                        break;
+            if let Some(xe) = exit {
+                let limit = (0.5 * xe).max(min_inside);
+                for (j, &x) in line.x.iter().enumerate() {
+                    if x > limit {
+                        u[j] = false;
                     }
                 }
-                if let Some(xe) = exit {
-                    let limit = (0.5 * xe).max(min_inside);
-                    for (j, &x) in line.x.iter().enumerate() {
-                        if x > limit {
-                            u[j] = false;
-                        }
-                    }
-                }
-            });
-        self.used = Some(used);
+            }
+        });
     }
 
     /// Ignore the samples that fall in voxels marked in `excluded` (nearest
@@ -167,23 +152,22 @@ impl Profiles {
         normals: &[V3],
         line: &SampleLine,
     ) {
+        self.unuse(points, normals, |u, p, nrm| {
+            for (j, &x) in line.x.iter().enumerate() {
+                if is_set_at(excluded, geom, add(p, scale(nrm, x))) {
+                    u[j] = false;
+                }
+            }
+        });
+    }
+
+    /// Clear the used flags of each row with `f(used_row, point, normal)`.
+    fn unuse(&mut self, points: &[V3], normals: &[V3], f: impl Fn(&mut [bool], V3, V3) + Sync) {
         let m = self.m;
-        let (d0, d1, d2) = excluded.dim();
         let mut used = self.used.take().unwrap_or_else(|| vec![true; self.n * m]);
         used.par_chunks_mut(m)
             .zip(points.par_iter().zip(normals.par_iter()))
-            .for_each(|(u, (&p, &nrm))| {
-                for (j, &x) in line.x.iter().enumerate() {
-                    let q = geom.to_index(add(p, scale(nrm, x)));
-                    let r = q.map(|v| v.round());
-                    if r[0] >= 0.0 && r[1] >= 0.0 && r[2] >= 0.0 {
-                        let (a, b, c) = (r[0] as usize, r[1] as usize, r[2] as usize);
-                        if a < d0 && b < d1 && c < d2 && excluded[[a, b, c]].to_f64() != 0.0 {
-                            u[j] = false;
-                        }
-                    }
-                }
-            });
+            .for_each(|(u, (&p, &nrm))| f(u, p, nrm));
         self.used = Some(used);
     }
 

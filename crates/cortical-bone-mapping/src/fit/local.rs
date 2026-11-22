@@ -13,8 +13,10 @@
 
 use rayon::prelude::*;
 
+use super::profiles::Profiles;
+use super::{local_settings, Data, Start};
 use crate::model::{eval, eval_grad, Params, NPARAM};
-use crate::profiles::Profiles;
+use crate::result::FitInfo;
 use crate::util::{cholesky_solve, sym5};
 
 /// Box bounds and stopping criteria for a fit.
@@ -233,6 +235,23 @@ pub fn fit_all(
             }
         })
         .collect()
+}
+
+/// The local method: fit every node's profile independently from its start.
+pub(crate) fn fit_nodes(data: &Data, start: &Start, info: &mut FitInfo) -> Vec<Params> {
+    let free_sigma = start.sigma_fixed.is_none();
+    let fits = fit_all(
+        data.profiles,
+        data.x,
+        data.weights,
+        data.rho_c,
+        &start.nodes,
+        &local_settings(data.options, free_sigma),
+    );
+    let n = fits.len();
+    info.converged = fits.iter().filter(|f| f.status.converged()).count() as f64 / n as f64;
+    info.iterations = fits.iter().map(|f| f.iterations as usize).max().unwrap_or(0);
+    fits.iter().map(|f| f.params).collect()
 }
 
 #[cfg(test)]

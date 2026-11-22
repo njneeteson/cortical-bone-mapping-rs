@@ -165,6 +165,19 @@ pub const fn sym5(i: usize, j: usize) -> usize {
     i * 5 - i * (i + 1) / 2 + j
 }
 
+/// The `q` quantile (linear interpolation) of the finite values; `NaN` if
+/// there are none.
+pub fn quantile(mut v: Vec<f64>, q: f64) -> f64 {
+    v.retain(|x| x.is_finite());
+    if v.is_empty() {
+        return f64::NAN;
+    }
+    v.sort_by(f64::total_cmp);
+    let pos = q.clamp(0.0, 1.0) * (v.len() - 1) as f64;
+    let (lo, hi) = (pos.floor() as usize, pos.ceil() as usize);
+    v[lo] + (pos - lo as f64) * (v[hi] - v[lo])
+}
+
 /// Median of a slice (copied); `NaN` for empty input.
 pub fn median(v: &[f64]) -> f64 {
     let mut w: Vec<f64> = v.iter().cloned().filter(|x| x.is_finite()).collect();

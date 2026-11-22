@@ -15,8 +15,8 @@ use ndarray::{Array3, ArrayView3, Zip};
 use rayon::prelude::*;
 
 use crate::kdtree::KdTree;
-use crate::mesh::Mesh;
-use crate::surface::{extract_level_set, Extracted};
+use crate::surface::mesh::Mesh;
+use crate::surface::nets::{extract_level_set, Extracted};
 use crate::util::{add, dot, norm, scale, sub, V3};
 use crate::volume::Geometry;
 
@@ -259,7 +259,7 @@ pub fn closest_on_triangle(p: V3, a: V3, b: V3, c: V3) -> V3 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::surface::extract_surface;
+    use crate::surface::nets::extract_surface;
 
     fn ball(n: usize, r: f64) -> Array3<u8> {
         let c = (n as f64 - 1.0) / 2.0;

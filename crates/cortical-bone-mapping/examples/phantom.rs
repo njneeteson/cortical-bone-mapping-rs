@@ -4,7 +4,7 @@
 
 use std::time::Instant;
 
-use cortical_bone_mapping::synthetic::ShellPhantom;
+use cortical_bone_mapping::phantoms::shell::ShellPhantom;
 use cortical_bone_mapping::*;
 
 fn main() {

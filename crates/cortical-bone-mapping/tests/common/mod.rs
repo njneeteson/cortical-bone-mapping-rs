@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use cortical_bone_mapping::synthetic::{Shape, ShellPhantom};
+use cortical_bone_mapping::phantoms::shell::{Shape, ShellPhantom};
 use cortical_bone_mapping::*;
 use ndarray::ArrayView3;
 

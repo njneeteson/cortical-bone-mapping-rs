@@ -2,7 +2,7 @@
 //!
 //!     cargo run --release --example refine -p cortical-bone-mapping
 
-use cortical_bone_mapping::synthetic::ShellPhantom;
+use cortical_bone_mapping::phantoms::shell::ShellPhantom;
 use cortical_bone_mapping::*;
 
 fn dice(a: &ndarray::Array3<bool>, b: &ndarray::Array3<u8>) -> f64 {

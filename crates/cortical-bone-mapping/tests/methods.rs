@@ -117,10 +117,10 @@ fn sphere_without_normal_constraint() {
 
 #[test]
 fn fixed_sigma_and_psf_modes() {
-    let ph = synthetic::ShellPhantom {
+    let ph = phantoms::shell::ShellPhantom {
         blur: [0.2, 0.1, 0.1],
         dims: (64, 72, 72),
-        shape: synthetic::Shape::Sphere,
+        shape: phantoms::shell::Shape::Sphere,
         radius: 2.8,
         thickness_mean: 0.9,
         thickness_amplitude: 0.2,
@@ -142,7 +142,7 @@ fn fixed_sigma_and_psf_modes() {
     // σ is then fixed per node from the PSF
     let s = r.param(model::SIGMA);
     for (sv, n) in s.iter().zip(&r.normals) {
-        assert!((sv - psf::sigma_along(psf, *n)).abs() < 1e-12);
+        assert!((sv - fit::psf::sigma_along(psf, *n)).abs() < 1e-12);
     }
     let (bias, rmse) = thickness_error(&ph, &r);
     assert!(bias.abs() < 0.03 && rmse < 0.05, "bias {bias} rmse {rmse}");

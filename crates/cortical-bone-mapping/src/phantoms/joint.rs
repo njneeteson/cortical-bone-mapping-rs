@@ -29,12 +29,12 @@
 //! medial joint space width ~4.8 mm in women and ~5.7 mm in men; tibial
 //! cartilage ~1.5 mm thick); narrowing to ~2 mm is moderate osteoarthritis,
 //! and bone-on-bone contact only occurs in end-stage disease. Ground truth is exact as for
-//! [`BonePhantom`](crate::bone_phantom::BonePhantom).
+//! [`BonePhantom`](crate::phantoms::bone::BonePhantom).
 
 use ndarray::Array3;
 use rayon::prelude::*;
 
-use crate::bone_phantom::{erfinv, field, first_entry, render, waves};
+use super::render::{erfinv, field, first_entry, render, waves};
 use crate::util::{Rng, V3};
 use crate::volume::Geometry;
 

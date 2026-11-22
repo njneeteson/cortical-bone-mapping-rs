@@ -160,6 +160,18 @@ pub fn gaussian_filter(img: &Array3<f64>, sigma: V3) -> Array3<f64> {
     out
 }
 
+/// Whether the voxel nearest to the physical point `p` is set (non-zero);
+/// points outside the image are not.
+pub fn is_set_at<V: Voxel>(img: &ArrayView3<V>, geom: &Geometry, p: V3) -> bool {
+    let r = geom.to_index(p).map(|v| v.round());
+    if r[0] < 0.0 || r[1] < 0.0 || r[2] < 0.0 {
+        return false;
+    }
+    let (d0, d1, d2) = img.dim();
+    let (a, b, c) = (r[0] as usize, r[1] as usize, r[2] as usize);
+    a < d0 && b < d1 && c < d2 && img[[a, b, c]].to_f64() != 0.0
+}
+
 /// Bounding box `(lo, hi)` (inclusive) of the non-zero voxels, or `None`.
 pub fn bounding_box<T: Voxel>(mask: &ArrayView3<T>) -> Option<([usize; 3], [usize; 3])> {
     let (d0, _, _) = mask.dim();

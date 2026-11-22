@@ -125,7 +125,7 @@ voxelised masks become noise.
 
 Refinement can now carry the surface as the zero level of a signed
 distance on the image grid
-([levelset.rs](../crates/cortical-bone-mapping/src/levelset.rs),
+([surface/levelset.rs](../crates/cortical-bone-mapping/src/surface/levelset.rs),
 `RefineOptions(level_set=True)`). Each iteration:
 
 1. spreads the nodes' displacements onto the grid (Gaussian-weighted over
@@ -167,7 +167,7 @@ plateau. It compensates:
 
 `ModelOptions.global` (Python: `global_params`) now chooses for each
 parameter whether it is one global value or a regularised per-node field
-([pipeline.rs](../crates/cortical-bone-mapping/src/pipeline.rs)).
+([options.rs](../crates/cortical-bone-mapping/src/options.rs)).
 Density fields have their own smoothing weight (`density_smoothing`), with
 variations measured relative to `ρc`. The default stays as in the paper,
 `("rho_s", "rho_b")`, which suits small-field, high-resolution HR-pQCT.
@@ -189,7 +189,7 @@ default.
 
 Each refinement iteration used to solve the global fit fully (1e-8), although
 the next iteration resamples every profile anyway
-([refine.rs](../crates/cortical-bone-mapping/src/refine.rs)). The loop now
+([refine/](../crates/cortical-bone-mapping/src/refine/mod.rs)). The loop now
 works as follows:
 
 * **Adaptive inner fits** (`edge_ratio`, default 0.1). While the surface
@@ -243,7 +243,7 @@ of it, and within that the Gauss–Newton products take 60–85%:
 
 Most of the product time is the 500-neighbour smoothing operator, applied
 once per field per CG iteration. It is now applied to all fields in one pass
-([operators.rs](../crates/cortical-bone-mapping/src/operators.rs)). The
+([operators/smoothing.rs](../crates/cortical-bone-mapping/src/operators/smoothing.rs)). The
 results are bitwise identical to one field at a time, and it was about
 25% faster overall. Fewer neighbours is a further saving. The paper's
 sensitivity analysis (Fig. 5) found the precision insensitive between 250
@@ -283,7 +283,7 @@ How each option fares:
 
 **Closing instead of a convex hull.** `bone_hulls(..., closing_radius=r)`
 starts each bone from a closing by a ball of radius `r` with its holes filled
-([segmentation.rs](../crates/cortical-bone-mapping/src/segmentation.rs)):
+([segmentation/bones.rs](../crates/cortical-bone-mapping/src/segmentation/bones.rs)):
 
 1. dilate by `r`;
 2. fill every background region not connected to the outside;
@@ -339,7 +339,7 @@ tibial plateau. Over stretches longer than the 4 mm closing can bridge, the
 start cuts through the bone, and refinement cannot move a surface out to
 bone up to a centimetre away. `grow_bones` grows each bone, seeded at
 267 HU, into the voxels connected to it above a low threshold
-([segmentation.rs](../crates/cortical-bone-mapping/src/segmentation.rs)).
+([segmentation/bones.rs](../crates/cortical-bone-mapping/src/segmentation/bones.rs)).
 A voxel several bones can reach goes to the nearest along the connected
 path, so the bones stay apart. `soft_tissue_threshold` sets the low
 threshold from the histogram: the soft-tissue peak (57 HU) plus 4 standard
@@ -369,7 +369,7 @@ offset discussed below.
 **Other bones are excluded.** While a bone is refined
 (`refine_bones(exclude_others=True)`, the default), the other bones'
 regions are excluded
-([refine.rs](../crates/cortical-bone-mapping/src/refine.rs)). Profile
+([refine/](../crates/cortical-bone-mapping/src/refine/mod.rs)). Profile
 samples inside them get zero weight, so a femoral profile crossing the joint
 does not fit the tibia. No surface ever moves into another bone: the level
 set keeps those voxels outside, and in the same-nodes mode a move into one is

@@ -12,6 +12,8 @@
 //! determined (cortex thick relative to the blur, `σ` not on a bound), with
 //! robust outlier rejection.
 
+use super::{local, local_settings, Data};
+use crate::error::Error;
 use crate::model::{Params, SIGMA, T};
 use crate::util::{median, V3};
 
@@ -146,6 +148,32 @@ fn fit(rows: &[(V3, f64)], model: PsfModel) -> [f64; 3] {
         }
         PsfModel::Anisotropic => [sol[0], sol[1], sol[2]],
     }
+}
+
+/// [`SigmaMode::EstimatePsf`](crate::options::SigmaMode::EstimatePsf): the
+/// PSF from local fits with `σ` free (from `starts`), clamped to the bounds of
+/// `σ`.
+pub(crate) fn estimate_from_fits(
+    data: &Data,
+    normals: &[V3],
+    starts: &[Params],
+    model: PsfModel,
+    min_ratio: f64,
+) -> Result<[f64; 3], Error> {
+    let o = data.options;
+    let fits = local::fit_all(
+        data.profiles,
+        data.x,
+        data.weights,
+        data.rho_c,
+        starts,
+        &local_settings(o, true),
+    );
+    let ps: Vec<Params> = fits.iter().map(|f| f.params).collect();
+    let (lo, hi) = (o.model.lower[SIGMA], o.model.upper[SIGMA]);
+    let est = estimate_psf(normals, &ps, model, min_ratio, lo, hi)
+        .ok_or_else(|| Error::InvalidOption("too few nodes with a thick cortex to estimate the PSF".into()))?;
+    Ok(est.map(|v| v.clamp(lo, hi)))
 }
 
 #[cfg(test)]

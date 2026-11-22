@@ -14,7 +14,7 @@
 
 use ndarray::{Array3, ArrayView3};
 
-use crate::mesh::Mesh;
+use crate::surface::mesh::Mesh;
 use crate::volume::{bounding_box, gaussian_filter, Geometry, Voxel};
 
 /// Output of [`extract_surface`].

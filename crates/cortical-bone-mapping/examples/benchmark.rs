@@ -12,7 +12,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-use cortical_bone_mapping::synthetic::ShellPhantom;
+use cortical_bone_mapping::phantoms::shell::ShellPhantom;
 use cortical_bone_mapping::*;
 
 struct Counting;

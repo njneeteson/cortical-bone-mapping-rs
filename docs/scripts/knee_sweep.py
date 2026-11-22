@@ -133,19 +133,6 @@ def figures(runs, summary, names, prefix):
     starts = d0.get("starts", d0["hulls"])
     shown = np.where(ndimage.distance_transform_edt(starts == 0, sampling=sp) <= 10.0, img, -1000)
 
-    def cut(v, f, axis, k):
-        q = (v - org) / sp
-        t = q[f]
-        dv = t[:, :, axis] - k
-        segs = []
-        for tri, dd in zip(t, dv):
-            p = [tri[i] + dd[i] / (dd[i] - dd[j]) * (tri[j] - tri[i]) for i, j in ((0, 1), (1, 2), (2, 0))
-                 if (dd[i] < 0) != (dd[j] < 0)]
-            if len(p) == 2:
-                segs.append(p)
-        o = [i for i in range(3) if i != axis]
-        return np.array(segs)[:, :, o][:, :, ::-1] if segs else np.zeros((0, 2, 2))
-
     views = [(0, 210, (60, 150), (200, 140), "axial 210: patella"),
              (2, 105, (190, 300), (85, 160), "sagittal 105: anterior tibia"),
              (1, 255, (70, 160), (115, 160), "coronal 255: tibial spines")]
@@ -155,7 +142,7 @@ def figures(runs, summary, names, prefix):
             ax.imshow(np.take(shown, k, axis=axis), cmap="gray", vmin=-200, vmax=1400,
                       origin="upper" if axis == 0 else "lower")
             for b, rr in d["results"].items():
-                seg = cut(rr.result.surface_vertices, rr.result.surface_faces, axis, k)
+                seg = cbm.mesh_section(rr.result.surface_vertices, rr.result.surface_faces, axis, k, sp, org)[:, :, ::-1]
                 if len(seg):
                     ax.add_collection(LineCollection(seg, colors=COLOURS[b], linewidths=0.9))
             ax.set_xlim(*xl)

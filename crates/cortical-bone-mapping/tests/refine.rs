@@ -2,7 +2,7 @@
 
 mod common;
 use common::*;
-use cortical_bone_mapping::synthetic::ShellPhantom;
+use cortical_bone_mapping::phantoms::shell::ShellPhantom;
 use cortical_bone_mapping::*;
 
 fn bad_phantom(

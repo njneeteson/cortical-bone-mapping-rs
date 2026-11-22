@@ -43,35 +43,34 @@
 // `!(x > 0.0)` is used deliberately: unlike `x <= 0.0` it also rejects NaN.
 #![allow(clippy::neg_cmp_op_on_partial_ord)]
 
-pub mod bone_phantom;
-pub mod global;
-pub mod joint_phantom;
+pub mod error;
+pub mod fit;
 pub mod kdtree;
-pub mod levelset;
-pub mod local;
-pub mod mesh;
 pub mod model;
 pub mod operators;
+pub mod options;
+pub mod phantoms;
 pub mod pipeline;
-pub mod profiles;
-pub mod psf;
 pub mod refine;
+pub mod result;
 pub mod segmentation;
 pub mod surface;
-pub mod synthetic;
 pub mod util;
 pub mod volume;
 
-pub use mesh::Mesh;
+pub use error::Error;
+pub use fit::profiles::NormalConstraint;
+pub use fit::psf::PsfModel;
 pub use operators::CurvatureMode;
-pub use pipeline::{
-    run, CbmResult, CurvatureOptions, Error, FitInfo, Method, ModelOptions, Options, RhoCMode, SamplingOptions,
-    SigmaMode, Site, SolverOptions, SurfaceOptions,
+pub use options::{
+    CurvatureOptions, Method, ModelOptions, Options, RhoCMode, SamplingOptions, SigmaMode, Site, SolverOptions,
+    SurfaceOptions,
 };
-pub use profiles::NormalConstraint;
-pub use psf::PsfModel;
+pub use pipeline::run;
 pub use refine::{
     cortical_masks, refine_segmentation, refine_segmentation_excluding, FreezeOptions, IterationStats, RefineOptions,
     RefineResult,
 };
+pub use result::{CbmResult, FitInfo};
+pub use surface::mesh::Mesh;
 pub use volume::{Geometry, Voxel};

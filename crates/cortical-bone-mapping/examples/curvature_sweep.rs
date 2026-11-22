@@ -2,7 +2,7 @@
 //!
 //!     cargo run --release --example curvature_sweep -p cortical-bone-mapping
 
-use cortical_bone_mapping::synthetic::ShellPhantom;
+use cortical_bone_mapping::phantoms::shell::ShellPhantom;
 use cortical_bone_mapping::*;
 
 fn main() {
