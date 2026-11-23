@@ -27,12 +27,14 @@ use rayon::prelude::*;
 
 mod curvature;
 mod multigrid;
+mod neighbours;
 mod smoothing;
 #[cfg(test)]
 mod tests;
 
 pub use curvature::{CurvatureMode, CurvatureOperator, CurvatureState, SurfaceLaplacian};
 pub use multigrid::{interpolation_matrix, select_control_points};
+pub use neighbours::{Distance, Neighbours, QueryScratch};
 pub use smoothing::SmoothingOperator;
 
 /// Row-compressed sparse matrix with `u32` column indices.

@@ -44,7 +44,7 @@ use std::time::Instant;
 use super::global::{self, Problem, Role, Smoothing, State};
 use super::{base_roles, local, local_settings, Data, FitConstraints, Nodes, Start};
 use crate::model::{Params, M, NPARAM, RHO_B, RHO_S, SIGMA, T};
-use crate::operators::{CurvatureOperator, SmoothingOperator, SurfaceLaplacian};
+use crate::operators::{CurvatureOperator, Neighbours, SmoothingOperator, SurfaceLaplacian};
 use crate::options::{CurvatureOptions, Method};
 use crate::result::FitInfo;
 
@@ -75,12 +75,13 @@ pub(crate) fn fit(
     // penalties, weighted relative to the global model
     let base = lambda * rho_c * rho_c / points.len() as f64;
     let t_op = Instant::now();
-    let op = (*lambda > 0.0).then(|| SmoothingOperator::new(points, *neighbours, *sigma, *cutoff));
+    let near = Neighbours::new(nodes.mesh, o.distance());
+    let op = (*lambda > 0.0).then(|| SmoothingOperator::new(&near, *neighbours, *sigma, *cutoff));
     timings.push(("smoothing operator".to_string(), t_op.elapsed().as_secs_f64()));
     let coef = smoothing_weights(data, start, &roles, base);
     let curv = curvature
         .as_ref()
-        .map(|c| curvature_operator(c, nodes, rho_c, start.global[T].max(1e-6)));
+        .map(|c| curvature_operator(c, nodes, &near, rho_c, start.global[T].max(1e-6)));
 
     let pr = Problem {
         profiles: data.profiles,
@@ -173,12 +174,18 @@ fn smoothing_weights(data: &Data, start: &Start, roles: &[Role; NPARAM], base: f
 
 /// The curvature penalty on the fitted surfaces; lengths default to the
 /// global thickness `t0`.
-fn curvature_operator(c: &CurvatureOptions, nodes: &Nodes, rho_c: f64, t0: f64) -> CurvatureOperator {
+pub(crate) fn curvature_operator(
+    c: &CurvatureOptions,
+    nodes: &Nodes,
+    near: &Neighbours,
+    rho_c: f64,
+    t0: f64,
+) -> CurvatureOperator {
     let points = &nodes.mesh.vertices;
     let ell = c.length.unwrap_or(t0);
     let cc = (c.weight / points.len() as f64).sqrt() * rho_c * ell;
     let lap = match c.scale {
-        Some(sc) => SurfaceLaplacian::gaussian(points, c.neighbours, sc, 3.0),
+        Some(sc) => SurfaceLaplacian::gaussian(near, c.neighbours, sc, 3.0),
         None => SurfaceLaplacian::cotangent(nodes.mesh),
     };
     CurvatureOperator::new(lap, points, nodes.normals, c.mode, cc, [c.periosteal, c.endosteal])

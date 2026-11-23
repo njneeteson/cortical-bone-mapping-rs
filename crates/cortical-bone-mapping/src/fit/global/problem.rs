@@ -33,9 +33,10 @@
 
 use rayon::prelude::*;
 
+use super::penalty::{smoothing_cost, smoothing_product};
 use super::{Evaluation, Layout, Problem, Role, Smoothing, State};
 use crate::model::{eval, eval_grad, Params, M, NPARAM, T};
-use crate::operators::{CurvatureState, SmoothingOperator};
+use crate::operators::CurvatureState;
 use crate::util::{det_sum, det_sum5, sym5, CHUNK};
 
 /// Data-term derivatives per node: Gauss–Newton block (packed symmetric
@@ -215,19 +216,14 @@ impl<'a> Problem<'a> {
         };
         let ch = smoothed_channels(lay, sm);
         let xs: Vec<&[f64]> = ch.iter().map(|&(fi, _)| nf[fi].as_slice()).collect();
-        let us = smooth_each(sm.op, &xs, lay.n, false);
-        let mut cost = 0.0;
-        for (u, &(_, c)) in us.iter().zip(&ch) {
-            cost += 0.5 * sm.coef[c] * det_sum(lay.n, |i| u[i] * u[i]);
-        }
-        if let Some(gfield) = gfield {
-            let ys: Vec<&[f64]> = us.iter().map(|u| u.as_slice()).collect();
-            let ts = smooth_each(sm.op, &ys, lay.n, true);
-            for (t, &(fi, c)) in ts.iter().zip(&ch) {
-                add_scaled(&mut gfield[fi], t, sm.coef[c]);
+        let coefs: Vec<f64> = ch.iter().map(|&(_, c)| sm.coef[c]).collect();
+        match gfield {
+            None => smoothing_cost(sm.op, &xs, &coefs, None),
+            Some(gfield) => {
+                let mut grads = channel_refs(gfield, &ch);
+                smoothing_cost(sm.op, &xs, &coefs, Some(&mut grads))
             }
         }
-        cost
     }
 
     /// The curvature cost and the operator's state; with `grads`, its
@@ -320,12 +316,8 @@ impl<'a> Problem<'a> {
         };
         let ch = smoothed_channels(lay, sm);
         let xs: Vec<&[f64]> = ch.iter().map(|&(fi, _)| dp[fi].as_slice()).collect();
-        let us = smooth_each(sm.op, &xs, lay.n, false);
-        let ys: Vec<&[f64]> = us.iter().map(|u| u.as_slice()).collect();
-        let ts = smooth_each(sm.op, &ys, lay.n, true);
-        for (t, &(fi, c)) in ts.iter().zip(&ch) {
-            add_scaled(&mut y[fi], t, sm.coef[c]);
-        }
+        let coefs: Vec<f64> = ch.iter().map(|&(_, c)| sm.coef[c]).collect();
+        smoothing_product(sm.op, &xs, &coefs, &mut channel_refs(y, &ch));
     }
 
     /// Add the curvature penalty's Gauss–Newton product: to the field
@@ -483,20 +475,13 @@ fn smoothed_channels(lay: &Layout, sm: &Smoothing) -> Vec<(usize, usize)> {
         .collect()
 }
 
-/// `ω x` (or `ωᵀ x`) for each of `xs`, in one pass over the operator.
-fn smooth_each(op: &SmoothingOperator, xs: &[&[f64]], n: usize, transpose: bool) -> Vec<Vec<f64>> {
-    let mut out = vec![vec![0.0; n]; xs.len()];
-    if transpose {
-        op.apply_t_many(xs, &mut out);
-    } else {
-        op.apply_many(xs, &mut out);
-    }
-    out
-}
-
-/// `dst += c src`.
-fn add_scaled(dst: &mut [f64], src: &[f64], c: f64) {
-    dst.par_iter_mut().zip(src.par_iter()).for_each(|(a, &b)| *a += c * b);
+/// Mutable references to the field channels `ch` (in increasing order) of `v`.
+fn channel_refs<'v>(v: &'v mut [Vec<f64>], ch: &[(usize, usize)]) -> Vec<&'v mut Vec<f64>> {
+    v.iter_mut()
+        .enumerate()
+        .filter(|(fi, _)| ch.iter().any(|&(f, _)| f == *fi))
+        .map(|(_, x)| x)
+        .collect()
 }
 
 struct SendPtr(*mut f64);

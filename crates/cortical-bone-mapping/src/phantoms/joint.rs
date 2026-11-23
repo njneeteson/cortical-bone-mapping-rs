@@ -18,7 +18,16 @@
 //! under the articular surface and a thin shell of thickness `t_s` on the
 //! sides: the marrow space is `smax(r − (R − t_s), ±(z − z_*) + t_p) < 0`.
 //! Marrow holds a trabecular network whose bone volume fraction increases
-//! towards the subchondral plate; the plate has pores. The joint space is
+//! towards the subchondral plate; the plate has pores. The femoral plate can
+//! be thinner than the tibial one (`femur_plate_thickness`).
+//!
+//! Optionally the femur has an intercondylar **notch**: a slot
+//! `φ_N = smax(|x − x_N| − w/2, z − z_N, y_N − y)` (inside where negative:
+//! within the width `w` of the mid-line, below the roof `z_N`, and
+//! posterior of `y_N`), removed from the femur as `smax(φ_F, −φ_N)`, with
+//! cortex of the side-shell thickness on its walls and roof
+//! (`smax(φ_marrow, t_s − φ_N)`). It splits the distal femur into two
+//! condyles, with a deep concavity between them. The joint space is
 //! filled with cartilage / synovial fluid (`rho_cartilage`), the rest with
 //! soft tissue.
 //!
@@ -75,6 +84,8 @@ pub struct JointPhantom {
     pub bump_wavelength: f64,
     /// Subchondral plate thickness: mean, relative variation, minimum.
     pub plate_thickness: f64,
+    /// Mean femoral plate thickness, if different from the tibial one.
+    pub femur_plate_thickness: Option<f64>,
     pub plate_variation: f64,
     pub plate_min: f64,
     /// Thickness of the cortical shell on the sides.
@@ -96,6 +107,19 @@ pub struct JointPhantom {
     pub noise: f64,
     pub seed: u64,
     pub supersample: usize,
+    /// The femur's intercondylar notch, if any.
+    pub notch: Option<Notch>,
+}
+
+/// The intercondylar notch: `width` across (array axis 2, centred on the
+/// bones' axis), its roof `height` above the femoral surface at the contact
+/// point, open posteriorly from `anterior` along array axis 1 (relative to
+/// the axis; the trochlea in front of it is not cut).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Notch {
+    pub width: f64,
+    pub height: f64,
+    pub anterior: f64,
 }
 
 impl Default for JointPhantom {
@@ -115,6 +139,7 @@ impl Default for JointPhantom {
             bump_amplitude: 0.08,
             bump_wavelength: 4.0,
             plate_thickness: 0.45,
+            femur_plate_thickness: None,
             plate_variation: 0.3,
             plate_min: 0.15,
             shell_thickness: 0.3,
@@ -133,6 +158,7 @@ impl Default for JointPhantom {
             noise: 40.0,
             seed: 1,
             supersample: 2,
+            notch: None,
         }
     }
 }
@@ -154,7 +180,7 @@ struct Coeffs {
 
 /// Smooth maximum `k ln(e^{a/k} + e^{b/k})` with width `k` (`max` for
 /// `k = 0`), written as `max + k ln(1 + e^{−|a−b|/k})` to avoid overflow.
-fn smax(a: f64, b: f64, k: f64) -> f64 {
+pub(crate) fn smax(a: f64, b: f64, k: f64) -> f64 {
     if k <= 0.0 {
         return a.max(b);
     }
@@ -248,7 +274,11 @@ impl JointPhantom {
     /// `t̄ (1 + v f)` for a unit random field `f`, clipped at the minimum.
     fn plate_at(&self, c: &Coeffs, p: V3, bone: Bone) -> f64 {
         let f = field(&c.plate[bone as usize - 1], [0.0, p[1], p[2]]);
-        (self.plate_thickness * (1.0 + self.plate_variation * f)).max(self.plate_min)
+        let mean = match bone {
+            Bone::Femur => self.femur_plate_thickness.unwrap_or(self.plate_thickness),
+            Bone::Tibia => self.plate_thickness,
+        };
+        (mean * (1.0 + self.plate_variation * f)).max(self.plate_min)
     }
 
     /// `(φ_outer, φ_marrow)` of a bone: negative inside.
@@ -261,10 +291,22 @@ impl JointPhantom {
         };
         let k = self.rim_rounding;
         let tp = self.plate_at(c, p, bone);
-        (
-            smax(r - big_r, along, k),
-            smax(r - (big_r - self.shell_thickness), along + tp, k),
-        )
+        let outer = smax(r - big_r, along, k);
+        let marrow = smax(r - (big_r - self.shell_thickness), along + tp, k);
+        match (bone, self.slot(p)) {
+            (Bone::Femur, Some(s)) => (smax(outer, -s, k), smax(marrow, self.shell_thickness - s, k)),
+            _ => (outer, marrow),
+        }
+    }
+
+    /// The notch's implicit function `φ_N` (negative inside the slot).
+    fn slot(&self, p: V3) -> Option<f64> {
+        let n = self.notch.as_ref()?;
+        let a = self.axis();
+        let roof = self.joint_height() + self.joint_space + n.height;
+        let k = self.rim_rounding;
+        let side = (p[2] - a[1]).abs() - 0.5 * n.width;
+        Some(smax(smax(side, p[0] - roof, k), a[0] + n.anterior - p[1], k))
     }
 
     /// The true density at `p`: inside a bone, cortex (with pores, the level set
@@ -379,6 +421,39 @@ impl JointPhantom {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notch_splits_the_condyles() {
+        let ph = JointPhantom {
+            notch: Some(Notch {
+                width: 3.0,
+                height: 2.5,
+                anterior: -1.0,
+            }),
+            femur_plate_thickness: Some(0.25),
+            rim_rounding: 0.2,
+            ..JointPhantom::default()
+        };
+        let c = ph.coeffs();
+        let a = ph.axis();
+        let roof = ph.joint_height() + ph.joint_space + 2.5;
+        // posteriorly on the mid-line below the roof: no femur
+        let inside = [roof - 1.0, a[0] + 1.0, a[1]];
+        assert!(ph.implicit(&c, inside, Bone::Femur).0 > 0.0);
+        // anteriorly (the trochlea) and above the roof: femur
+        assert!(ph.implicit(&c, [roof - 1.0, a[0] - 2.0, a[1]], Bone::Femur).0 < 0.0);
+        assert!(ph.implicit(&c, [roof + 1.0, a[0] + 1.0, a[1]], Bone::Femur).0 < 0.0);
+        // the roof's cortex is the shell thickness, along a vertical line
+        let e = ph.edges_along(&[inside], &[[1.0, 0.0, 0.0]], 0.0, 3.0)[0];
+        assert_eq!(e.2, Bone::Femur as u8);
+        assert!(
+            (e.0 - 1.0).abs() < 0.02 && (e.1 - e.0 - ph.shell_thickness).abs() < 0.02,
+            "{e:?}"
+        );
+        // the femoral plate is thinner than the tibial one
+        let q = [0.0, a[0] + ph.contact_offset[0], a[1] + ph.contact_offset[1]];
+        assert!(ph.plate_at(&c, q, Bone::Femur) < ph.plate_at(&c, q, Bone::Tibia));
+    }
 
     #[test]
     fn joint_geometry_and_truth() {

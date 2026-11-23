@@ -15,6 +15,8 @@ METHODS = {
                              curvature="excess", curvature_kappa=0.5),
     "curvature-cotangent": dict(method="regularized", reg_lambda=0.0, curvature="change",
                                 curvature_scale=None, curvature_weight=0.1),
+    # a shaft: every normal is in-plane, so the axial blur is not identified
+    "volumetric": dict(method="volumetric", vol_sigma_z="tied"),
 }
 
 
@@ -33,7 +35,7 @@ def test_regularisation_improves_precision_under_noise():
     image, mask = ph.generate()
     e = {name: thickness_error(ph, cbm.cortical_bone_mapping(image, mask, ph.spacing, **CYL_OPTS, **kw))[1]
          for name, kw in METHODS.items() if name != "curvature-cotangent"}
-    for name in ("multigrid", "regularized", "curvature-change"):
+    for name in ("multigrid", "regularized", "curvature-change", "volumetric"):
         assert e[name] < 0.6 * e["local"], e
 
 
@@ -47,6 +49,36 @@ def test_estimated_psf_is_anisotropic():
     assert abs(thickness_error(ph, r)[0]) < 0.03
     f = cbm.cortical_bone_mapping(image, mask, ph.spacing, outside=1.5, inside=2.5, sigma="fixed", sigma_value=0.15)
     assert (f.sigma == 0.15).all()
+
+
+def test_volumetric_outputs(cylinder):
+    ph, image, mask = cylinder
+    r = cbm.cortical_bone_mapping(image, mask, ph.spacing, **CYL_OPTS, method="volumetric", vol_sigma_z="tied")
+    v = r.volumetric
+    n = len(r.thickness)
+    assert v["sigma_xy"] == v["sigma_z"] and abs(v["sigma_xy"] - 0.12) < 0.02
+    assert abs(v["noise_sd"] / ph.noise - 1) < 0.1
+    assert v["std_error_t"].shape == (n,) and v["misfit"].shape == (n,) and v["data_share"].shape == (n, 4)
+    share = v["data_share"][np.isfinite(v["data_share"])]
+    assert ((share >= 0) & (share <= 1)).all()
+    assert abs(np.median(v["misfit"]) - 1) < 0.15
+    assert r.volumetric is not None and cbm.cortical_bone_mapping(image, mask, ph.spacing, **CYL_OPTS).volumetric is None
+    f = cbm.cortical_bone_mapping(image, mask, ph.spacing, **CYL_OPTS, method="volumetric", vol_sigma_z=0.2,
+                                  vol_global_densities=True, vol_curvature=None, vol_voxel_stride=2)
+    assert f.volumetric["sigma_z"] == 0.2
+    assert f.volumetric["voxels"] < v["voxels"] / 4
+    for bad in (dict(vol_sigma_z="free"), dict(vol_scanner_axis=3), dict(vol_sigma_xy=-1.0),
+                dict(rho_c="profile_max")):
+        with pytest.raises(ValueError):
+            cbm.cortical_bone_mapping(image, mask, ph.spacing, method="volumetric", **bad)
+
+
+def test_volumetric_refinement(cylinder):
+    ph = cbm.Phantom(mask_offset=0.35, mask_bump=0.25, noise=30)
+    image, bad = ph.generate()
+    rr = cbm.refine_segmentation(image, bad, ph.spacing, **CYL_OPTS, method="volumetric", vol_sigma_z="tied")
+    assert rr.converged and rr.result.volumetric is not None
+    assert dice(rr.periosteal_mask, ph.true_mask()) > 0.995
 
 
 def test_refinement_snaps_bad_segmentation():

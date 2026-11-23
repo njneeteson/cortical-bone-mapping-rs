@@ -44,12 +44,15 @@ use crate::fit::profiles::Profiles;
 use crate::model::{Params, NPARAM};
 use crate::operators::{CurvatureOperator, CurvatureState, SmoothingOperator, SparseRows};
 
+pub(crate) mod penalty;
+mod prepared;
 mod problem;
 mod solve;
 #[cfg(test)]
 mod tests;
 
-pub use solve::{cost, gradient, solve};
+pub use prepared::{cost, gradient, solve};
+pub(crate) use solve::{minimise, Costs, LeastSquares};
 
 /// The role a model parameter plays in a global fit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

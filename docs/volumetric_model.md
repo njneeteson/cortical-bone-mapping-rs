@@ -1,8 +1,13 @@
 # Design note: a volumetric cortical model
 
-*Status: a working note. Nothing here is implemented. The aim is to think
-the model through mathematically and plan a method that runs alongside the
-1D Treece et al. (2010) model, not to replace it.*
+*Status: a working note, partly implemented. The aim is to think the model
+through mathematically and plan a method that runs alongside the 1D Treece
+et al. (2010) model, not to replace it. Steps 4–6 of the plan (section 8)
+are implemented as `method="volumetric"` and the `neighbour_distance`
+option; what was built, and where it departs from this note, is in
+[method.md](method.md#volumetric-model). The site phantoms (step 1) and the
+first two stages of the validation (step 8) are in
+[volumetric_validation.md](volumetric_validation.md).*
 
 The 1D method samples one density profile along the normal at every surface
 node and fits a blurred three-level step to it. The image is 3D. This note
@@ -352,10 +357,13 @@ not change: only the metric does.
 * **A radius, not "N nearest" or "N steps".** Hop counts from powers of the
   adjacency matrix depend on the mesh density, and their fill-in grows fast.
   A distance cutoff with the existing weighting keeps the operator's meaning.
-* **Edge paths are slightly too long.** A path along edges zigzags, so it
-  overestimates the geodesic, typically by a few percent and up to about 8%
-  on a regular mesh. For a Gaussian weight that is a slightly narrower
-  kernel. If it matters, local fast marching on the triangles (Kimmel &
+* **Edge paths are too long.** A path along edges zigzags, so it
+  overestimates the geodesic. On a regular mesh with `2k` edge directions
+  the worst case, midway between two directions, is `1/cos(π/2k)`: 8% for
+  8 directions, 15% for 6 (a square grid split by one diagonal, as marching
+  cubes produces locally) and 41% for 4. Averaged over directions it is a
+  few percent. For a Gaussian weight that is a narrower, slightly
+  anisotropic kernel. If it matters, local fast marching on the triangles (Kimmel &
   Sethian 1998) is exact to first order. The heat method (Crane et al. 2013)
   solves from one source over the whole mesh, which suits this badly.
 * **Separate components separate themselves.** Two bones in one mesh are at

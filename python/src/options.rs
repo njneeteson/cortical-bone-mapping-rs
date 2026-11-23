@@ -27,6 +27,17 @@ pub(crate) fn parse_options(d: &Bound<'_, PyDict>) -> PyResult<cbm::Options> {
         init_from_global: req(d, "init_from_global")?,
         keep_profiles: req(d, "keep_profiles")?,
         threads: opt(d, "threads")?,
+        neighbour_distance: parse_distance(d)?,
+    })
+}
+
+/// How node neighbourhoods are measured; `None` = the method's default.
+fn parse_distance(d: &Bound<'_, PyDict>) -> PyResult<Option<cbm::Distance>> {
+    Ok(match opt::<String>(d, "neighbour_distance")?.as_deref() {
+        None => None,
+        Some("euclidean") => Some(cbm::Distance::Euclidean),
+        Some("surface") => Some(cbm::Distance::Surface),
+        Some(o) => return Err(unknown("neighbour_distance", o)),
     })
 }
 
@@ -128,15 +139,39 @@ fn parse_method(d: &Bound<'_, PyDict>) -> PyResult<cbm::Method> {
             neighbours: req(d, "reg_neighbours")?,
             cutoff: req(d, "reg_cutoff")?,
             init_from_local: req(d, "init_from_local")?,
-            curvature: parse_curvature(d)?,
+            curvature: parse_curvature(d, "curvature", "curvature_weight")?,
         },
+        "volumetric" => cbm::Method::Volumetric(parse_volumetric(d)?),
         o => return Err(unknown("method", o)),
     })
 }
 
-/// The curvature penalty of the regularised method, if any.
-fn parse_curvature(d: &Bound<'_, PyDict>) -> PyResult<Option<cbm::CurvatureOptions>> {
-    let mode = match opt::<String>(d, "curvature")?.as_deref() {
+/// The volumetric model's options.
+fn parse_volumetric(d: &Bound<'_, PyDict>) -> PyResult<cbm::VolumetricOptions> {
+    let sigma_z = match req::<String>(d, "vol_sigma_z_mode")?.as_str() {
+        "fit" => cbm::AxialBlur::Fit,
+        "tied" => cbm::AxialBlur::Tied,
+        "fixed" => cbm::AxialBlur::Fixed(req(d, "vol_sigma_z")?),
+        o => return Err(unknown("vol_sigma_z", o)),
+    };
+    Ok(cbm::VolumetricOptions {
+        scanner_axis: req(d, "vol_scanner_axis")?,
+        sigma_xy: opt(d, "vol_sigma_xy")?,
+        sigma_z,
+        lambda: req(d, "vol_lambda")?,
+        sigma: req(d, "reg_sigma")?,
+        neighbours: req(d, "reg_neighbours")?,
+        cutoff: req(d, "reg_cutoff")?,
+        global_densities: req(d, "vol_global_densities")?,
+        curvature: parse_curvature(d, "vol_curvature", "vol_curvature_weight")?,
+        voxel_stride: req(d, "vol_voxel_stride")?,
+    })
+}
+
+/// A curvature penalty (mode under `mode_key`, weight under `weight_key`;
+/// the other settings are shared), if any.
+fn parse_curvature(d: &Bound<'_, PyDict>, mode_key: &str, weight_key: &str) -> PyResult<Option<cbm::CurvatureOptions>> {
+    let mode = match opt::<String>(d, mode_key)?.as_deref() {
         None | Some("none") => return Ok(None),
         Some("change") => cbm::CurvatureMode::Change,
         Some("excess") => cbm::CurvatureMode::Excess {
@@ -152,7 +187,7 @@ fn parse_curvature(d: &Bound<'_, PyDict>) -> PyResult<Option<cbm::CurvatureOptio
     };
     Ok(Some(cbm::CurvatureOptions {
         mode,
-        weight: req(d, "curvature_weight")?,
+        weight: req(d, weight_key)?,
         length: opt(d, "curvature_length")?,
         periosteal,
         endosteal,

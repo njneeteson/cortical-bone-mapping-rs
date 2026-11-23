@@ -203,6 +203,9 @@ struct Shared {
     global_sigma: bool,
     sigma_held: Option<f64>,
     sigma_start: f64,
+    /// The volumetric model's PSF `(σ_xy, σ_z)`, held or as a warm start.
+    psf_held: Option<[f64; 2]>,
+    psf_start: Option<[f64; 2]>,
 }
 
 impl Shared {
@@ -215,13 +218,18 @@ impl Shared {
         let global_method = matches!(options.method, Method::Regularized { .. });
         let global_densities = options.model.global[RHO_S] || options.model.global[RHO_B];
         let global_sigma = options.model.global[SIGMA] && global_method;
+        let volumetric_global = matches!(&options.method, Method::Volumetric(v) if v.global_densities);
+        let held_densities = fixed_rho && (global_method && global_densities || volumetric_global);
+        let psf = first.volumetric.as_ref().map(|v| [v.sigma_xy, v.sigma_z]);
         Shared {
             rho_c: fixed_rho.then_some(first.rho_c),
-            densities: (fixed_rho && global_method && global_densities).then(|| first.mean_densities()),
+            densities: held_densities.then(|| first.mean_densities()),
             density_start: first.mean_densities(),
             global_sigma,
             sigma_held: (global_sigma && freezing).then(|| first.mean_sigma()),
             sigma_start: first.mean_sigma(),
+            psf_held: psf.filter(|_| freezing),
+            psf_start: psf,
         }
     }
 
@@ -232,6 +240,11 @@ impl Shared {
         }
         if self.global_sigma && self.sigma_held.is_none() {
             self.sigma_start = r.mean_sigma();
+        }
+        if self.psf_held.is_none() {
+            if let Some(v) = &r.volumetric {
+                self.psf_start = Some([v.sigma_xy, v.sigma_z]);
+            }
         }
     }
 
@@ -253,6 +266,8 @@ impl Shared {
             edge_tol: if full { 0.0 } else { edge_tol },
             sigma: if full { None } else { self.sigma_held },
             sigma_start: self.global_sigma.then_some(self.sigma_start),
+            psf: if full { None } else { self.psf_held },
+            psf_start: self.psf_start,
         }
     }
 }

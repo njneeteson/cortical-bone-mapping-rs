@@ -43,6 +43,21 @@ pub(crate) fn result_dict<'py>(py: Python<'py>, r: &cbm::CbmResult) -> PyResult<
     }
     info.set_item("timings", t)?;
     d.set_item("info", info)?;
+    if let Some(v) = &r.volumetric {
+        let vd = PyDict::new(py);
+        vd.set_item("sigma_xy", v.sigma_xy)?;
+        vd.set_item("sigma_z", v.sigma_z)?;
+        vd.set_item("scanner_axis", v.scanner_axis)?;
+        vd.set_item("voxels", v.voxels)?;
+        vd.set_item("noise_sd", v.noise_sd)?;
+        vd.set_item("noise_correlation", v.noise_correlation.to_vec())?;
+        vd.set_item("noise_factor", v.noise_factor)?;
+        vd.set_item("std_error_t", v.std_error_t.clone().into_pyarray(py))?;
+        let share = Array2::from_shape_fn((v.data_share.len(), 4), |(i, j)| v.data_share[i][j]);
+        vd.set_item("data_share", share.into_pyarray(py))?;
+        vd.set_item("misfit", v.misfit.clone().into_pyarray(py))?;
+        d.set_item("volumetric", vd)?;
+    }
     if let Some((x, prof)) = &r.profiles {
         d.set_item("profile_x", x.clone().into_pyarray(py))?;
         let a = Array2::from_shape_vec((prof.n, prof.m), prof.values.clone()).unwrap();

@@ -2,7 +2,9 @@
 //! (surface nets), rasterisation, VTK output, the cotangent Laplacian, and
 //! the level-set embedding used by refinement.
 
+pub mod closest;
 pub mod cotan;
+pub mod geodesic;
 pub mod levelset;
 pub mod mesh;
 pub mod nets;

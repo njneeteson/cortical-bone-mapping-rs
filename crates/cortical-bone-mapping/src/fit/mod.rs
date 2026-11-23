@@ -38,6 +38,7 @@ pub mod multigrid;
 pub mod profiles;
 pub mod psf;
 pub mod regularized;
+pub mod volumetric;
 
 use std::time::Instant;
 
@@ -79,6 +80,10 @@ pub struct FitConstraints<'a> {
     pub sigma: Option<f64>,
     /// Start a global `σ` from this value (a warm start).
     pub sigma_start: Option<f64>,
+    /// Hold the volumetric model's PSF `(σ_xy, σ_z)` at these values.
+    pub psf: Option<[f64; 2]>,
+    /// Start the volumetric model's PSF from these values (a warm start).
+    pub psf_start: Option<[f64; 2]>,
 }
 
 /// The sampled data every method fits.
@@ -174,6 +179,9 @@ pub fn fit_surface_constrained<T: Voxel>(
     warm_start: Option<&[Option<Params>]>,
     constraints: &FitConstraints,
 ) -> Result<CbmResult, Error> {
+    if let Method::Volumetric(v) = &options.method {
+        return volumetric::fit_surface(image, surface, keep, options, v, warm_start, constraints);
+    }
     let o = options;
     let mut timings = Vec::new();
     let t0 = Instant::now();
@@ -257,6 +265,7 @@ pub fn fit_surface_constrained<T: Voxel>(
         psf,
         info,
         profiles: o.keep_profiles.then_some((x, profiles)),
+        volumetric: None,
     })
 }
 
@@ -333,7 +342,7 @@ fn initial_model(data: &Data, sigma_fixed: Option<&[f64]>, densities: Option<[f6
 
 /// The fixed surface vertices as fitted-node flags; each needs a warm start
 /// to be held at.
-fn held_subset(
+pub(crate) fn held_subset(
     fixed: Option<&[bool]>,
     warm_start: Option<&[Option<Params>]>,
     vertex_ids: &[u32],
@@ -362,6 +371,7 @@ fn fit_method(
         Method::Local => local::fit_nodes(data, start, info),
         Method::Multigrid { .. } => multigrid::fit(data, nodes, start, info),
         Method::Regularized { .. } => regularized::fit(data, nodes, start, constraints, info, timings),
+        Method::Volumetric(_) => unreachable!("the volumetric model does not fit profiles"),
     };
     if let Some(held) = start.held {
         for (k, &h) in held.iter().enumerate() {

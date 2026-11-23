@@ -69,8 +69,8 @@
 
 use rayon::prelude::*;
 
+use super::neighbours::Neighbours;
 use super::SparseRows;
-use crate::kdtree::KdTree;
 use crate::surface::cotan::CotanLaplacian;
 use crate::surface::mesh::Mesh;
 use crate::util::{add, dot, scale, Rng, V3};
@@ -125,28 +125,31 @@ impl SurfaceLaplacian {
     /// when there are at most `k` of them and estimated by importance sampling `k`
     /// of them otherwise (`sampled_row`). Isolated points use their nearest
     /// neighbour.
-    pub fn gaussian(points: &[V3], k: usize, sigma: f64, cutoff: f64) -> Self {
+    pub fn gaussian(neighbours: &Neighbours, k: usize, sigma: f64, cutoff: f64) -> Self {
+        let points = neighbours.points();
         let n = points.len();
-        let tree = KdTree::new(points);
         let k = k.max(1);
         let radius = cutoff * sigma;
         let inv = 1.0 / (2.0 * sigma * sigma);
         let rows: Vec<Vec<(u32, f64)>> = (0..n)
             .into_par_iter()
-            .map_init(Vec::new, |cand, i| {
-                tree.within(points[i], radius, cand);
-                cand.retain(|c| c.0 as usize != i);
-                if cand.is_empty() {
-                    let nn = tree.knn(points[i], 1, Some(i as u32));
-                    return nn.into_iter().map(|(j, _)| (j, 1.0)).collect();
-                }
-                let g: Vec<f64> = cand.iter().map(|c| (-c.1 * inv).exp()).collect();
-                if cand.len() <= k {
-                    let s: f64 = g.iter().sum();
-                    return cand.iter().zip(&g).map(|(c, w)| (c.0, w / s)).collect();
-                }
-                sampled_row(cand, &g, k, i)
-            })
+            .map_init(
+                || (Vec::new(), neighbours.scratch()),
+                |(cand, s), i| {
+                    neighbours.within(i, radius, cand, s);
+                    cand.retain(|c| c.0 as usize != i);
+                    if cand.is_empty() {
+                        let nn = neighbours.nearest(i, 1, s);
+                        return nn.into_iter().map(|(j, _)| (j, 1.0)).collect();
+                    }
+                    let g: Vec<f64> = cand.iter().map(|c| (-c.1 * inv).exp()).collect();
+                    if cand.len() <= k {
+                        let s: f64 = g.iter().sum();
+                        return cand.iter().zip(&g).map(|(c, w)| (c.0, w / s)).collect();
+                    }
+                    sampled_row(cand, &g, k, i)
+                },
+            )
             .collect();
         let mut rows = SparseRows::from_rows(rows, n);
         let diag = normalise_by_second_moment(&mut rows, points);

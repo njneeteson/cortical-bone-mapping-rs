@@ -41,7 +41,7 @@ from .mapping import cortical_bone_mapping, refine_segmentation
 from .mesh import mesh_section, voxelize, write_vtk
 from .model import fit_profiles, profile_model
 from .options import PARAM_NAMES, Options, RefineOptions
-from .phantoms import BonePhantom, JointPhantom, Phantom
+from .phantoms import SITES, BonePhantom, FemurPhantom, JointPhantom, Phantom, site_phantom
 from .results import CbmResult, RefineResult
 from .segmentation import (
     BuieOptions,
@@ -62,6 +62,9 @@ __all__ = [
     "Phantom",
     "BonePhantom",
     "JointPhantom",
+    "FemurPhantom",
+    "site_phantom",
+    "SITES",
     "BuieOptions",
     "buie_segmentation",
     "hull_segmentation",

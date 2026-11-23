@@ -49,9 +49,11 @@ use ndarray::{Array3, ArrayView3, Zip};
 use rayon::prelude::*;
 
 use crate::kdtree::KdTree;
+use crate::surface::closest::MeshPoints;
 use crate::surface::mesh::Mesh;
 use crate::surface::nets::{extract_level_set, Extracted};
-use crate::util::{add, dot, norm, scale, sub, V3};
+use crate::surface::voxelize::index_box;
+use crate::util::V3;
 use crate::volume::Geometry;
 
 pub struct LevelSet {
@@ -71,18 +73,7 @@ impl LevelSet {
     /// (even–odd rule), the magnitude from the exact distance to the mesh,
     /// clamped to `band`.
     pub fn from_mesh(mesh: &Mesh, dims: [usize; 3], geom: &Geometry, margin: f64, band: f64) -> LevelSet {
-        let mut lo = [usize::MAX; 3];
-        let mut hi = [0usize; 3];
-        for &p in &mesh.vertices {
-            let q = geom.to_index(p);
-            for a in 0..3 {
-                let m = (margin / geom.spacing[a]).ceil();
-                let l = (q[a] - m).floor().max(0.0) as usize;
-                let h = ((q[a] + m).ceil().max(0.0) as usize).min(dims[a] - 1);
-                lo[a] = lo[a].min(l);
-                hi[a] = hi[a].max(h);
-            }
-        }
+        let (lo, hi) = index_box(mesh, dims, geom, margin);
         let shape = (hi[0] - lo[0] + 1, hi[1] - lo[1] + 1, hi[2] - lo[2] + 1);
         let sub_geom = Geometry {
             spacing: geom.spacing,
@@ -181,8 +172,7 @@ impl LevelSet {
         if mesh.vertices.is_empty() {
             return;
         }
-        let tree = KdTree::new(&mesh.vertices);
-        let vf = VertexFaces::new(mesh);
+        let points = MeshPoints::new(mesh);
         let band = self.band;
         let reach = band + 2.0 * self.geom.spacing.iter().cloned().fold(0.0, f64::max);
         let (_, s1, s2) = self.phi.dim();
@@ -197,18 +187,8 @@ impl LevelSet {
                 }
                 let q = self.position(i, j, k);
                 let sign = if self.phi[[i, j, k]] < 0.0 { -1.0 } else { 1.0 };
-                let nn = tree.knn(q, 4, None);
-                if nn.is_empty() || nn[0].1.sqrt() > reach {
-                    return Some((sign * band) as f32);
-                }
-                let mut best = f64::INFINITY;
-                for &(v, _) in &nn {
-                    for &f in vf.of(v as usize) {
-                        let t = mesh.faces[f as usize].map(|x| mesh.vertices[x as usize]);
-                        best = best.min(norm(sub(q, closest_on_triangle(q, t[0], t[1], t[2]))));
-                    }
-                }
-                Some((sign * best.min(band)) as f32)
+                let d = points.closest(q, reach).map_or(band, |c| c.dist.min(band));
+                Some((sign * d) as f32)
             })
             .collect();
         let phi = self.phi.as_slice_mut().expect("phi is in standard layout");
@@ -220,89 +200,11 @@ impl LevelSet {
     }
 }
 
-/// Faces incident to each vertex.
-struct VertexFaces {
-    offsets: Vec<usize>,
-    faces: Vec<u32>,
-}
-
-impl VertexFaces {
-    /// The faces of every vertex, in compressed rows.
-    fn new(mesh: &Mesh) -> Self {
-        let n = mesh.vertices.len();
-        let mut offsets = vec![0usize; n + 1];
-        for f in &mesh.faces {
-            for &v in f {
-                offsets[v as usize + 1] += 1;
-            }
-        }
-        for i in 0..n {
-            offsets[i + 1] += offsets[i];
-        }
-        let mut fill = offsets.clone();
-        let mut faces = vec![0u32; offsets[n]];
-        for (fi, f) in mesh.faces.iter().enumerate() {
-            for &v in f {
-                faces[fill[v as usize]] = fi as u32;
-                fill[v as usize] += 1;
-            }
-        }
-        VertexFaces { offsets, faces }
-    }
-    /// The faces incident to vertex `v`.
-    fn of(&self, v: usize) -> &[u32] {
-        &self.faces[self.offsets[v]..self.offsets[v + 1]]
-    }
-}
-
-/// Closest point to `p` on triangle `abc` (Ericson, Real-Time Collision
-/// Detection, 5.1.5).
-pub fn closest_on_triangle(p: V3, a: V3, b: V3, c: V3) -> V3 {
-    let ab = sub(b, a);
-    let ac = sub(c, a);
-    let ap = sub(p, a);
-    let d1 = dot(ab, ap);
-    let d2 = dot(ac, ap);
-    if d1 <= 0.0 && d2 <= 0.0 {
-        return a;
-    }
-    let bp = sub(p, b);
-    let d3 = dot(ab, bp);
-    let d4 = dot(ac, bp);
-    if d3 >= 0.0 && d4 <= d3 {
-        return b;
-    }
-    let vc = d1 * d4 - d3 * d2;
-    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
-        let v = d1 / (d1 - d3);
-        return add(a, scale(ab, v));
-    }
-    let cp = sub(p, c);
-    let d5 = dot(ab, cp);
-    let d6 = dot(ac, cp);
-    if d6 >= 0.0 && d5 <= d6 {
-        return c;
-    }
-    let vb = d5 * d2 - d1 * d6;
-    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
-        let w = d2 / (d2 - d6);
-        return add(a, scale(ac, w));
-    }
-    let va = d3 * d6 - d5 * d4;
-    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
-        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
-        return add(b, scale(sub(c, b), w));
-    }
-    let denom = 1.0 / (va + vb + vc);
-    let v = vb * denom;
-    let w = vc * denom;
-    add(a, add(scale(ab, v), scale(ac, w)))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::surface::nets::extract_surface;
+    use crate::util::{norm, sub};
 
     fn ball(n: usize, r: f64) -> Array3<u8> {
         let c = (n as f64 - 1.0) / 2.0;
@@ -317,16 +219,6 @@ mod tests {
         let mean = r.iter().sum::<f64>() / r.len() as f64;
         let sd = (r.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / r.len() as f64).sqrt();
         (mean, sd)
-    }
-
-    #[test]
-    fn closest_point_regions() {
-        let (a, b, c) = ([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
-        assert!(norm(sub(closest_on_triangle([0.2, 0.2, 1.0], a, b, c), [0.2, 0.2, 0.0])) < 1e-12);
-        assert_eq!(closest_on_triangle([-1.0, -1.0, 0.0], a, b, c), a);
-        assert_eq!(closest_on_triangle([0.5, -1.0, 0.0], a, b, c), [0.5, 0.0, 0.0]);
-        let p = closest_on_triangle([1.0, 1.0, 0.0], a, b, c);
-        assert!((p[0] - 0.5).abs() < 1e-12 && (p[1] - 0.5).abs() < 1e-12);
     }
 
     #[test]

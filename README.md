@@ -19,9 +19,12 @@ This crate implements
   PSF-based or estimated blur;
 * the global **multigrid** and spatially **regularised** fits of Neeteson &
   Boyd (2025), with a much faster solver;
-* two extensions: a **curvature penalty** on the fitted surfaces, and
-  **segmentation refinement**, which moves a rough periosteal segmentation
-  onto the fitted periosteum until it stops moving.
+* three extensions:
+  * a **curvature penalty** on the fitted surfaces;
+  * a **volumetric model**, which fits the voxels of a band around the
+    surface with a global PSF instead of one profile per node;
+  * **segmentation refinement**, which moves a rough periosteal
+    segmentation onto the fitted periosteum until it stops moving.
 
 ![A rough segmentation (red) tightening onto the periosteum](docs/images/refinement.gif)
 
@@ -70,7 +73,7 @@ Thickness on a given segmentation (1 inside the periosteal surface):
 ```python
 res = cbm.cortical_bone_mapping(
     image, mask, spacing=(0.0607, 0.0607, 0.0607),  # array-axis order (z, y, x)
-    method="regularized",           # "local" | "multigrid" | "regularized"
+    method="regularized",           # "local" | "multigrid" | "regularized" | "volumetric"
     normal_constraint="in_plane",   # transverse-plane normals for radius/tibia
     sub_mask=None,                  # optionally restrict where thickness is reported
 )
@@ -95,14 +98,21 @@ cbm.cortical_bone_mapping(image, mask, spacing, method="multigrid", multigrid_sp
 # curvature penalty, alone or with the smoothing term
 cbm.cortical_bone_mapping(image, mask, spacing, method="regularized",
                           reg_lambda=0.0, curvature="change", curvature_weight=1.0)
+
+# volumetric model: voxels of the band, global PSF (axis 0 = scanner axis);
+# result.volumetric holds the PSF, noise and per-node reliability
+cbm.cortical_bone_mapping(image, mask, spacing, method="volumetric", vol_scanner_axis=0)
 ```
 
 Images may be `float32/64`, `int8/16/32` or `uint8/16/32` and are not copied.
 Also available: `cbm.buie_segmentation` (Buie et al. 2007, implemented from
 the paper), and phantoms with exact ground truth: `cbm.Phantom` (smooth
 shells), `cbm.BonePhantom` (realistic long bones, optionally with a
-neighbouring fibula/ulna and cortical breaks) and `cbm.JointPhantom` (the
-contact region of a knee).
+neighbouring fibula/ulna and cortical breaks), `cbm.JointPhantom` (the
+contact region of a knee, optionally with the intercondylar notch),
+`cbm.FemurPhantom` (a proximal femur with the acetabulum), and
+`cbm.site_phantom(site)` for the distal radius and tibia (HR-pQCT) and the
+proximal femur and knee (clinical CT) with parameters from the literature.
 
 From Rust:
 
@@ -183,8 +193,12 @@ See [method](docs/method.md#cortical-density).
   the knee's femoral notch taught us about refinement on real data:
   remeshing, per-node densities, inexact inner fits, closing starts and
   regional convergence.
-* **[docs/volumetric_model.md](docs/volumetric_model.md)**: a design note on
-  a volumetric (voxel-wise) cortical model, to run alongside the 1D one.
+* **[docs/volumetric_model.md](docs/volumetric_model.md)**: the design note
+  behind the volumetric (voxel-wise) model, which runs alongside the 1D one.
+* **[docs/volumetric_validation.md](docs/volumetric_validation.md)**: the
+  volumetric model against the 1D methods on phantoms of the distal radius
+  and tibia (HR-pQCT) and the proximal femur and knee (clinical CT), and on
+  the clinical knee.
 * **[docs/performance.md](docs/performance.md)**: run time and memory, and
   comparisons with the original Python implementation and with SciPy.
 
@@ -193,7 +207,17 @@ See [method](docs/method.md#cortical-density).
 * **Methods**: `local` (Treece et al.), `multigrid` and `regularized`
   (Neeteson & Boyd), the latter optionally with the curvature penalty
   (`"change"`: curvature added by the fit; `"excess"`: curvature above a
-  threshold), or with the curvature penalty alone.
+  threshold), or with the curvature penalty alone; `volumetric` (extension),
+  with a global PSF, the curvature penalty on the edges, smoothed density
+  fields, and per-node reliability (local standard error, data share,
+  misfit).
+* **Neighbourhoods** by Euclidean distance or by distance along the surface
+  (truncated Dijkstra), for every method.
+* **Phantoms** with exact ground truth: smooth shells, realistic long bones
+  (porous cortex, trabeculae, neighbouring bones, cortical breaks), a knee
+  joint, a proximal femur with the acetabulum, and the four sites at their
+  scanners' resolution with parameters from the literature
+  (`cbm.site_phantom`).
 * **Blur**: free, fixed, from a Gaussian PSF (direction-dependent), or a PSF
   estimated from the data (isotropic, axial or anisotropic).
 * **Fast and frugal**: bounded Levenberg–Marquardt with analytic Jacobians
