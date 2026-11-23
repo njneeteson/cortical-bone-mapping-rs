@@ -5,7 +5,7 @@ use crate::error::Error;
 use crate::fit::profiles::NormalConstraint;
 use crate::fit::psf::PsfModel;
 use crate::model::{Params, NPARAM, SIGMA, T};
-use crate::operators::CurvatureMode;
+use crate::operators::{CurvatureMode, Distance};
 use crate::volume::Geometry;
 
 /// Surface extraction and smoothing.
@@ -213,6 +213,71 @@ impl Default for CurvatureOptions {
     }
 }
 
+/// How the volumetric model treats the blur along the scanner axis.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AxialBlur {
+    /// Fitted, as a second global parameter.
+    Fit,
+    /// Equal to the in-plane blur (an isotropic PSF; HR-pQCT, or a short
+    /// shaft whose normals are all nearly in-plane, where `σ_z` is not
+    /// determined).
+    Tied,
+    /// Fixed to this value (physical units).
+    Fixed(f64),
+}
+
+/// Options of the volumetric model ([`Method::Volumetric`]; extension, see
+/// `docs/volumetric_model.md`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct VolumetricOptions {
+    /// The scanner axis (array axis) along which the PSF has `σ_z`.
+    pub scanner_axis: usize,
+    /// Fix the in-plane blur `σ_xy` (physical units); `None` = fitted.
+    pub sigma_xy: Option<f64>,
+    pub sigma_z: AxialBlur,
+    /// Smoothing of the density fields: weight `λ` (`κ = λ/N`; 0 = none),
+    /// Gaussian `σ_reg`, neighbours, and neighbour cut-off (× `σ_reg`).
+    pub lambda: f64,
+    pub sigma: f64,
+    pub neighbours: usize,
+    pub cutoff: f64,
+    /// One global `ρs` and `ρb` instead of fields.
+    pub global_densities: bool,
+    /// Curvature penalty on the fitted surfaces (on `m`, `t`), the only
+    /// regulariser of the edge positions: without it each node's support is
+    /// roughly one profile's worth of voxels and the precision is that of the
+    /// local fit. The default weight 0.3 is the best compromise over the
+    /// phantoms (`docs/volumetric_validation.md`): thickness RMS error
+    /// against weights 0.1 and 1.0 of 0.0079 (0.0070, 0.0107) and 0.0088
+    /// (0.0100, 0.0106) mm on the shell at noise 30 and 120, 0.032 (0.042,
+    /// 0.026) mm on the distal radius, 0.063 (0.063, 0.065) mm on the
+    /// proximal femur and 0.162 (0.158, 0.166) mm on the knee. Heavier
+    /// weights suit HR-pQCT; at clinical resolution the choice matters little.
+    pub curvature: Option<CurvatureOptions>,
+    /// Use every `voxel_stride`-th voxel along each axis (1 = all).
+    pub voxel_stride: usize,
+}
+
+impl Default for VolumetricOptions {
+    fn default() -> Self {
+        VolumetricOptions {
+            scanner_axis: 0,
+            sigma_xy: None,
+            sigma_z: AxialBlur::Fit,
+            lambda: 1.0,
+            sigma: 1.9424,
+            neighbours: 500,
+            cutoff: 3.0,
+            global_densities: false,
+            curvature: Some(CurvatureOptions {
+                weight: 0.3,
+                ..CurvatureOptions::default()
+            }),
+            voxel_stride: 1,
+        }
+    }
+}
+
 /// The model-fitting method.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Method {
@@ -240,6 +305,10 @@ pub enum Method {
         init_from_local: bool,
         curvature: Option<CurvatureOptions>,
     },
+    /// The volumetric model: the profile model evaluated at every voxel of a
+    /// band around the surface, with a global PSF, a curvature penalty on
+    /// `m`, `t` and spatial smoothing of the density fields (extension).
+    Volumetric(VolumetricOptions),
 }
 
 impl Method {
@@ -304,6 +373,7 @@ impl Method {
             Method::Local => "local",
             Method::Multigrid { .. } => "multigrid",
             Method::Regularized { .. } => "regularized",
+            Method::Volumetric(_) => "volumetric",
         }
     }
 }
@@ -323,6 +393,11 @@ pub struct Options {
     pub keep_profiles: bool,
     /// Worker threads (`None` = all cores).
     pub threads: Option<usize>,
+    /// How node neighbourhoods are measured for the regularisation operator
+    /// `ω`, the Gaussian curvature Laplacian and the multigrid basis
+    /// ([`Distance`]); `None` = the method's default (Euclidean for the 1D
+    /// methods, as in Neeteson & Boyd 2025).
+    pub neighbour_distance: Option<Distance>,
 }
 
 impl Default for Options {
@@ -337,8 +412,32 @@ impl Default for Options {
             init_from_global: true,
             keep_profiles: false,
             threads: None,
+            neighbour_distance: None,
         }
     }
+}
+
+/// Checks of [`VolumetricOptions`].
+fn validate_volumetric(v: &VolumetricOptions, o: &Options) -> Result<(), Error> {
+    let bad = |s: &str| Err(Error::InvalidOption(s.to_string()));
+    if v.scanner_axis > 2 {
+        return bad("the scanner axis must be 0, 1 or 2");
+    }
+    if v.sigma_xy.is_some_and(|s| !(s > 0.0)) || matches!(v.sigma_z, AxialBlur::Fixed(s) if !(s > 0.0)) {
+        return bad("fixed PSF widths must be positive");
+    }
+    if v.lambda < 0.0 || !(v.sigma > 0.0) || v.neighbours == 0 || v.voxel_stride == 0 {
+        return bad("volumetric needs lambda >= 0, sigma > 0, neighbours > 0, voxel_stride > 0");
+    }
+    if let Some(c) = &v.curvature {
+        if c.weight < 0.0 || c.length.is_some_and(|l| !(l > 0.0)) || c.scale.is_some_and(|l| !(l > 0.0)) {
+            return bad("curvature weight must be >= 0, length and scale > 0");
+        }
+    }
+    if o.model.rho_c_mode == RhoCMode::ProfileMax {
+        return bad("the volumetric model takes a fixed or estimated rho_c, not profile maxima");
+    }
+    Ok(())
 }
 
 /// Anatomical sites with published parameter sets.
@@ -388,6 +487,16 @@ impl Options {
 
 impl Options {
     /// Check the options for values the fit cannot use.
+    /// The distance used for node neighbourhoods (see
+    /// [`Options::neighbour_distance`]).
+    pub fn distance(&self) -> Distance {
+        let default = match self.method {
+            Method::Volumetric(_) => Distance::Surface,
+            _ => Distance::Euclidean,
+        };
+        self.neighbour_distance.unwrap_or(default)
+    }
+
     pub fn validate(&self) -> Result<(), Error> {
         let o = self;
         let bad = |s: &str| Err(Error::InvalidOption(s.to_string()));
@@ -441,6 +550,7 @@ impl Options {
                 }
             }
             Method::Local => {}
+            Method::Volumetric(v) => validate_volumetric(v, o)?,
         }
         Ok(())
     }

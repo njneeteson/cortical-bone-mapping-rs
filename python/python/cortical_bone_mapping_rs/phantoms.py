@@ -206,8 +206,17 @@ class JointPhantom:
     the plate has pores. The joint space holds cartilage / fluid
     (``rho_cartilage``).
 
-    This is a scaled-down joint (a real tibial plateau is ~70 mm wide): it
-    reproduces the local geometry of the contact region in a small volume.
+    Optionally the femoral plate is thinner (``femur_plate_thickness``),
+    and the femur has an intercondylar ``notch`` given as
+    ``(width, height, anterior)``: a slot ``width`` across (array axis 2,
+    centred on the axis), its roof ``height`` above the femoral surface at
+    the contact point, open posteriorly from ``anterior`` along axis 1, with
+    cortex of ``shell_thickness`` on its walls.
+
+    The default is a scaled-down joint (a real tibial plateau is ~70 mm
+    wide): it reproduces the local geometry of the contact region in a small
+    volume; ``site_phantom("knee")`` is a full-size knee at clinical CT
+    resolution.
     The default joint space, 4 mm, is a healthy bone-to-bone distance (medial
     radiographic joint space width ~4.8 mm in women, ~5.7 mm in men); ~2 mm
     is moderate osteoarthritis.
@@ -245,6 +254,8 @@ class JointPhantom:
     noise: float = 40.0
     seed: int = 1
     supersample: int = 2
+    femur_plate_thickness: Optional[float] = None
+    notch: Optional[Tuple[float, float, float]] = None
 
     TIBIA = 1
     FEMUR = 2
@@ -255,6 +266,7 @@ class JointPhantom:
         d["spacing"] = _triple(self.spacing, "spacing")
         d["blur"] = _triple(self.blur, "blur")
         d["contact_offset"] = tuple(float(v) for v in self.contact_offset)
+        d["notch"] = None if self.notch is None else tuple(float(v) for v in self.notch)
         return d
 
     def joint_height(self) -> float:
@@ -282,3 +294,114 @@ class JointPhantom:
         if bone is not None:
             t[e[:, 2] != bone] = np.nan
         return t
+
+
+@dataclass
+class FemurPhantom:
+    """A proximal femur at clinical CT scale, with the acetabulum across the
+    hip joint space (array axis 0 = scanner axis, superior).
+
+    The periosteal surface is a smooth union (fillet width ``rounding``) of
+    the shaft (``shaft_radius``), the neck (elliptical, ``neck_radii``
+    superoinferior and anteroposterior, at ``neck_shaft_angle`` and
+    ``anteversion`` degrees), the head (``head_radius``, its centre
+    ``offset`` from the shaft axis) and the greater trochanter (an ellipsoid
+    with semi-axes ``trochanter``). The cortex is ``neck_thickness``
+    (superior, inferior) around the neck, ``head_thickness``,
+    ``trochanter_thickness`` and ``shaft_thickness``, blended between the
+    parts, varied by ``thickness_variation`` over ``thickness_wavelength``
+    and clipped at ``thickness_min``. ``acetabulum`` is
+    ``(gap, thickness, plate, coverage, tilt)``: a spherical shell across the
+    joint space ``gap``, with bone plates on both faces, covering the head
+    within ``coverage`` degrees of an axis tilted ``tilt`` degrees medially;
+    it is bone 2 in the labels. Trabeculae and pores as in
+    :class:`BonePhantom`. Parameters from measured femora (see the Rust
+    module ``phantoms::femur``).
+    """
+
+    dims: Tuple[int, int, int] = (110, 104, 140)
+    spacing: Triple = (1.0, 0.75, 0.75)
+    head_radius: float = 23.15
+    neck_shaft_angle: float = 126.4
+    anteversion: float = 17.5
+    offset: float = 37.9
+    neck_radii: Tuple[float, float] = (15.0, 12.5)
+    shaft_radius: float = 15.0
+    trochanter: Triple = (16.0, 14.0, 11.0)
+    rounding: float = 4.0
+    neck_thickness: Tuple[float, float] = (0.86, 2.79)
+    head_thickness: float = 0.8
+    trochanter_thickness: float = 0.8
+    shaft_thickness: float = 3.5
+    thickness_variation: float = 0.15
+    thickness_wavelength: float = 25.0
+    thickness_min: float = 0.3
+    acetabulum: Optional[Tuple[float, float, float, float, float]] = (4.0, 8.0, 1.0, 75.0, 45.0)
+    bvtv: float = 0.18
+    endo_bvtv: float = 0.35
+    transition_width: float = 2.0
+    trabecular_wavelength: float = 1.6
+    porosity: float = 0.03
+    pore_wavelength: float = 0.35
+    rho_soft: float = 57.0
+    rho_cartilage: float = 80.0
+    rho_bone: float = 1600.0
+    rho_marrow: float = -30.0
+    blur: Triple = (0.6, 0.5, 0.5)
+    noise: float = 30.0
+    seed: int = 1
+    supersample: int = 3
+
+    FEMUR = 1
+    PELVIS = 2
+
+    def _spec(self) -> dict:
+        d = asdict(self)
+        d["dims"] = tuple(int(x) for x in self.dims)
+        d["spacing"] = _triple(self.spacing, "spacing")
+        d["blur"] = _triple(self.blur, "blur")
+        d["trochanter"] = _triple(self.trochanter, "trochanter")
+        d["neck_radii"] = tuple(float(v) for v in self.neck_radii)
+        d["neck_thickness"] = tuple(float(v) for v in self.neck_thickness)
+        d["acetabulum"] = None if self.acetabulum is None else tuple(float(v) for v in self.acetabulum)
+        return d
+
+    def generate(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """``(image float32, periosteal labels, endosteal labels)``: uint8,
+        0 outside, 1 femur, 2 pelvis (acetabulum)."""
+        return _core.femur_phantom(self._spec())
+
+    def edges_along(self, points, normals, x0: float, x1: float) -> np.ndarray:
+        """True ``(x_periosteal, x_endosteal, bone)`` along each line ``p + x n``
+        (first entry into either bone, then into its marrow space), shape (N, 3)."""
+        p = np.ascontiguousarray(points, dtype=np.float64)
+        n = np.ascontiguousarray(normals, dtype=np.float64)
+        return _core.femur_phantom_edges(self._spec(), p, n, float(x0), float(x1))
+
+    def true_thickness(self, result: "CbmResult", bone: Optional[int] = 1) -> np.ndarray:
+        """Reference thickness along each sampling line of a result (NaN where
+        the line first enters a bone other than ``bone``, if given)."""
+        o = result.options
+        e = self.edges_along(result.points, result.normals, -o.outside, o.inside)
+        t = e[:, 1] - e[:, 0]
+        if bone is not None:
+            t[e[:, 2] != bone] = np.nan
+        return t
+
+
+SITES = ("distal_radius", "distal_tibia", "proximal_femur", "knee")
+
+
+def site_phantom(site: str, seed: int = 1):
+    """The phantom of an anatomical site at its scanner's resolution, with
+    parameters from the literature (Rust module ``phantoms::sites``).
+
+    ``"distal_radius"`` and ``"distal_tibia"`` (HR-pQCT, 61 um voxels, with
+    the ulna / fibula beside them) are :class:`BonePhantom`;
+    ``"proximal_femur"`` (hip CT) is a :class:`FemurPhantom`; ``"knee"``
+    (clinical CT, with an intercondylar notch) is a :class:`JointPhantom`.
+    ``seed`` sets the noise and the random geometry.
+    """
+    kind, spec = _core.site_phantom(str(site), int(seed))
+    cls = {"bone": BonePhantom, "femur": FemurPhantom, "joint": JointPhantom}[kind]
+    return cls(**spec)

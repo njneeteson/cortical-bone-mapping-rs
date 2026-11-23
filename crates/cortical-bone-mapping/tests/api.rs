@@ -68,6 +68,10 @@ fn results_are_deterministic_and_thread_count_independent() {
             seed: 7,
         },
         regularized(32, None),
+        Method::Volumetric(VolumetricOptions {
+            sigma_z: AxialBlur::Tied,
+            ..Default::default()
+        }),
     ] {
         let mut o = options(&ph, method.clone());
         let a = run(img.view(), mask.view(), NO_SUB, &o).unwrap();

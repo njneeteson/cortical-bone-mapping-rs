@@ -32,6 +32,9 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(phantoms::bone_phantom_labels, m)?)?;
     m.add_function(wrap_pyfunction!(phantoms::joint_phantom, m)?)?;
     m.add_function(wrap_pyfunction!(phantoms::joint_phantom_edges, m)?)?;
+    m.add_function(wrap_pyfunction!(phantoms::femur_phantom, m)?)?;
+    m.add_function(wrap_pyfunction!(phantoms::femur_phantom_edges, m)?)?;
+    m.add_function(wrap_pyfunction!(phantoms::site_phantom, m)?)?;
     m.add_function(wrap_pyfunction!(segmentation::buie, m)?)?;
     m.add_function(wrap_pyfunction!(segmentation::hull_segmentation, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;

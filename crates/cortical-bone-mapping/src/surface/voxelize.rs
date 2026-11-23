@@ -52,6 +52,24 @@ impl Mesh {
     }
 }
 
+/// The box of image indices (`lo..=hi`, clipped to an image of `dims`)
+/// within `margin` (physical units) of the mesh's vertices' bounding box.
+pub(crate) fn index_box(mesh: &Mesh, dims: [usize; 3], geom: &Geometry, margin: f64) -> ([usize; 3], [usize; 3]) {
+    let mut lo = [usize::MAX; 3];
+    let mut hi = [0usize; 3];
+    for &p in &mesh.vertices {
+        let q = geom.to_index(p);
+        for a in 0..3 {
+            let m = (margin / geom.spacing[a]).ceil();
+            let l = (q[a] - m).floor().max(0.0) as usize;
+            let h = ((q[a] + m).ceil().max(0.0) as usize).min(dims[a] - 1);
+            lo[a] = lo[a].min(l);
+            hi[a] = hi[a].max(h);
+        }
+    }
+    (lo, hi)
+}
+
 /// Tiny irrational offsets so rays never pass exactly through vertices or
 /// edges lying on the integer lattice.
 const EPS1: f64 = 1.234_567e-7;

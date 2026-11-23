@@ -123,9 +123,15 @@ pub fn residual_weights(x: &[f64], boost: f64) -> Vec<f64> {
     if !(xmax > 0.0) {
         return vec![boost.max(0.0); x.len()];
     }
-    x.iter()
-        .map(|&xj| (boost + (1.0 - boost) * xj.abs() / xmax).max(0.0))
-        .collect()
+    x.iter().map(|&xj| residual_weight(xj, boost, xmax)).collect()
+}
+
+/// The residual weight at signed distance `x` from the surface node, for
+/// samples reaching `xmax` (see [`residual_weights`]); the volumetric model
+/// weights each voxel by this at its depth.
+#[inline]
+pub fn residual_weight(x: f64, boost: f64, xmax: f64) -> f64 {
+    (boost + (1.0 - boost) * x.abs() / xmax).max(0.0)
 }
 
 #[cfg(test)]

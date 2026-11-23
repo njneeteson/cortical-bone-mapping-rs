@@ -29,10 +29,9 @@
 use super::global::{self, Problem, Role, State};
 use super::{base_roles, Data, Nodes, Start};
 use crate::model::{Params, NPARAM, SIGMA};
-use crate::operators::{interpolation_matrix, select_control_points};
+use crate::operators::{interpolation_matrix, select_control_points, Neighbours};
 use crate::options::Method;
 use crate::result::FitInfo;
-use crate::util::V3;
 
 /// Fit with [`Method::Multigrid`]; returns the parameters per node.
 pub(crate) fn fit(data: &Data, nodes: &Nodes, start: &Start, info: &mut FitInfo) -> Vec<Params> {
@@ -44,7 +43,6 @@ pub(crate) fn fit(data: &Data, nodes: &Nodes, start: &Start, info: &mut FitInfo)
     else {
         unreachable!("multigrid::fit with another method")
     };
-    let points = &nodes.mesh.vertices;
     let o = data.options;
     let mut node_params = start.nodes.clone();
     let mut roles = base_roles(o);
@@ -55,10 +53,10 @@ pub(crate) fn fit(data: &Data, nodes: &Nodes, start: &Start, info: &mut FitInfo)
     }
     let fields: Vec<usize> = (0..NPARAM).filter(|&c| roles[c] == Role::Field).collect();
     let mut scalars = start.global;
+    let near = Neighbours::new(nodes.mesh, o.distance());
     for (lvl, &s) in spacings.iter().enumerate() {
-        let ctrl = select_control_points(points, s, seed.wrapping_add(lvl as u64));
-        let cpts: Vec<V3> = ctrl.iter().map(|&i| points[i as usize]).collect();
-        let a = interpolation_matrix(points, &cpts, *neighbours, s);
+        let ctrl = select_control_points(&near, s, seed.wrapping_add(lvl as u64));
+        let a = interpolation_matrix(&near, &ctrl, *neighbours, s);
         let pr = Problem {
             profiles: data.profiles,
             x: data.x,

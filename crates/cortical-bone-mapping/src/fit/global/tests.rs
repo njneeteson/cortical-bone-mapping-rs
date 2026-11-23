@@ -134,19 +134,19 @@ fn gradient_matches_finite_differences_with_all_terms() {
         used: None,
     };
     let w = residual_weights(&x, 3.0);
-    let sm = SmoothingOperator::new(&mesh.vertices, 6, 0.8, f64::INFINITY);
+    let near = crate::operators::Neighbours::euclidean(&mesh.vertices);
+    let sm = SmoothingOperator::new(&near, 6, 0.8, f64::INFINITY);
     for mode in [CurvatureMode::Change, CurvatureMode::Excess { kappa: 0.3 }] {
         for lap_kind in 0..2 {
             let lap = if lap_kind == 0 {
                 crate::operators::SurfaceLaplacian::cotangent(&mesh)
             } else {
-                crate::operators::SurfaceLaplacian::gaussian(&mesh.vertices, 8, 0.8, 3.0)
+                crate::operators::SurfaceLaplacian::gaussian(&near, 8, 0.8, 3.0)
             };
             let cv = CurvatureOperator::new(lap, &mesh.vertices, &normals, mode, 5.0, [true, true]);
             for use_interp in [false, true] {
-                let ctrl_idx = select_control_points(&mesh.vertices, 1.0, 1);
-                let ctrl: Vec<V3> = ctrl_idx.iter().map(|&i| mesh.vertices[i as usize]).collect();
-                let a = interpolation_matrix(&mesh.vertices, &ctrl, 4, 1.0);
+                let ctrl = select_control_points(&near, 1.0, 1);
+                let a = interpolation_matrix(&near, &ctrl, 4, 1.0);
                 let ndof = if use_interp { ctrl.len() } else { n };
                 let (lo, hi) = bounds();
                 let pr = Problem {
@@ -206,7 +206,7 @@ fn smoothing_reduces_noise_in_thickness() {
     let (prof, x, truth, pts) = synth(400, 4, 60.0);
     let w = residual_weights(&x, 2.0);
     let (lo, hi) = bounds();
-    let sm = SmoothingOperator::new(&pts, 10, 0.2, 3.0);
+    let sm = SmoothingOperator::new(&crate::operators::Neighbours::euclidean(&pts), 10, 0.2, 3.0);
     let run = |lambda: f64| {
         let coef = 1000.0f64.powi(2) / (400.0 * 0.8f64.powi(2)) * lambda;
         let pr = Problem {

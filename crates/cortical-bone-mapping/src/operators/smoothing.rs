@@ -28,9 +28,8 @@
 
 use rayon::prelude::*;
 
+use super::neighbours::Neighbours;
 use super::{gaussian_weights, SparseRows};
-use crate::kdtree::KdTree;
-use crate::util::V3;
 
 /// The spatial regularisation operator `ω` with the off-diagonal
 /// weights stored as `f32`: `(ω x)_i = x_i − Σ_k w_ik x_k`, `Σ_k w_ik = 1`.
@@ -40,7 +39,7 @@ pub struct SmoothingOperator {
 
 impl SmoothingOperator {
     /// Build `ω` from the `k` nearest neighbours of each point (excluding the
-    /// point itself) with normalised Gaussian weights of standard deviation `σ`
+    /// point itself, by the distance of `neighbours`) with normalised Gaussian weights of standard deviation `σ`
     /// (`gaussian_weights`), keeping only neighbours within `cutoff · σ`
     /// of the point but always at least the nearest one. `cutoff = ∞` reproduces
     /// the plain k-nearest-neighbour operator of our paper.
@@ -49,9 +48,8 @@ impl SmoothingOperator {
     /// precision is ample for averaging weights). The matrix is filled in place
     /// at a fixed stride of `k` and then compacted, so construction never holds a
     /// second copy.
-    pub fn new(points: &[V3], k: usize, sigma: f64, cutoff: f64) -> Self {
-        let n = points.len();
-        let tree = KdTree::new(points);
+    pub fn new(neighbours: &Neighbours, k: usize, sigma: f64, cutoff: f64) -> Self {
+        let n = neighbours.points().len();
         let k = k.max(1).min(n.saturating_sub(1));
         let r2 = (cutoff * sigma).powi(2);
         if k == 0 {
@@ -71,18 +69,21 @@ impl SmoothingOperator {
             .zip(vals.par_chunks_mut(k))
             .zip(counts.par_iter_mut())
             .enumerate()
-            .for_each(|(i, ((c, v), cnt))| {
-                let mut nn = tree.knn(points[i], k, Some(i as u32));
-                let keep = nn.iter().filter(|x| x.1 <= r2).count().max(1);
-                nn.truncate(keep);
-                let d2: Vec<f64> = nn.iter().map(|x| x.1).collect();
-                let w = gaussian_weights(&d2, sigma);
-                for (e, (&(j, _), wj)) in nn.iter().zip(w).enumerate() {
-                    c[e] = j;
-                    v[e] = wj as f32;
-                }
-                *cnt = nn.len();
-            });
+            .for_each_init(
+                || neighbours.scratch(),
+                |s, (i, ((c, v), cnt))| {
+                    let mut nn = neighbours.nearest(i, k, s);
+                    let keep = nn.iter().filter(|x| x.1 <= r2).count().max(1);
+                    nn.truncate(keep);
+                    let d2: Vec<f64> = nn.iter().map(|x| x.1).collect();
+                    let w = gaussian_weights(&d2, sigma);
+                    for (e, (&(j, _), wj)) in nn.iter().zip(w).enumerate() {
+                        c[e] = j;
+                        v[e] = wj as f32;
+                    }
+                    *cnt = nn.len();
+                },
+            );
         // compact in place
         let mut offsets = Vec::with_capacity(n + 1);
         offsets.push(0);

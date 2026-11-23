@@ -70,6 +70,37 @@ pub struct CbmResult {
     pub info: FitInfo,
     /// Sample positions and profiles (if `keep_profiles`).
     pub profiles: Option<(Vec<f64>, Profiles)>,
+    /// What only the volumetric model reports.
+    pub volumetric: Option<VolumetricInfo>,
+}
+
+/// The volumetric model's PSF, band and reliability outputs
+/// (`docs/volumetric_model.md`, section 6).
+#[derive(Clone, Debug, PartialEq)]
+pub struct VolumetricInfo {
+    /// The PSF (in-plane and along the scanner axis) and the scanner axis.
+    pub sigma_xy: f64,
+    pub sigma_z: f64,
+    pub scanner_axis: usize,
+    /// Band voxels used.
+    pub voxels: usize,
+    /// Noise standard deviation, from the residuals in the outer half of the
+    /// outside band (soft tissue).
+    pub noise_sd: f64,
+    /// Correlation of neighbouring soft-tissue residuals along each axis, and
+    /// the variance factor `Π (1 + ρ_a)/(1 − ρ_a)` it implies for a mean over
+    /// a block of correlated voxels long along every axis (for reference).
+    pub noise_correlation: [f64; 3],
+    pub noise_factor: f64,
+    /// Per node: standard error of `t` from its own voxels (sandwich
+    /// estimate over the pairs of its voxels, with the noise correlation;
+    /// NaN if `t` is not a field).
+    pub std_error_t: Vec<f64>,
+    /// Per node and parameter `[m, t, ρs, ρb]`: the data's share of the
+    /// curvature, `B / (B + penalty)` (NaN if the parameter is not a field).
+    pub data_share: Vec<[f64; 4]>,
+    /// Per node: RMS residual over its voxels relative to the noise.
+    pub misfit: Vec<f64>,
 }
 
 impl CbmResult {

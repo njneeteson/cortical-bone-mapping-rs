@@ -112,6 +112,11 @@ class Options:
         regularisation of Neeteson & Boyd (``reg_lambda``, Gaussian
         ``reg_sigma`` over ``reg_neighbours`` nearest nodes, truncated at
         ``reg_cutoff * reg_sigma``), optionally plus a curvature penalty.
+        ``"volumetric"``: the volumetric model (extension; see
+        ``docs/volumetric_model.md``): the profile model evaluated at every
+        voxel of the band ``[-outside, inside]`` around the surface, with a
+        global PSF, a curvature penalty on ``m, t`` and spatial smoothing of
+        the density fields (``vol_*`` options below).
     init_from_global
         Initialise from one model fitted to all profiles.
     init_from_local
@@ -136,6 +141,42 @@ class Options:
         resolution; slower to solve).
     curvature_surfaces
         ``"both"``, ``"periosteal"`` or ``"endosteal"``.
+
+    **Volumetric model** (``method="volumetric"``; extension)
+
+    vol_scanner_axis
+        Array axis of the scanner (table) axis, along which the PSF has
+        ``sigma_z``.
+    vol_sigma_xy
+        Fix the in-plane blur (``None`` = fitted, one global value).
+    vol_sigma_z
+        ``"fit"`` (a second global value), ``"tied"`` (equal to the in-plane
+        blur: isotropic PSF, or a shaft whose normals are all in-plane) or a
+        number (fixed).
+    vol_lambda
+        Weight of the spatial smoothing of the ``rho_s``, ``rho_b`` fields
+        (operator as ``reg_sigma``, ``reg_neighbours``, ``reg_cutoff``);
+        0 = none.
+    vol_global_densities
+        One global ``rho_s`` and ``rho_b`` instead of fields.
+    vol_curvature, vol_curvature_weight
+        The curvature penalty on the fitted surfaces (the regulariser of
+        ``m, t``): ``"change"``, ``"excess"`` or ``None``, with its weight;
+        ``curvature_kappa``, ``curvature_length``, ``curvature_scale``,
+        ``curvature_neighbours`` and ``curvature_surfaces`` apply.
+    vol_voxel_stride
+        Use every n-th voxel along each axis.
+
+    **Neighbourhoods**
+
+    neighbour_distance
+        How the regularisation operator, the Gaussian curvature Laplacian and
+        the multigrid basis measure the distance between nodes:
+        ``"euclidean"`` (straight line, as in Neeteson & Boyd 2025) or
+        ``"surface"`` (shortest path along the mesh, which does not couple
+        the two walls of a notch or the two cortices of a plate). ``None`` =
+        the method's default (Euclidean for the 1D methods, surface distance
+        for the volumetric model).
 
     **Other**
 
@@ -185,7 +226,7 @@ class Options:
     cg_max_total: int = 2000
     progress_every: int = 1
     # method
-    method: Literal["local", "multigrid", "regularized"] = "local"
+    method: Literal["local", "multigrid", "regularized", "volumetric"] = "local"
     multigrid_spacings: Sequence[float] = (7.7696, 3.8848, 1.9424, 0.9712)
     multigrid_neighbours: int = 5
     seed: int = 0
@@ -203,6 +244,17 @@ class Options:
     curvature_scale: Optional[float] = 0.25
     curvature_neighbours: int = 64
     curvature_surfaces: Literal["both", "periosteal", "endosteal"] = "both"
+    # volumetric
+    vol_scanner_axis: int = 0
+    vol_sigma_xy: Optional[float] = None
+    vol_sigma_z: Union[Literal["fit", "tied"], float] = "fit"
+    vol_lambda: float = 1.0
+    vol_global_densities: bool = False
+    vol_curvature: Optional[Literal["change", "excess"]] = "change"
+    vol_curvature_weight: float = 0.3
+    vol_voxel_stride: int = 1
+    # neighbourhoods
+    neighbour_distance: Optional[Literal["euclidean", "surface"]] = None
     # other
     keep_profiles: bool = False
     threads: Optional[int] = None
@@ -231,6 +283,14 @@ class Options:
             d["rho_c_mode"], d["rho_c"] = "fixed", float(self.rho_c)
         if self.threads is not None and (not isinstance(self.threads, int) or self.threads < 1):
             raise ValueError("threads must be a positive integer or None")
+        if isinstance(self.vol_sigma_z, str):
+            if self.vol_sigma_z not in ("fit", "tied"):
+                raise ValueError('vol_sigma_z must be "fit", "tied" or a number')
+            d["vol_sigma_z_mode"], d["vol_sigma_z"] = self.vol_sigma_z, 0.0
+        else:
+            d["vol_sigma_z_mode"], d["vol_sigma_z"] = "fixed", float(self.vol_sigma_z)
+        if self.neighbour_distance not in (None, "euclidean", "surface"):
+            raise ValueError('neighbour_distance must be None, "euclidean" or "surface"')
         return d
 
     @classmethod

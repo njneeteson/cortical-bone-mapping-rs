@@ -36,6 +36,16 @@ class CbmResult:
         Diagnostics: iterations, costs, convergence, timings (seconds).
     profile_x, profiles
         Sample positions and sampled profiles (``keep_profiles=True``).
+    volumetric
+        The volumetric model's outputs (``method="volumetric"``), else
+        ``None``: ``sigma_xy``, ``sigma_z`` (the fitted PSF),
+        ``scanner_axis``, ``voxels`` (band size), ``noise_sd``,
+        ``noise_correlation`` (per axis) and ``noise_factor`` (the variance
+        factor of a long block of correlated voxels, for reference), and per
+        node ``std_error_t`` (local standard error of ``t``, from the node's
+        own voxels with their noise correlation), ``data_share``
+        (N, 4: the data's share of the curvature of ``m, t, rho_s, rho_b``)
+        and ``misfit`` (RMS residual relative to the noise).
     """
 
     points: np.ndarray
@@ -54,6 +64,7 @@ class CbmResult:
     profile_x: Optional[np.ndarray] = None
     profiles: Optional[np.ndarray] = None
     rho_c_node: Optional[np.ndarray] = None
+    volumetric: Optional[dict] = None
 
     @classmethod
     def _from_core(cls, d: dict, options: Options) -> "CbmResult":
@@ -74,6 +85,7 @@ class CbmResult:
             profile_x=d.get("profile_x"),
             profiles=d.get("profiles"),
             rho_c_node=d.get("rho_c_node"),
+            volumetric=d.get("volumetric"),
         )
 
     @property

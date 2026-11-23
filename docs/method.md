@@ -14,6 +14,8 @@ mathematical notation follows our paper (Neeteson & Boyd 2025).
 * [Multigrid method](#multigrid-method)
 * [Regularised method](#regularised-method)
 * [Curvature penalty (extension)](#curvature-penalty)
+* [Volumetric model (extension)](#volumetric-model)
+* [Neighbourhoods: Euclidean or surface distance](#neighbourhoods)
 * [Segmentation refinement (extension)](#segmentation-refinement)
 * [Starting segmentations](#starting-segmentations)
 * [Memory and performance design](#memory-and-performance-design)
@@ -101,7 +103,8 @@ formulation as re-implemented in our 2025 paper ("local method").
   `s`, the blur along a line with direction `n` is `σ(n) = √(Σ_a n_a² s_a²)`;
   this is how Treece et al. (2012, 2015) hold the blur fixed while fitting;
 * **estimated PSF**: a first local fit with free `σ`; then `σ_i²` is
-  regressed on `n_i²` (isotropic, axial = in-plane + along-axis, or fully
+  regressed on `n_i²` (the axial model is that of Treece & Gee 2015,
+  appendix A: isotropic, axial = in-plane + along-axis, or fully
   anisotropic; non-negative least squares by active-set enumeration) using
   nodes where `σ` is identifiable (`t ≥ min_ratio · σ`, `σ` not on a bound),
   with two rounds of 3·MAD outlier rejection; then the chosen method is run
@@ -284,6 +287,137 @@ Two Laplacians:
   resolution, the textbook discrete mean curvature. Its bending energy scales
   as `h⁻⁴` with edge length `h`, so the systems are stiff and need thousands
   of CG iterations; use it for small surfaces or as a reference.
+
+## Volumetric model
+
+`method="volumetric"` is a separate inner fit that runs alongside the 1D
+methods. Instead of one profile per node, it fits the voxels of a band
+around the fixed surface. The reasoning is in
+[volumetric_model.md](volumetric_model.md); this section is what is
+computed.
+
+**The band.** The band is the voxels at depth `d ∈ [−outside, inside]`
+below the surface (subsampled by `vol_voxel_stride`), except those in an
+excluded region (another bone). For each voxel we find:
+
+* its closest point `c` on the surface, and the face and barycentric
+  coordinates `β` of `c` (k-d tree over the vertices, then the faces around
+  the nearest ones);
+* its depth `d = |x − c|`, signed by whether the voxel is inside the full
+  closed mesh (even–odd voxelisation);
+* its normal `n = (x − c)/d`, and `a² = (n · e_z)²` along the scanner axis.
+
+The caps the mesh gets where the bone leaves the image are not cortex, so
+they are removed. A voxel whose closest point lies on a cap's rim is
+dropped, because the planar model does not hold there. So is a voxel whose
+closest face belongs to unfitted or excluded nodes. Each voxel carries the
+1D residual weight of its depth.
+
+**The model.** Each voxel's parameters are the barycentric interpolation of
+its face's vertex fields, `θ(x) = Σ_j β_j θ_j`. The voxel is then the 1D
+profile model at its depth:
+
+```text
+I_model(x) = f( d ; m, t, σ_n, ρs, ρb ; ρc ),      σ_n² = σ_xy² (1 − a²) + σ_z² a²
+```
+
+The PSF is global: `σ_xy` and `σ_z` are fitted (the in-plane / out-of-plane
+blur model of Treece & Gee 2015, who regress it on the blurs of 1D fits;
+here it is part of the model). Either can be fixed, or
+`σ_z` can be tied to `σ_xy` (`vol_sigma_z="tied"`). Tie it on a shaft,
+where every normal is in-plane and `σ_z` is not identified. `ρc` is fixed
+or estimated from the band (the plateau rule of the 1D methods); profile
+maxima do not apply. As for the 1D methods, the estimate needs some cortex
+much thicker than about `4σ` in view: where all of it is thin, the plateau
+comes only from nodes fitted too thick, `ρc` is underestimated and the
+thickness overestimated, and the PSF with it
+([volumetric_validation.md](volumetric_validation.md#what-limits-the-clinical-sites)).
+Fix `ρc` there.
+
+The PSF belongs to the scanner and the reconstruction, not to a bone. With
+several bones in one scan, fit them together: the mask of all bones gives a
+mesh with one component per bone, which share the PSF (and `ρc`), and
+surface-distance neighbourhoods keep them apart; each band voxel belongs to
+its nearest surface, so no exclusion is needed. For per-bone fits or
+refinements, hold that PSF (`vol_sigma_xy`, `vol_sigma_z`). Fitted bone by
+bone, the PSF absorbs whatever the model misses locally: on the clinical
+knee the per-bone estimates ranged over 0.53–0.80 mm in-plane and
+0.57–0.88 mm axially (one bone with the anisotropy reversed), against
+0.58 / 0.85 mm for all four bones together
+([volumetric_validation.md](volumetric_validation.md#the-clinical-knee)).
+
+**The cost.** The cost is
+
+```text
+E = 1/(2V) Σ_x w(d) (I(x) − I_model(x))²  +  C(m, t)  +  ½ Σ_{c ∈ ρs, ρb} κ_c ‖ω x_c‖²
+```
+
+* `V` is the number of band voxels.
+* `C` is the curvature penalty of the previous section, applied to the
+  fitted surfaces. It is the only regulariser of the edge positions. Its
+  default weight is `vol_curvature_weight = 0.3`, the best compromise over
+  the site phantoms ([volumetric_validation.md](volumetric_validation.md)).
+* The density fields are smoothed by the regularised method's operator `ω`,
+  with `κ = vol_lambda / N` scaled as there. With `vol_global_densities`
+  they are one value each instead.
+
+**The solve.** The solve is the global engine. Each voxel depends on the
+three vertices of its face, so the Gauss–Newton matrix couples the vertices
+and the edges of the mesh. It is never formed. Per face we build one packed
+Gram matrix over the face's three vertex blocks and the global PSF, and the
+matrix–vector product is accumulated face by face. The block-Jacobi
+preconditioner takes each vertex's own block from these. As in the 1D global
+fit, it starts with every parameter global (one model for all band voxels)
+and then releases the fields.
+
+**Reliability.** `result.volumetric` reports four reliability outputs.
+
+* **Noise.** The noise sd `s` comes from the residuals of the outer half of
+  the outside band (soft tissue). So does the lag-one correlation `ρ_a`
+  along each axis, and, for reference, the factor `Π(1 + ρ_a)/(1 − ρ_a)` by
+  which correlated voxels overstate the number of independent ones in a
+  block long along every axis.
+* **`std_error_t`.** The sandwich error `s √[B⁻¹ C B⁻¹]_tt` from the node's
+  own voxels: `B = Σ w_i g_i g_iᵀ` with `g_i = β_i ∇f` the gradient of voxel
+  `i`'s model value in the node's parameters, and
+  `C = Σ_ij ρ_ij (w_i g_i)(w_j g_j)ᵀ`, `ρ_ij = Π_a ρ_a^{|Δ_a|}` the noise
+  correlation of the voxel pair. A node's voxels form a column about one
+  voxel across, so the block factor would overstate the variance by its
+  in-plane factors: on the clinical knee, where `ρ_a` ≈ 0.65–0.88, the
+  block factor gave median standard errors of 1.1–2.9 mm, the pair sum
+  0.09–0.17 mm. This is the error of a node fitted from its own
+  voxels alone, without the regulariser or its neighbours. A node owns a
+  share of the voxels of its faces, fewer than one interpolated profile
+  touches, so this error is larger than the actual error of a local 1D fit.
+* **`data_share`.** `B / (B + P)` per field: the data's share of the
+  curvature, against the penalties' share `P`.
+* **`misfit`.** The node's RMS weighted residual relative to `s`. It is
+  about 1 where the model holds.
+
+**Refinement.** In refinement the outer loop is unchanged. Between
+partial steps, the fitted PSF is held like the global densities are, and it
+is refitted on full steps.
+
+## Neighbourhoods
+
+The smoothing operator, the curvature Laplacian and the multigrid control
+points and interpolation all need neighbourhoods of surface nodes.
+`neighbour_distance` chooses between two:
+
+* `"euclidean"` uses a k-d tree in space. It is the default of the 1D
+  methods, and their results are unchanged.
+* `"surface"` uses the shortest path along mesh edges: a Dijkstra search
+  from each node, truncated at the operator's radius, with ties broken by
+  node index so that the result is deterministic. It is the volumetric
+  default. Nodes on opposite cortices of a thin plate, or on two bones in
+  one mesh, are close in space but far along the surface, so they are not
+  coupled. Edge paths overestimate geodesic distance, by at most 15% on a
+  mesh split by one diagonal
+  ([volumetric_model.md](volumetric_model.md#5-distance-along-the-surface)).
+
+With surface distance, the multigrid control points are chosen by coverage,
+and each node interpolates from the controls within three spacings of it
+along the surface.
 
 ## Segmentation refinement
 
