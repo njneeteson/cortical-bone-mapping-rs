@@ -141,7 +141,11 @@ voxel whose normal is `n` in the scanner frame,
 
 So two global parameters replace the per-node `σ` of the 1D methods. A
 surface facing along the table is blurred by `σ_z`, one facing sideways by
-`σ_xy`.
+`σ_xy`. This is the blur model of Treece & Gee (2015, appendix A),
+`σ = √((σ_i cos α)² + (σ_o sin α)²)` for a line at angle `α` to the slices
+(`n_z = sin α`). They estimate `σ_i` and `σ_o` for each scan by regressing
+the blurs of per-location 1D fits on `α`; here the two are parameters of
+the model, fitted with everything else.
 
 * **Identifiability.** Both are determined only if the surface has normals
   in both directions. That holds for a whole bone, but not for a short shaft
@@ -541,6 +545,10 @@ step says what decides it.
       implementation in the Bonelab package.
 
 ## References
+
+> G. M. Treece, A. H. Gee, *Independent measurement of femoral cortical
+> thickness and cortical bone density using clinical CT*, Medical Image
+> Analysis 20(1):249–264, 2015.
 
 > G. M. Treece, A. H. Gee, P. M. Mayhew, K. E. S. Poole, *High resolution
 > cortical bone thickness measurement from clinical CT data*, Medical Image

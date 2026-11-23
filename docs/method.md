@@ -103,7 +103,8 @@ formulation as re-implemented in our 2025 paper ("local method").
   `s`, the blur along a line with direction `n` is `σ(n) = √(Σ_a n_a² s_a²)`;
   this is how Treece et al. (2012, 2015) hold the blur fixed while fitting;
 * **estimated PSF**: a first local fit with free `σ`; then `σ_i²` is
-  regressed on `n_i²` (isotropic, axial = in-plane + along-axis, or fully
+  regressed on `n_i²` (the axial model is that of Treece & Gee 2015,
+  appendix A: isotropic, axial = in-plane + along-axis, or fully
   anisotropic; non-negative least squares by active-set enumeration) using
   nodes where `σ` is identifiable (`t ≥ min_ratio · σ`, `σ` not on a bound),
   with two rounds of 3·MAD outlier rejection; then the chosen method is run
@@ -320,7 +321,9 @@ profile model at its depth:
 I_model(x) = f( d ; m, t, σ_n, ρs, ρb ; ρc ),      σ_n² = σ_xy² (1 − a²) + σ_z² a²
 ```
 
-The PSF is global: `σ_xy` and `σ_z` are fitted. Either can be fixed, or
+The PSF is global: `σ_xy` and `σ_z` are fitted (the in-plane / out-of-plane
+blur model of Treece & Gee 2015, who regress it on the blurs of 1D fits;
+here it is part of the model). Either can be fixed, or
 `σ_z` can be tied to `σ_xy` (`vol_sigma_z="tied"`). Tie it on a shaft,
 where every normal is in-plane and `σ_z` is not identified. `ρc` is fixed
 or estimated from the band (the plateau rule of the 1D methods); profile

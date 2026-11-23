@@ -9,7 +9,10 @@
 //! the gradient of the distance at the sample (different on either side of a
 //! corner), and the blur is one scanner PSF, `σ_n² = σ_xy² (1 − n_a²) +
 //! σ_z² n_a²` for a normal with component `n_a` along the scanner axis,
-//! instead of a fitted `σ` per node.
+//! instead of a fitted `σ` per node. That is the in-plane / out-of-plane
+//! blur of Treece & Gee (2015, appendix A), which they regress on the blurs
+//! of per-location 1D fits; here `σ_xy` and `σ_z` are fitted with the
+//! model.
 //!
 //! The fit (`fit_surface`) runs:
 //!
@@ -28,6 +31,12 @@
 //! The surface is fixed during a fit; refinement moves it by the fitted
 //! `m − t/2`, as for the 1D methods. Neighbourhoods default to distance along
 //! the surface ([`crate::operators::Distance::Surface`]).
+//!
+//! # References
+//!
+//! * G. M. Treece, A. H. Gee, *Independent measurement of femoral cortical
+//!   thickness and cortical bone density using clinical CT*, Medical Image
+//!   Analysis 20(1):249–264, 2015.
 
 pub(crate) mod band;
 pub(crate) mod problem;
