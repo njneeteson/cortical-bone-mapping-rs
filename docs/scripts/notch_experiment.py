@@ -315,20 +315,27 @@ def figures(args):
     shown = np.where(keep, img, -1000)
     out = Path(args.out)
     names = [n for n in (args.variants or VARIANTS) if (out / f"{n}.pkl").exists()]
-    fig, axes = plt.subplots(len(names), len(CUTS), figsize=(3.2 * len(CUTS), 3.3 * len(names)), squeeze=False)
+    cuts = CUTS
+    if args.centre:  # the three sections through one voxel
+        centre = [int(v) for v in args.centre.split(",")]
+        cuts = [(0, centre[0], "axial"), (1, centre[1], "coronal"), (2, centre[2], "sagittal")]
+    fig, axes = plt.subplots(len(names), len(cuts), figsize=(3.2 * len(cuts), 3.3 * len(names)), squeeze=False)
     for row, n in zip(axes, names):
         rr = pickle.load(open(out / f"{n}.pkl", "rb"))
         s = json.load(open(out / f"{n}.json"))
         r = rr.result
         st = s.get("start", "hull")
         start = hull if st == "hull" else closing_start(args.cache, float(st), out)
-        for ax, (axis, k, kind) in zip(row, CUTS):
+        for ax, (axis, k, kind) in zip(row, cuts):
             ax.imshow(np.take(shown, k, axis=axis), cmap="gray", vmin=-200, vmax=1400, origin="lower")
             ax.contour(np.take(start, k, axis=axis), [0.5], colors="y", linewidths=0.7, linestyles="--")
             for v, c, lw in ((r.surface_vertices, "r", 0.9), (r.displaced_surface("endosteal"), "c", 0.6)):
                 seg = cbm.mesh_section(v, r.surface_faces, axis, k, sp)[:, :, ::-1]
                 if len(seg):
                     ax.add_collection(LineCollection(seg, colors=c, linewidths=lw))
+            if args.centre:
+                other = [i for i in range(3) if i != axis]
+                ax.plot(centre[other[1]], centre[other[0]], "+", color="lime", ms=10)
             ax.set_xticks([]), ax.set_yticks([])
             if n == names[0]:
                 ax.set_title(f"{kind} {k}", fontsize=9)
@@ -441,6 +448,7 @@ def main():
     ap.add_argument("command", choices=("run", "figures", "profiles", "table", "remeasure"))
     ap.add_argument("variants", nargs="*")
     ap.add_argument("--figure", default="notch_variants.png", help="file name in docs/images (figures)")
+    ap.add_argument("--centre", help="figures: the three sections through voxel z,y,x of the crop instead of CUTS")
     a = ap.parse_args()
     {"run": run, "figures": figures, "profiles": profiles, "table": table, "remeasure": remeasure}[a.command](a)
 

@@ -325,6 +325,25 @@ can tell this region from soft tissue, so the surface keeps growing a pocket
 into it. Whether it belongs inside the bone is an anatomical question about
 this region, not one the band can settle.
 
+![Sections through the region](images/volumetric_refinement_pocket.png)
+
+*Axial, coronal and sagittal sections through the centre of the sinking
+region (green cross) of the femur crop: the 4 mm closing start (yellow,
+dashed), the refined periosteal surface (red) and the fitted endosteal
+surface (cyan). Top: regularised refinement, converged in 4 moves. Bottom:
+volumetric refinement with the adaptive band after 15 moves, not converged.
+Everything more than 10 mm outside the start is blanked (display only).
+`python docs/scripts/notch_experiment.py knee.pkl --out results figures
+closing_freeze closing_freeze_volumetric_adaptive --centre 45,95,124
+--figure volumetric_refinement_pocket.png`.*
+
+**Open question.** Is this dark region inside the bone (low-density marrow
+or a lesion, which the periosteal surface should enclose) or outside it
+(soft tissue of the notch, seen obliquely, which the surface may follow)?
+If inside, refinement needs a rule that keeps the surface out of a dark
+region it reaches without crossing a cortex; if outside, the volumetric
+refinement is right there and only slow to settle.
+
 ## 6. Weights and thresholds
 
 ### Methods
