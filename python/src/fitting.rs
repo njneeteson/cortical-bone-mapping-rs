@@ -56,6 +56,13 @@ pub(crate) fn result_dict<'py>(py: Python<'py>, r: &cbm::CbmResult) -> PyResult<
         let share = Array2::from_shape_fn((v.data_share.len(), 4), |(i, j)| v.data_share[i][j]);
         vd.set_item("data_share", share.into_pyarray(py))?;
         vd.set_item("misfit", v.misfit.clone().into_pyarray(py))?;
+        let reach: Vec<f64> = v.reach.iter().flat_map(|r| r.iter().copied()).collect();
+        vd.set_item(
+            "reach",
+            Array2::from_shape_vec((v.reach.len(), 2), reach)
+                .unwrap()
+                .into_pyarray(py),
+        )?;
         d.set_item("volumetric", vd)?;
     }
     if let Some((x, prof)) = &r.profiles {

@@ -40,6 +40,7 @@
 
 pub(crate) mod band;
 pub(crate) mod problem;
+mod reach;
 mod reliability;
 #[cfg(test)]
 mod tests;
@@ -50,6 +51,7 @@ use ndarray::ArrayView3;
 
 use self::band::{Band, BandSpec};
 use self::problem::{Prepared, VolumetricProblem, M, NV, RHO_B, RHO_S, SXY, SZ, T};
+use self::reach::{node_reach, uniform_reach, Reach, ReachSpec};
 use super::global::{minimise, Role};
 use super::profiles::{sampling_normals, NormalConstraint};
 use super::regularized::curvature_operator;
@@ -80,13 +82,12 @@ pub(crate) fn fit_surface<T: Voxel>(
     let (d0, d1, d2) = image.dim();
     let cut = ImageEdge::new([d0, d1, d2], &options.geometry);
     let nodes = FitNodes::new(&surface, keep, options.sampling.normal_constraint, &cut)?;
-    let band = Band::build(
-        image,
-        &surface,
-        &nodes.fitted,
-        nodes.mesh.faces.len(),
-        &band_spec(options, v, c.exclude),
-    );
+    let reach = band_reach(image, &nodes, options, v);
+    let mut spec = band_spec(options, v, c.exclude);
+    if v.adaptive_band.is_some() {
+        spec.face_reach = Some(face_reach(&nodes.mesh, &reach));
+    }
+    let band = Band::build(image, &surface, &nodes.fitted, nodes.mesh.faces.len(), &spec);
     if band.is_empty() {
         return Err(Error::NoNodes);
     }
@@ -130,7 +131,10 @@ pub(crate) fn fit_surface<T: Voxel>(
         psf: Some(psf_per_axis(global_psf(&out.scalars), v.scanner_axis)),
         info,
         profiles: None,
-        volumetric: Some(out.info),
+        volumetric: Some(VolumetricInfo {
+            reach: reach.outside.iter().zip(&reach.inside).map(|(&o, &i)| [o, i]).collect(),
+            ..out.info
+        }),
         surface,
     })
 }
@@ -233,6 +237,36 @@ impl FitNodes {
     }
 }
 
+/// Each node's reach: adaptive ([`reach`]) with
+/// [`VolumetricOptions::adaptive_band`], else the sampling range.
+fn band_reach<T: Voxel>(image: &ArrayView3<T>, nodes: &FitNodes, o: &Options, v: &VolumetricOptions) -> Reach {
+    let s = &o.sampling;
+    match v.adaptive_band {
+        Some(cap) => {
+            let points: Vec<V3> = nodes.mesh.vertices.clone();
+            let spec = ReachSpec {
+                geom: &o.geometry,
+                outside: s.outside,
+                inside: s.inside,
+                cap,
+            };
+            node_reach(image, &points, &nodes.normals, &spec)
+        }
+        None => uniform_reach(nodes.ids.len(), s.outside, s.inside),
+    }
+}
+
+/// The reach of every fitted face: the largest of its nodes'.
+fn face_reach(mesh: &Mesh, reach: &Reach) -> Vec<[f64; 2]> {
+    mesh.faces
+        .iter()
+        .map(|f| {
+            let pick = |r: &[f64]| f.iter().map(|&v| r[v as usize]).fold(0.0, f64::max);
+            [pick(&reach.outside), pick(&reach.inside)]
+        })
+        .collect()
+}
+
 /// The band's settings from the options.
 fn band_spec<'a>(o: &'a Options, v: &VolumetricOptions, exclude: Option<ArrayView3<'a, bool>>) -> BandSpec<'a> {
     BandSpec {
@@ -243,6 +277,7 @@ fn band_spec<'a>(o: &'a Options, v: &VolumetricOptions, exclude: Option<ArrayVie
         axis: v.scanner_axis,
         exclude,
         stride: v.voxel_stride,
+        face_reach: None,
     }
 }
 
@@ -505,7 +540,8 @@ impl<'a, 'c> Fit<'a, 'c> {
         (medians.len() >= 10).then(|| quantile(medians, 0.5))
     }
 
-    /// Stage 5: node parameters, residuals and reliability at `x`.
+    /// Stage 5: node parameters, residuals and reliability at `x` (only the
+    /// residuals for an inexact inner fit, `edge_tol > 0`).
     fn outputs(&self, rho_c: f64, global: &[f64; NV], x: &[f64]) -> Outputs {
         let curv = self.curvature(rho_c, global);
         let pr = self.problem(true, rho_c, global, curv.as_ref());
@@ -528,7 +564,12 @@ impl<'a, 'c> Fit<'a, 'c> {
                 ]
             })
             .collect();
-        let rel = reliability::assess(&prep, x, global_psf(&scalars), axis);
+        // inexact inner fits of a refinement only need the residuals
+        let rel = if self.c.edge_tol > 0.0 {
+            reliability::residuals_only(&prep, x, global_psf(&scalars), axis)
+        } else {
+            reliability::assess(&prep, x, global_psf(&scalars), axis)
+        };
         Outputs {
             params,
             residual: rel.residual,

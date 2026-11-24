@@ -254,7 +254,7 @@ fn curvature_penalty_reduces_surface_roughness() {
     let local = run(img.view(), mask.view(), NO_SUB, &options(&ph, Method::Local)).unwrap();
     let (r0, e0) = (roughness(&local), thickness_error(&ph, &local).1);
     // Gaussian (default scale) and cotangent Laplacians, curvature penalty only
-    for (scale, weight) in [(Some(0.25), 1.0), (None, 0.1)] {
+    for (scale, weight) in [(LaplacianScale::Physical(0.25), 1.0), (LaplacianScale::Cotangent, 0.1)] {
         let c = CurvatureOptions {
             weight,
             scale,

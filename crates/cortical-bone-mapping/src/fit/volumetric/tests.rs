@@ -35,6 +35,7 @@ fn setup() -> Setup {
         axis: 0,
         exclude: None,
         stride: 1,
+        face_reach: None,
     };
     let band = Band::build(&img.view(), &mesh, &fitted, mesh.faces.len(), &spec);
     let near = Neighbours::new(&mesh, Distance::Surface);

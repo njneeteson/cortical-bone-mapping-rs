@@ -11,7 +11,7 @@ Reports wall time, peak Python-heap memory (tracemalloc, which includes NumPy
 buffers) for SciPy and the crate's own peak (from the Rust benchmark,
 separately), final cost and thickness error against the phantom truth.
 
-    python docs/scripts/compare_scipy.py            # writes docs/scipy_comparison.json
+    python docs/scripts/compare_scipy.py            # writes docs/results/scipy_comparison.json
 """
 
 import json
@@ -28,7 +28,7 @@ from scipy.special import erf
 
 import cortical_bone_mapping_rs as cbm
 
-OUT = Path(__file__).resolve().parents[1] / "scipy_comparison.json"
+OUT = Path(__file__).resolve().parents[1] / "results" / "scipy_comparison.json"
 RHO_C = 1000.0
 LOWER = np.array([-3.0, 0.0607, 0.01, -200.0, -200.0])
 UPPER = np.array([6.0, 12.0, 2.0, 400.0, 400.0])

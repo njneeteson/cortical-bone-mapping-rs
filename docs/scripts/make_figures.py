@@ -275,7 +275,7 @@ def fig_refine():
 
 # --------------------------------------------------------------------------
 def fig_benchmark():
-    rows = json.loads((DOCS / "benchmark_results.json").read_text())
+    rows = json.loads((DOCS / "results" / "benchmark_results.json").read_text())
     fig, (a, b) = plt.subplots(1, 2, figsize=(9, 3.3))
     for name in dict.fromkeys(r["method"] for r in rows):
         rr = [r for r in rows if r["method"] == name]
@@ -292,7 +292,7 @@ def fig_benchmark():
 
 
 def fig_bonelab():
-    path = DOCS / "bonelab_comparison.json"
+    path = DOCS / "results" / "bonelab_comparison.json"
     if not path.exists():
         print("skipping bonelab figure (run compare_bonelab.py first)")
         return

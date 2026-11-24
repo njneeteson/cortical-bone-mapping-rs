@@ -101,6 +101,9 @@ pub struct VolumetricInfo {
     pub data_share: Vec<[f64; 4]>,
     /// Per node: RMS residual over its voxels relative to the noise.
     pub misfit: Vec<f64>,
+    /// Per node: how far its band reaches outside and inside the surface
+    /// (the sampling range, or more with an adaptive band).
+    pub reach: Vec<[f64; 2]>,
 }
 
 impl CbmResult {

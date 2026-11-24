@@ -240,7 +240,9 @@ surfaces can be penalised, and the penalty can be combined with the
 smoothing term or used alone (`λ = 0`).
 
 The default Laplacian is a Gaussian point-cloud Laplacian at physical scale
-`σ_c` (0.25 mm, 64 neighbours): the Gaussian-weighted neighbourhood mean
+`σ_c`, by default four times the mean node spacing (about 0.25 mm at
+HR-pQCT resolution, 2.6 mm on 0.65 mm clinical CT; 64 neighbours): the
+Gaussian-weighted neighbourhood mean
 within `3σ_c` is estimated by importance-sampling `k` neighbours with
 probability ∝ `exp(−d²/2σ_c²)` (deterministic per node), and rows are
 normalised by the weighted second moment `M2_i = Σ w_ik |p_k − p_i|²`, so

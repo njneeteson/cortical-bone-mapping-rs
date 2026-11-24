@@ -195,12 +195,8 @@ pub struct CurvatureOptions {
     /// Penalise the periosteal and/or endosteal surface.
     pub periosteal: bool,
     pub endosteal: bool,
-    /// Scale of the surface Laplacian: `Some(σ_c)` uses a Gaussian
-    /// point-cloud Laplacian at that physical scale (well conditioned, fast);
-    /// `None` uses the cotangent mesh Laplacian (curvature at mesh
-    /// resolution; the Gauss–Newton systems are stiffer and need many more
-    /// CG iterations).
-    pub scale: Option<f64>,
+    /// Scale at which curvature is measured ([`LaplacianScale`]).
+    pub scale: LaplacianScale,
     /// Neighbours for the Gaussian Laplacian.
     pub neighbours: usize,
 }
@@ -215,8 +211,37 @@ impl Default for CurvatureOptions {
             length: None,
             periosteal: true,
             endosteal: true,
-            scale: Some(0.25),
+            scale: LaplacianScale::NodeSpacing(4.0),
             neighbours: 64,
+        }
+    }
+}
+
+/// The surface Laplacian of a curvature penalty, i.e. the scale at which the
+/// curvature is measured.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LaplacianScale {
+    /// The cotangent mesh Laplacian: curvature at mesh resolution (the
+    /// Gauss–Newton systems are stiffer and need many more CG iterations).
+    Cotangent,
+    /// A Gaussian point-cloud Laplacian at this physical scale `σ_c`.
+    Physical(f64),
+    /// A Gaussian point-cloud Laplacian at this multiple of the mean node
+    /// spacing (edge length): the default, 4, is about 0.25 mm at HR-pQCT
+    /// resolution and 2.6 mm on 0.65 mm clinical CT. A scale fixed in
+    /// millimetres is finer than the nodes on clinical CT, where it measures
+    /// the leftover staircase of the starting surface rather than its shape.
+    NodeSpacing(f64),
+}
+
+impl LaplacianScale {
+    /// The physical scale for a mesh with mean edge length `spacing`
+    /// (`None`: the cotangent Laplacian).
+    pub fn sigma(&self, spacing: f64) -> Option<f64> {
+        match *self {
+            LaplacianScale::Cotangent => None,
+            LaplacianScale::Physical(s) => Some(s),
+            LaplacianScale::NodeSpacing(f) => Some(f * spacing),
         }
     }
 }
@@ -269,6 +294,10 @@ pub struct VolumetricOptions {
     pub curvature: Option<CurvatureOptions>,
     /// Use every `voxel_stride`-th voxel along each axis (1 = all).
     pub voxel_stride: usize,
+    /// Extend each node's band along its normal until it has crossed a bone
+    /// edge, up to this multiple of the sampling range (`None`: the sampling
+    /// range everywhere; see `fit::volumetric::reach`).
+    pub adaptive_band: Option<f64>,
 }
 
 impl Default for VolumetricOptions {
@@ -288,6 +317,7 @@ impl Default for VolumetricOptions {
                 ..CurvatureOptions::default()
             }),
             voxel_stride: 1,
+            adaptive_band: None,
         }
     }
 }
@@ -435,10 +465,14 @@ impl Default for Options {
 fn validate_curvature(c: &CurvatureOptions) -> Result<(), Error> {
     let bad = |s: &str| Err(Error::InvalidOption(s.to_string()));
     let negative = c.weight < 0.0 || c.endosteal_weight.is_some_and(|w| !(w >= 0.0));
-    if negative || c.length.is_some_and(|l| !(l > 0.0)) || c.scale.is_some_and(|l| !(l > 0.0)) {
+    let scale = match c.scale {
+        LaplacianScale::Cotangent => None,
+        LaplacianScale::Physical(s) | LaplacianScale::NodeSpacing(s) => Some(s),
+    };
+    if negative || c.length.is_some_and(|l| !(l > 0.0)) || scale.is_some_and(|l| !(l > 0.0)) {
         return bad("curvature weights must be >= 0, length and scale > 0");
     }
-    if c.scale.is_some() && c.neighbours < 3 {
+    if scale.is_some() && c.neighbours < 3 {
         return bad("curvature neighbours must be >= 3");
     }
     match c.mode {
@@ -458,6 +492,9 @@ fn validate_volumetric(v: &VolumetricOptions, o: &Options) -> Result<(), Error> 
     }
     if v.sigma_xy.is_some_and(|s| !(s > 0.0)) || matches!(v.sigma_z, AxialBlur::Fixed(s) if !(s > 0.0)) {
         return bad("fixed PSF widths must be positive");
+    }
+    if v.adaptive_band.is_some_and(|c| !(c >= 1.0)) {
+        return bad("adaptive_band must be at least 1");
     }
     if v.lambda < 0.0 || !(v.sigma > 0.0) || v.neighbours == 0 || v.voxel_stride == 0 {
         return bad("volumetric needs lambda >= 0, sigma > 0, neighbours > 0, voxel_stride > 0");

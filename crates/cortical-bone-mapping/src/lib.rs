@@ -107,8 +107,8 @@ pub use fit::profiles::NormalConstraint;
 pub use fit::psf::PsfModel;
 pub use operators::{mesh_curvature, CurvatureMeasure, CurvatureMode, Distance};
 pub use options::{
-    AxialBlur, CurvatureOptions, Method, ModelOptions, Options, RhoCMode, SamplingOptions, SigmaMode, Site,
-    SolverOptions, SurfaceOptions, VolumetricOptions,
+    AxialBlur, CurvatureOptions, LaplacianScale, Method, ModelOptions, Options, RhoCMode, SamplingOptions, SigmaMode,
+    Site, SolverOptions, SurfaceOptions, VolumetricOptions,
 };
 pub use pipeline::run;
 pub use refine::{

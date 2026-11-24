@@ -271,7 +271,7 @@ python docs/scripts/make_figures.py                 # docs/images
 python docs/scripts/segmentation_experiment.py      # docs/segmentation.md results (~70 min)
 python docs/scripts/ct_example.py DICOM_DIR ...     # docs/clinical_ct.md (image not included)
 python docs/scripts/notch_experiment.py knee.pkl --out results run  # docs/refinement_experiments.md
-cargo run --release --example benchmark -p cortical-bone-mapping -- --json docs/benchmark_results.json
+cargo run --release --example benchmark -p cortical-bone-mapping -- --json docs/results/benchmark_results.json
 python docs/scripts/compare_scipy.py
 python docs/scripts/compare_bonelab.py /path/to/Bonelab
 ```

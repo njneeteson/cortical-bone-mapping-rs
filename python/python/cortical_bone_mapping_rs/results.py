@@ -45,7 +45,8 @@ class CbmResult:
         node ``std_error_t`` (local standard error of ``t``, from the node's
         own voxels with their noise correlation), ``data_share``
         (N, 4: the data's share of the curvature of ``m, t, rho_s, rho_b``)
-        and ``misfit`` (RMS residual relative to the noise).
+        ``misfit`` (RMS residual relative to the noise) and ``reach`` (N, 2:
+        how far the node's band reaches outside and inside the surface).
     """
 
     points: np.ndarray

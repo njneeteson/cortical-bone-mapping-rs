@@ -164,6 +164,7 @@ fn parse_volumetric(d: &Bound<'_, PyDict>) -> PyResult<cbm::VolumetricOptions> {
         cutoff: req(d, "reg_cutoff")?,
         global_densities: req(d, "vol_global_densities")?,
         global_soft_tissue: req(d, "vol_global_soft_tissue")?,
+        adaptive_band: opt(d, "vol_adaptive_band")?,
         curvature: parse_curvature(d, "vol_curvature", "vol_curvature_weight")?,
         voxel_stride: req(d, "vol_voxel_stride")?,
     })
@@ -200,7 +201,15 @@ fn parse_curvature(d: &Bound<'_, PyDict>, mode_key: &str, weight_key: &str) -> P
         length: opt(d, "curvature_length")?,
         periosteal,
         endosteal,
-        scale: opt(d, "curvature_scale")?,
+        scale: match (
+            opt::<f64>(d, "curvature_scale")?,
+            req::<String>(d, "curvature_scale_mode")?.as_str(),
+        ) {
+            (_, "cotangent") => cbm::LaplacianScale::Cotangent,
+            (Some(s), "physical") => cbm::LaplacianScale::Physical(s),
+            (_, "spacing") => cbm::LaplacianScale::NodeSpacing(req(d, "curvature_scale_spacings")?),
+            (_, o) => return Err(unknown("curvature_scale", o)),
+        },
         neighbours: req(d, "curvature_neighbours")?,
     }))
 }

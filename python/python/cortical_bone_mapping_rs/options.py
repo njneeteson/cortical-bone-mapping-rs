@@ -148,9 +148,13 @@ class Options:
         periosteal one).
     curvature_length
         Length scale (``None`` = globally fitted thickness).
-    curvature_scale, curvature_neighbours
-        Gaussian point-cloud Laplacian at this scale over this many neighbours;
-        ``curvature_scale=None`` uses the cotangent mesh Laplacian (mesh
+    curvature_scale, curvature_scale_spacings, curvature_neighbours
+        The scale at which curvature is measured: a Gaussian point-cloud
+        Laplacian over ``curvature_neighbours`` neighbours at
+        ``curvature_scale`` (physical units), or, with ``None`` (default),
+        at ``curvature_scale_spacings`` (4) times the mean node spacing
+        (about 0.25 mm at HR-pQCT resolution, 2.6 mm on 0.65 mm clinical
+        CT); ``"cotangent"`` uses the cotangent mesh Laplacian (mesh
         resolution; slower to solve).
     curvature_surfaces
         ``"both"``, ``"periosteal"`` or ``"endosteal"``.
@@ -183,6 +187,11 @@ class Options:
         ``curvature_neighbours`` and ``curvature_surfaces`` apply.
     vol_voxel_stride
         Use every n-th voxel along each axis.
+    vol_adaptive_band
+        Extend each node's band along its normal until it has crossed a bone
+        edge (outward through bright bone into soft tissue, or inward through
+        soft tissue to bone), up to this multiple of ``outside`` / ``inside``;
+        ``None`` = the sampling range everywhere.
 
     **Neighbourhoods**
 
@@ -260,7 +269,8 @@ class Options:
     curvature_kappa: float = 5.0
     curvature_endosteal_weight: Optional[float] = None
     curvature_length: Optional[float] = None
-    curvature_scale: Optional[float] = 0.25
+    curvature_scale: Union[float, Literal["cotangent"], None] = None
+    curvature_scale_spacings: float = 4.0
     curvature_neighbours: int = 64
     curvature_surfaces: Literal["both", "periosteal", "endosteal"] = "both"
     # volumetric
@@ -270,6 +280,7 @@ class Options:
     vol_lambda: float = 1.0
     vol_global_densities: bool = False
     vol_global_soft_tissue: bool = False
+    vol_adaptive_band: Optional[float] = None
     vol_curvature: Optional[Literal["absolute", "variation", "change"]] = "change"
     vol_curvature_weight: float = 0.3
     vol_voxel_stride: int = 1
@@ -309,6 +320,14 @@ class Options:
             d["vol_sigma_z_mode"], d["vol_sigma_z"] = self.vol_sigma_z, 0.0
         else:
             d["vol_sigma_z_mode"], d["vol_sigma_z"] = "fixed", float(self.vol_sigma_z)
+        if self.curvature_scale is None:
+            d["curvature_scale_mode"], d["curvature_scale"] = "spacing", None
+        elif self.curvature_scale == "cotangent":
+            d["curvature_scale_mode"], d["curvature_scale"] = "cotangent", None
+        elif isinstance(self.curvature_scale, str):
+            raise ValueError('curvature_scale must be a number, "cotangent" or None')
+        else:
+            d["curvature_scale_mode"], d["curvature_scale"] = "physical", float(self.curvature_scale)
         if self.neighbour_distance not in (None, "euclidean", "surface"):
             raise ValueError('neighbour_distance must be None, "euclidean" or "surface"')
         return d

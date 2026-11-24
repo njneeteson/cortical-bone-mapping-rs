@@ -16,7 +16,7 @@ METHODS = {
     "curvature-total": dict(method="regularized", reg_neighbours=64, reg_sigma=1.0,
                             curvature="absolute", curvature_measure="total", curvature_kappa=0.5),
     "curvature-cotangent": dict(method="regularized", reg_lambda=0.0, curvature="change",
-                                curvature_scale=None, curvature_weight=0.1),
+                                curvature_scale="cotangent", curvature_weight=0.1),
     # a shaft: every normal is in-plane, so the axial blur is not identified
     "volumetric": dict(method="volumetric", vol_sigma_z="tied"),
 }

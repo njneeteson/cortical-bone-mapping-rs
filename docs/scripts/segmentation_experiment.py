@@ -54,7 +54,7 @@ A second table compares cortical-density choices for the regularized fit on
 the hull: the true tissue density (oracle), Table 1's fixed 1000, the
 estimate, and the per-node profile maximum.
 
-    python docs/scripts/segmentation_experiment.py   # docs/segmentation_experiment.json + figure
+    python docs/scripts/segmentation_experiment.py   # docs/results/segmentation_experiment.json + figure
 """
 
 import json
@@ -379,7 +379,7 @@ def main(only=None):
             examples[name] = (sc, buie, refined)
     if only:
         return
-    (DOCS / "segmentation_experiment.json").write_text(json.dumps(dict(pipelines=rows, rho_c=rho_rows), indent=2))
+    (DOCS / "results" / "segmentation_experiment.json").write_text(json.dumps(dict(pipelines=rows, rho_c=rho_rows), indent=2))
     figure(examples)
 
 

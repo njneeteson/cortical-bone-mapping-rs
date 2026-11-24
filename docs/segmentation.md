@@ -103,7 +103,7 @@ padding or 2D option.
 ### Phantoms
 
 `python docs/scripts/segmentation_experiment.py` (results in
-[`segmentation_experiment.json`](segmentation_experiment.json)) uses
+[`segmentation_experiment.json`](results/segmentation_experiment.json)) uses
 60.7 µm voxels (XtremeCT II), a 0.08 mm PSF and noise σ = 80 on a 0–1000 mg
 HA/cm³ scale, with parameters from published HR-pQCT values (listed at the
 end). The long-bone shafts (`cbm.BonePhantom`, 40 slices, 360² in-plane,

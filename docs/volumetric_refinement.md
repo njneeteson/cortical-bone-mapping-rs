@@ -46,8 +46,8 @@ knee CT, and the choices will be revisited on real HR-pQCT data.
 | 1 | absolute and curvature-variation penalties | done; none beat `"change"`, which stays the default |
 | 2 | untrusted regions moved by an exact harmonic fill | done; the volumetric knee still does not converge |
 | 3 | PSF and `ρc` in an outer loop, held during each refinement | done; no effect on the knee, whose volumetric run never settles |
-| 4 | parameters scaled to the scanner and the node spacing | planned |
-| 5 | voxels assigned along the normals; adaptive band | planned |
+| 4 | parameters scaled to the scanner and the node spacing | done; 40 % less time per move, no change in convergence |
+| 5 | adaptive band | done; no effect: the surface sinks into a dark region inside the condyle |
 | 6 | weights and thresholds chosen on the knee | planned |
 
 ## 1. Curvature penalties
@@ -254,22 +254,76 @@ reaches past the edge).
 
 ### Methods
 
-Planned: the curvature scale from the node spacing, the density-field
-smoothing in millimetres from the voxel size, the band from the PSF, and
-inexact inner solves while the surface still moves.
+* **Curvature scale.** The curvature penalties now measure curvature at a
+  multiple of the mean node spacing by default (`LaplacianScale::NodeSpacing`,
+  `curvature_scale_spacings` = 4), instead of a fixed 0.25 mm. At HR-pQCT
+  resolution that is about 0.25 mm, so those results do not change; on the
+  knee CT (nodes about 0.65 mm apart) it is about 2.6 mm instead of a scale
+  finer than the mesh. A physical scale (`curvature_scale`, mm) or the
+  cotangent Laplacian (`"cotangent"`) can still be given.
+* **Inexact inner fits skip the reliability outputs.** The noise estimate,
+  standard errors and data shares cost about a tenth of a volumetric fit and
+  nothing in a refinement uses them before the last fit; the inexact inner
+  fits now compute only the per-node residuals.
+
+The density fields' smoothing was left as it is: its neighbourhood is cut at
+`3 σ_reg`, which already makes its reach physical.
 
 ### Results
 
-## 5. Voxels along the normals
+Volumetric notch refinement, 15 moves (`"change"`, weight 0.3):
+
+| | time in fits | time per move | reliability |
+|---|---:|---:|---:|
+| curvature at 1 mm (phase 2) | 303 s | 20 s | |
+| curvature at 4 node spacings (2.6 mm) | 220 s | 14 s | 19 s |
+| and residuals only in inner fits | 184 s | 12 s | 8 s |
+
+The inner fits take about 70–80 conjugate-gradient iterations each. The
+surface moves exactly as before, and still does not converge. On the healthy
+shaft phantom both methods converge in 6–7 moves with the same accuracy as in
+phase 1 (volumetric thickness RMSE 0.033 mm).
+
+## 5. The band
 
 ### Methods
 
-Planned: assign each band voxel to the face whose prism along the
-interpolated vertex normals contains it (shell maps; Porumbescu et al. 2005),
-cap each side of a concavity at half the distance to the facing surface, and
-extend a node's band outward until the image has passed the bone edge.
+Each node's band can now reach further than the sampling range, along its
+normal, until it has crossed a bone edge (`vol_adaptive_band`, a cap as a
+multiple of the sampling range;
+[reach.rs](../crates/cortical-bone-mapping/src/fit/volumetric/reach.rs)):
+outward past bright bone into soft tissue, where the surface lies inside the
+bone, and inward through soft tissue to the next bone, where it bridges a
+concavity. The levels come from the profiles: soft tissue `s` is the median
+of the outer half of the outside range, bone `c` the 90th percentile inside,
+`low = s + ¼ (c − s)` and `high = s + ½ (c − s)`. The trust tests use each
+node's actual reach (`volumetric["reach"]`).
+
+Assigning voxels along the normals (shell maps) was not implemented. The
+closest-point assignment already splits a concavity at its medial axis (a
+voxel between two walls belongs to the nearer one), which is what capping
+each side at half the distance to the facing surface would do; the two
+differ only around convex corners, where neither failure occurred.
 
 ### Results
+
+| volumetric, 15 moves | converged | notch left (cm³) | bone outside (cm³) | last regional RMS (mm) |
+|---|---|---:|---:|---:|
+| fixed band | no | 0.38 | 2.23 | 0.27 |
+| adaptive band (up to 2×) | no | 0.42 | 2.13 | 0.32 |
+| adaptive band, global soft tissue | no | 2.20 | 0.09 | 0.37 |
+
+The adaptive band changed nothing. At the sinking nodes it was rarely
+extended (27 % of them, against 84 % of all nodes), and the sections show
+why: the region the surface sinks into is not trabecular bone behind a
+cortex but a dark area inside the lateral femoral condyle, next to the
+notch, at 100–170 HU. Along the regularised surface's normal there, the
+profile stays at 100–170 HU from 6 mm outside to the surface and rises
+slowly to 340 HU 9 mm inside, with no cortex to cross; the regularised
+refinement also cuts into it, less deeply. Neither the levels nor the model
+can tell this region from soft tissue, so the surface keeps growing a pocket
+into it. Whether it belongs inside the bone is an anatomical question about
+this region, not one the band can settle.
 
 ## 6. Weights and thresholds
 

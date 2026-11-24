@@ -200,7 +200,7 @@ pub(crate) fn curvature_operator(
         scale(c.weight, c.periosteal),
         scale(c.endosteal_weight.unwrap_or(c.weight), c.endosteal),
     ];
-    let lap = match c.scale {
+    let lap = match c.scale.sigma(nodes.mesh.mean_edge_length()) {
         Some(sc) => SurfaceLaplacian::gaussian(near, c.neighbours, sc, 3.0),
         None => SurfaceLaplacian::cotangent(nodes.mesh),
     };
