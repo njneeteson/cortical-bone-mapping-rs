@@ -176,6 +176,11 @@ class Options:
         0 = none.
     vol_global_densities
         One global ``rho_s`` and ``rho_b`` instead of fields.
+    vol_edge_lambda
+        Weight of the spatial smoothing of ``m`` and ``t`` (the regularised
+        method's ``reg_lambda`` penalty, same operator and weighting);
+        0 = none, the curvature penalty then being the only regulariser of
+        the edges.
     vol_global_soft_tissue
         One global ``rho_s``, with ``rho_b`` a field: a node whose band lies
         inside the bone cannot explain bone outside its surface as soft
@@ -279,6 +284,7 @@ class Options:
     vol_sigma_z: Union[Literal["fit", "tied"], float] = "fit"
     vol_lambda: float = 1.0
     vol_global_densities: bool = False
+    vol_edge_lambda: float = 0.0
     vol_global_soft_tissue: bool = False
     vol_adaptive_band: Optional[float] = None
     vol_curvature: Optional[Literal["absolute", "variation", "change"]] = "change"

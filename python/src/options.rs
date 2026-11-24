@@ -163,6 +163,7 @@ fn parse_volumetric(d: &Bound<'_, PyDict>) -> PyResult<cbm::VolumetricOptions> {
         neighbours: req(d, "reg_neighbours")?,
         cutoff: req(d, "reg_cutoff")?,
         global_densities: req(d, "vol_global_densities")?,
+        edge_lambda: req(d, "vol_edge_lambda")?,
         global_soft_tissue: req(d, "vol_global_soft_tissue")?,
         adaptive_band: opt(d, "vol_adaptive_band")?,
         curvature: parse_curvature(d, "vol_curvature", "vol_curvature_weight")?,

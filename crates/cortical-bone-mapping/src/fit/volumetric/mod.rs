@@ -290,7 +290,8 @@ struct Fit<'a, 'c> {
     c: FitConstraints<'c>,
     held: Option<&'a [bool]>,
     neighbours: Neighbours,
-    /// The smoothing operator of the density fields (if they are fields).
+    /// The smoothing operator of the density fields (if they are fields) and
+    /// of the edge fields (with `edge_lambda`).
     smoothing: Option<SmoothingOperator>,
     lower: [f64; NV],
     upper: [f64; NV],
@@ -315,7 +316,7 @@ impl<'a, 'c> Fit<'a, 'c> {
     ) -> Self {
         let neighbours = Neighbours::new(&nodes.mesh, o.distance());
         let density_fields = !v.global_densities && c.densities.is_none();
-        let smoothing = (density_fields && v.lambda > 0.0)
+        let smoothing = (density_fields && v.lambda > 0.0 || v.edge_lambda > 0.0)
             .then(|| SmoothingOperator::new(&neighbours, v.neighbours, v.sigma, v.cutoff));
         let (lo, hi) = (o.model.lower, o.model.upper);
         Fit {
@@ -410,7 +411,12 @@ impl<'a, 'c> Fit<'a, 'c> {
         curvature: Option<&'p CurvatureOperator>,
     ) -> VolumetricProblem<'p> {
         let (roles, tied) = self.roles(fields);
-        let kappa = self.v.lambda / self.nodes.ids.len() as f64;
+        // the regularised method's weights: λ/N on the densities (relative to
+        // ρc), λ ρc² / (N t0²) on m and t (relative to the global thickness)
+        let nn = self.nodes.ids.len() as f64;
+        let kappa = self.v.lambda / nn;
+        let t0 = scalars[T].max(1e-6);
+        let kappa_edges = self.v.edge_lambda * rho_c * rho_c / (nn * t0 * t0);
         VolumetricProblem {
             band: self.band,
             faces: &self.nodes.mesh.faces,
@@ -421,7 +427,9 @@ impl<'a, 'c> Fit<'a, 'c> {
             fixed: self.fixed_values(scalars),
             frozen: if fields { self.held } else { None },
             smoothing: if fields {
-                self.smoothing.as_ref().map(|op| (op, [kappa, kappa]))
+                self.smoothing
+                    .as_ref()
+                    .map(|op| (op, [kappa_edges, kappa_edges, kappa, kappa]))
             } else {
                 None
             },

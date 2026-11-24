@@ -48,7 +48,8 @@ knee CT, and the choices will be revisited on real HR-pQCT data.
 | 3 | PSF and `ρc` in an outer loop, held during each refinement | done; no effect on the knee, whose volumetric run never settles |
 | 4 | parameters scaled to the scanner and the node spacing | done; 40 % less time per move, no change in convergence |
 | 5 | adaptive band | done; no effect: the surface sinks into a dark region inside the condyle |
-| 6 | weights and thresholds chosen on the knee | planned |
+| 6 | edge smoothing of `m`, `t` for the volumetric model; `ρc` | done; with both, the volumetric knee notch converges (11 moves) |
+| 7 | weights and thresholds chosen on the knee | planned |
 
 ## 1. Curvature penalties
 
@@ -337,14 +338,71 @@ Everything more than 10 mm outside the start is blanked (display only).
 closing_freeze closing_freeze_volumetric_adaptive --centre 45,95,124
 --figure volumetric_refinement_pocket.png`.*
 
-**Open question.** Is this dark region inside the bone (low-density marrow
-or a lesion, which the periosteal surface should enclose) or outside it
-(soft tissue of the notch, seen obliquely, which the surface may follow)?
-If inside, refinement needs a rule that keeps the surface out of a dark
-region it reaches without crossing a cortex; if outside, the volumetric
-refinement is right there and only slow to settle.
+The region is inside the bone (low-density marrow in the condyle, not the
+notch), so the periosteal surface should not enter it: this is what the
+regularisation is meant to prevent, and the regularised 1D refinement
+prevents it. Section 6 finds why the volumetric one does not.
 
-## 6. Weights and thresholds
+## 6. Edge smoothing and cortical density
+
+### Methods
+
+The two refinements differed in more than the data model. The regularised
+1D fit smooths the edge fields `m` and `t` with the spatial penalty of our
+2025 paper (`λ ‖ω m‖²`, `λ ‖ω t‖²`; on the knee λ = 1, σ_reg = 3 mm, 500
+neighbours) and has no curvature penalty; the volumetric fit smoothed only
+its density fields, and its edges only through the curvature penalty. The
+volumetric model now has the same smoothing of `m` and `t`
+(`vol_edge_lambda`, same operator and weighting `λ ρc² / (N t0²)`; default 0,
+as before). The two fits also estimated different cortical densities on this
+knee: 1270 HU (1D) and 860–884 HU (volumetric).
+
+Each variant below changes one thing from the one above it or from the
+regularised refinement, all from the 4 mm closing with the level set and
+regional convergence, capped at 15 moves.
+
+### Results
+
+| refinement | edge smoothing | curvature penalty | `ρc` | moves | converged | notch left (cm³) | bone outside (cm³) | convex distance (mm) | median thickness (mm) |
+|---|---|---|---|---:|---|---:|---:|---:|---:|
+| regularised (1D) | λ = 1 | none | estimated, 1270 | 4 | yes | 0.00 | 1.12 | 1.03 | 0.57 |
+| volumetric | none | change, 0.3 | estimated, ≈ 880 | 15 | no | 0.38 | 2.23 | 0.84 | 0.73 |
+| volumetric | λ = 1 | none | estimated, 884 | 15 | no | 0.01 | 1.66 | 0.88 | 0.72 |
+| volumetric | λ = 1 | change, 0.3 | estimated | 15 | no | 0.01 | 1.54 | 0.88 | 0.72 |
+| volumetric | none | change, 0.3 | fixed, 1270 | 15 | no | 0.22 | 2.22 | 0.99 | 0.50 |
+| volumetric | λ = 1 | none | fixed, 1270 | 11 | **yes** | 0.00 | 1.26 | 1.02 | 0.50 |
+
+"Convex distance" is the median distance from the refined surface to the
+thresholded surface where the start already lay on it.
+
+Neither change alone was enough; together they made the volumetric
+refinement converge on the knee for the first time, in 11 moves (137 s),
+with the notch emptied and no pocket in the condyle. The edge smoothing
+holds a node's edge near its neighbours', as in the 1D fit; the curvature
+penalty at weight 0.3 did not. With `ρc` estimated at about 880 HU the faint
+transition into the dark marrow fits as a thin cortex, and the surface
+follows it in; at 1270 HU it does not. The low estimate is the known
+weakness of the volumetric `ρc` estimate, which needs cortex thicker than
+about four times the blur in view ([volumetric_validation.md](volumetric_validation.md)):
+this crop of the femur has little of it, while the 1D estimate comes from
+the whole femur's profiles.
+
+![One change at a time](images/volumetric_refinement_regularisation.png)
+
+*Sections through the region of section 5 (green cross): the regularised
+refinement, then the volumetric refinement with edge smoothing, with `ρc`
+fixed, and with both (bottom). Start yellow and dashed, refined periosteal
+surface red, endosteal cyan; everything more than 10 mm outside the start
+is blanked (display only). `python docs/scripts/notch_experiment.py knee.pkl
+--out results figures closing_freeze closing_freeze_volumetric_edge_smoothing
+closing_freeze_volumetric_rho_c closing_freeze_volumetric_edge_smoothing_rho_c
+--centre 45,95,124 --figure volumetric_refinement_regularisation.png`.*
+
+What remains open: a `ρc` for the volumetric model that does not depend on
+borrowing the 1D estimate (for example the shared scanner value of all the
+bones, estimated where the cortex is thick), and the weights, in section 7.
+
+## 7. Weights and thresholds
 
 ### Methods
 

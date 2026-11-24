@@ -112,6 +112,28 @@ VARIANTS = {
                                                             vol_adaptive_band=2.0, vol_global_soft_tissue=True),
                                                        dict(level_set=True, freeze=True, refine_iterations=15),
                                                        CLOSING),
+    # one change at a time from the regularised closing_freeze (lambda 1, no curvature penalty)
+    "closing_freeze_volumetric_edge_smoothing": ("as closing_freeze, the volumetric model with the same smoothing of "
+                                                 "m and t and no curvature penalty",
+                                                 dict(method="volumetric", vol_scanner_axis=0, vol_curvature=None,
+                                                      vol_edge_lambda=1.0),
+                                                 dict(level_set=True, freeze=True, refine_iterations=15), CLOSING),
+    "closing_freeze_volumetric_edge_smoothing_curvature": ("as closing_freeze_volumetric_edge_smoothing, plus the "
+                                                           "change-of-curvature penalty (weight 0.3)",
+                                                           dict(method="volumetric", vol_scanner_axis=0,
+                                                                vol_curvature="change", vol_curvature_weight=0.3,
+                                                                vol_edge_lambda=1.0),
+                                                           dict(level_set=True, freeze=True, refine_iterations=15),
+                                                           CLOSING),
+    "closing_freeze_volumetric_edge_smoothing_rho_c": ("as closing_freeze_volumetric_edge_smoothing, rho_c fixed "
+                                                       "at the regularised fit's 1270 HU",
+                                                       dict(method="volumetric", vol_scanner_axis=0, vol_curvature=None,
+                                                            vol_edge_lambda=1.0, rho_c=1270.0),
+                                                       dict(level_set=True, freeze=True, refine_iterations=15), CLOSING),
+    "closing_freeze_volumetric_rho_c": ("as closing_freeze_volumetric_spacing, rho_c fixed at 1270 HU",
+                                        dict(method="volumetric", vol_scanner_axis=0, vol_curvature="change",
+                                             vol_curvature_weight=0.3, rho_c=1270.0),
+                                        dict(level_set=True, freeze=True, refine_iterations=15), CLOSING),
     "closing_freeze_volumetric_soft_tissue": ("as closing_freeze_volumetric_change, one global soft-tissue density",
                                               dict(method="volumetric", vol_scanner_axis=0, vol_curvature="change",
                                                    vol_curvature_weight=0.3, curvature_scale=1.0,

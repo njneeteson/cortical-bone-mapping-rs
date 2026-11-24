@@ -276,6 +276,11 @@ pub struct VolumetricOptions {
     pub cutoff: f64,
     /// One global `ρs` and `ρb` instead of fields.
     pub global_densities: bool,
+    /// Weight `λ` of the spatial smoothing of the edge fields `m` and `t`
+    /// (the regularised method's penalty, with the same operator and
+    /// weighting, `λ ρc² / (N t0²)`; 0 = none, the curvature penalty then
+    /// being the only regulariser of the edges).
+    pub edge_lambda: f64,
     /// One global soft-tissue density `ρs`, with `ρb` a field. Soft tissue
     /// varies less than marrow, and a global `ρs` keeps a node whose band
     /// lies inside the bone from explaining bone outside its surface as soft
@@ -311,6 +316,7 @@ impl Default for VolumetricOptions {
             neighbours: 500,
             cutoff: 3.0,
             global_densities: false,
+            edge_lambda: 0.0,
             global_soft_tissue: false,
             curvature: Some(CurvatureOptions {
                 weight: 0.3,
@@ -496,7 +502,7 @@ fn validate_volumetric(v: &VolumetricOptions, o: &Options) -> Result<(), Error> 
     if v.adaptive_band.is_some_and(|c| !(c >= 1.0)) {
         return bad("adaptive_band must be at least 1");
     }
-    if v.lambda < 0.0 || !(v.sigma > 0.0) || v.neighbours == 0 || v.voxel_stride == 0 {
+    if v.lambda < 0.0 || !(v.edge_lambda >= 0.0) || !(v.sigma > 0.0) || v.neighbours == 0 || v.voxel_stride == 0 {
         return bad("volumetric needs lambda >= 0, sigma > 0, neighbours > 0, voxel_stride > 0");
     }
     if let Some(c) = &v.curvature {
