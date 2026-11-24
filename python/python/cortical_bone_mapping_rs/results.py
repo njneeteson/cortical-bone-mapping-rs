@@ -197,6 +197,10 @@ class RefineResult:
         Why refinement stopped (with a diagnosis if it stalled).
     timings
         Wall time per stage, summed over all fits, as (name, seconds).
+    scanner
+        The scanner parameters held in each refinement pass: dicts with
+        ``psf`` (volumetric model), ``sigma`` (a global sigma) and ``rho_c``
+        (``None`` where not held).
     """
 
     result: CbmResult
@@ -211,6 +215,7 @@ class RefineResult:
     stalled: bool = False
     message: str = ""
     timings: list = field(default_factory=list)
+    scanner: list = field(default_factory=list)
 
     @property
     def periosteal_vertices(self) -> np.ndarray:

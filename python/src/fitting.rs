@@ -140,6 +140,15 @@ pub(crate) fn refine<'py>(
     d.set_item("stalled", r.stalled)?;
     d.set_item("message", &r.message)?;
     d.set_item("timings", r.timings.clone())?;
+    let scanner = PyList::empty(py);
+    for s in &r.scanner {
+        let e = PyDict::new(py);
+        e.set_item("psf", s.psf.map(|p| p.to_vec()))?;
+        e.set_item("sigma", s.sigma)?;
+        e.set_item("rho_c", s.rho_c)?;
+        scanner.append(e)?;
+    }
+    d.set_item("scanner", scanner)?;
     Ok(d)
 }
 

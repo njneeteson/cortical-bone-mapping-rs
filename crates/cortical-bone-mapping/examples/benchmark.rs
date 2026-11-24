@@ -178,6 +178,7 @@ fn volumetric_ablations() -> Vec<(&'static str, Method)> {
             "volumetric, global densities",
             Method::Volumetric(VolumetricOptions {
                 global_densities: true,
+                global_soft_tissue: false,
                 ..tied.clone()
             }),
         ),

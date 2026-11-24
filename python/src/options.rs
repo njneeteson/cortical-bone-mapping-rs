@@ -163,6 +163,7 @@ fn parse_volumetric(d: &Bound<'_, PyDict>) -> PyResult<cbm::VolumetricOptions> {
         neighbours: req(d, "reg_neighbours")?,
         cutoff: req(d, "reg_cutoff")?,
         global_densities: req(d, "vol_global_densities")?,
+        global_soft_tissue: req(d, "vol_global_soft_tissue")?,
         curvature: parse_curvature(d, "vol_curvature", "vol_curvature_weight")?,
         voxel_stride: req(d, "vol_voxel_stride")?,
     })
@@ -239,5 +240,8 @@ pub(crate) fn parse_refine(refine: &Bound<'_, PyDict>) -> PyResult<cbm::RefineOp
         } else {
             None
         },
+        scanner_passes: req(refine, "scanner_passes")?,
+        scanner_relaxation: req(refine, "scanner_relaxation")?,
+        scanner_tolerance: req(refine, "scanner_tolerance")?,
     })
 }

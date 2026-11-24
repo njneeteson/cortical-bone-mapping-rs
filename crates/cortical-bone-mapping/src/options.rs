@@ -251,6 +251,11 @@ pub struct VolumetricOptions {
     pub cutoff: f64,
     /// One global `ρs` and `ρb` instead of fields.
     pub global_densities: bool,
+    /// One global soft-tissue density `ρs`, with `ρb` a field. Soft tissue
+    /// varies less than marrow, and a global `ρs` keeps a node whose band
+    /// lies inside the bone from explaining bone outside its surface as soft
+    /// tissue (which lets the surface sink; `docs/volumetric_refinement.md`).
+    pub global_soft_tissue: bool,
     /// Curvature penalty on the fitted surfaces (on `m`, `t`), the only
     /// regulariser of the edge positions: without it each node's support is
     /// roughly one profile's worth of voxels and the precision is that of the
@@ -277,6 +282,7 @@ impl Default for VolumetricOptions {
             neighbours: 500,
             cutoff: 3.0,
             global_densities: false,
+            global_soft_tissue: false,
             curvature: Some(CurvatureOptions {
                 weight: 0.3,
                 ..CurvatureOptions::default()

@@ -45,7 +45,7 @@ knee CT, and the choices will be revisited on real HR-pQCT data.
 |---|---|---|
 | 1 | absolute and curvature-variation penalties | done; none beat `"change"`, which stays the default |
 | 2 | untrusted regions moved by an exact harmonic fill | done; the volumetric knee still does not converge |
-| 3 | PSF and `ρc` in an outer loop, held during each refinement | planned |
+| 3 | PSF and `ρc` in an outer loop, held during each refinement | done; no effect on the knee, whose volumetric run never settles |
 | 4 | parameters scaled to the scanner and the node spacing | planned |
 | 5 | voxels assigned along the normals; adaptive band | planned |
 | 6 | weights and thresholds chosen on the knee | planned |
@@ -199,13 +199,56 @@ are next.
 
 ### Methods
 
-Planned: fit the PSF once to all bones on their starting surfaces, hold it
-and `ρc` through a refinement, re-fit both on the refined surfaces and
-relax, `σ ← σ + α (σ_fit − σ)` with `α = ½`, and repeat until the PSF
-changes by less than 1 %, as in the alternating solves of SIMPLE-type flow
-solvers.
+The scanner's parameters (the volumetric model's PSF, a global `σ`, an
+estimated `ρc`) are now held through a refinement *pass*, in full fits as
+well as partial ones, instead of being re-fitted in every full fit
+([scanner.rs](../crates/cortical-bone-mapping/src/refine/scanner.rs)).
+After a pass they are re-fitted on the refined surface and moved part of the
+way, `p ← p + β (p_fit − p)` with `β = ½`, and another pass follows while a
+re-fit changes them by more than 1 %, up to 3 passes
+(`scanner_passes`, `scanner_relaxation`, `scanner_tolerance`), as segregated
+flow solvers alternate between their unknowns (Patankar & Spalding 1972).
+A PSF or `ρc` given in the options re-fits to itself, so refinement then
+stops after one pass. `RefineResult.scanner` lists the values held in each
+pass.
+
+While looking at why the volumetric notch did not converge, a second option
+was added: one global soft-tissue density with a per-node trabecular field
+(`vol_global_soft_tissue`).
 
 ### Results
+
+On the notch the regularised refinement converges in 4 moves as before; the
+re-fit after its pass changed `ρc` by 0.2 % (1269 → 1270 HU), so one pass
+sufficed.
+
+The volumetric refinement (curvature `"change"`, 1 mm) behaved exactly as
+before: it never reached a second full fit, because the surface never
+settled. The region that keeps moving does not oscillate. About 1000 nodes,
+13 × 18 × 10 mm, move inward by 0.24 mm every move: the surface there lies
+3.4 mm inside the regularised one, inside the femur, in trabecular bone
+(about 260 HU). The fits there have `t` at its lower bound, a soft-tissue
+density of 219 HU and a trabecular density of 310 HU: once the band lies
+inside the bone, the per-node soft-tissue density takes the value of bone,
+the fit sees no edge, yet passes every trust test, and its `m` keeps pulling
+the surface inward. This is the case where bone is out of reach of the band,
+but the node is not recognised as untrusted.
+
+With one global soft-tissue density the sinking stops (bone outside 0.02
+cm³, against 2.04), but the notch no longer empties (2.12 cm³ left, against
+0.26): below a surface bridging the notch, the per-node trabecular density
+takes the value of the soft tissue in the notch (median 130 HU), and the fit
+again sees no edge. Neither run converged in 15 moves.
+
+| volumetric, 15 moves | converged | notch left (cm³) | bone outside (cm³) | last RMS / regional RMS (mm) |
+|---|---|---:|---:|---|
+| per-node densities | no | 0.26 | 2.04 | 0.044 / 0.25 |
+| global soft tissue | no | 2.12 | 0.02 | 0.034 / 0.22 |
+
+Both failures are a band that does not reach the tissue on the other side of
+the edge, with a density field free to absorb what it sees instead. That is
+the target of phase 5 (voxels assigned along the normals, a band that
+reaches past the edge).
 
 ## 4. Parameters for the scanner
 
@@ -246,5 +289,8 @@ on sections and by the notch and edge measures, with the phantoms as a check.
   segmentation of trabecular and cortical compartments in HR-pQCT images
   using an embedding-predicting U-Net and morphological post-processing*,
   Scientific Reports 13:252, 2023, doi:10.1038/s41598-022-27350-0.
+* S. V. Patankar, D. B. Spalding, *A calculation procedure for heat, mass
+  and momentum transfer in three-dimensional parabolic flows*,
+  International Journal of Heat and Mass Transfer 15(10):1787–1806, 1972.
 * S. D. Porumbescu, B. Budge, L. Feng, K. I. Joy, *Shell maps*, ACM
   Transactions on Graphics 24(3):626–633, 2005.

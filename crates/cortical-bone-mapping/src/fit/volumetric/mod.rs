@@ -320,13 +320,17 @@ impl<'a, 'c> Fit<'a, 'c> {
     /// whether `σ_z` is tied to `σ_xy`.
     fn roles(&self, fields: bool) -> ([Role; NV], bool) {
         let node = if fields { Role::Field } else { Role::Global };
-        let densities = if self.c.densities.is_some() {
-            Role::Fixed
-        } else if self.v.global_densities {
-            Role::Global
-        } else {
-            node
+        let density = |global: bool| {
+            if self.c.densities.is_some() {
+                Role::Fixed
+            } else if global {
+                Role::Global
+            } else {
+                node
+            }
         };
+        let rho_s = density(self.v.global_densities || self.v.global_soft_tissue);
+        let rho_b = density(self.v.global_densities);
         let held_psf = self.c.psf.is_some();
         let sxy = if held_psf || self.v.sigma_xy.is_some() {
             Role::Fixed
@@ -338,7 +342,7 @@ impl<'a, 'c> Fit<'a, 'c> {
             (false, AxialBlur::Tied) => (Role::Global, true),
             (false, AxialBlur::Fit) => (Role::Global, false),
         };
-        ([node, node, densities, densities, sxy, sz], tied)
+        ([node, node, rho_s, rho_b, sxy, sz], tied)
     }
 
     /// `scalars` with the fixed parameters (held densities and PSF, given

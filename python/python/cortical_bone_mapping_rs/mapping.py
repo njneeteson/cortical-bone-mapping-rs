@@ -114,4 +114,5 @@ def refine_segmentation(
         stalled=d["stalled"],
         message=d["message"],
         timings=d["timings"],
+        scanner=d["scanner"],
     )

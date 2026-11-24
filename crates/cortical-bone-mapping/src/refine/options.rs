@@ -2,6 +2,7 @@
 
 use ndarray::Array3;
 
+use super::ScannerState;
 use crate::result::CbmResult;
 use crate::surface::mesh::Mesh;
 
@@ -49,6 +50,17 @@ pub struct RefineOptions {
     pub level_set: bool,
     /// Regional convergence: freeze regions that have stopped moving.
     pub freeze: Option<FreezeOptions>,
+    /// The scanner parameters (blur, `ρc`) are held through a refinement
+    /// pass and then re-fitted on the refined surface; at most this many
+    /// passes (1 = hold the first fit's values throughout; see the module
+    /// `scanner`).
+    pub scanner_passes: usize,
+    /// Under-relaxation `β` in (0, 1] of the scanner parameters between
+    /// passes: `p ← p + β (p_fit − p)`.
+    pub scanner_relaxation: f64,
+    /// Another pass follows only if the re-fit changes a scanner parameter
+    /// by more than this (relative).
+    pub scanner_tolerance: f64,
 }
 
 impl Default for RefineOptions {
@@ -68,6 +80,9 @@ impl Default for RefineOptions {
             region_tolerance: None,
             level_set: false,
             freeze: None,
+            scanner_passes: 3,
+            scanner_relaxation: 0.5,
+            scanner_tolerance: 0.01,
         }
     }
 }
@@ -155,6 +170,8 @@ pub struct RefineResult {
     pub stalled: bool,
     /// Why refinement stopped, with a diagnosis if it stalled.
     pub message: String,
+    /// The scanner parameters held in each pass.
+    pub scanner: Vec<ScannerState>,
     /// Wall time per stage, summed over all fits (seconds).
     pub timings: Vec<(String, f64)>,
 }

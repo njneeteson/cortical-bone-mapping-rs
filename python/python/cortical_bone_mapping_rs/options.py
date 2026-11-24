@@ -172,6 +172,10 @@ class Options:
         0 = none.
     vol_global_densities
         One global ``rho_s`` and ``rho_b`` instead of fields.
+    vol_global_soft_tissue
+        One global ``rho_s``, with ``rho_b`` a field: a node whose band lies
+        inside the bone cannot explain bone outside its surface as soft
+        tissue.
     vol_curvature, vol_curvature_weight
         The curvature penalty on the fitted surfaces (the regulariser of
         ``m, t``): ``"absolute"``, ``"variation"``, ``"change"`` or ``None``, with its weight;
@@ -265,6 +269,7 @@ class Options:
     vol_sigma_z: Union[Literal["fit", "tied"], float] = "fit"
     vol_lambda: float = 1.0
     vol_global_densities: bool = False
+    vol_global_soft_tissue: bool = False
     vol_curvature: Optional[Literal["absolute", "variation", "change"]] = "change"
     vol_curvature_weight: float = 0.3
     vol_voxel_stride: int = 1
@@ -410,6 +415,14 @@ class RefineOptions:
         default 1 voxel). ``rho_c`` and the
         densities are fixed after the initial fit, and the whole surface is
         fitted once more at the end.
+    scanner_passes, scanner_relaxation, scanner_tolerance
+        The scanner parameters (the volumetric model's PSF, a global
+        ``sigma``, an estimated ``rho_c``) are held through a refinement
+        pass, then re-fitted on the refined surface and moved
+        ``scanner_relaxation`` of the way toward the new values; another
+        pass follows while a re-fit changes them by more than
+        ``scanner_tolerance`` (relative), up to ``scanner_passes`` passes
+        (1 = hold the first fit's values throughout).
     """
 
     refine_iterations: int = 20
@@ -432,6 +445,9 @@ class RefineOptions:
     freeze_radius: Optional[float] = None
     freeze_halo: Optional[float] = None
     freeze_thaw: Optional[float] = None
+    scanner_passes: int = 3
+    scanner_relaxation: float = 0.5
+    scanner_tolerance: float = 0.01
 
     def _to_core(self) -> dict:
         d = asdict(self)

@@ -113,7 +113,7 @@ pub use options::{
 pub use pipeline::run;
 pub use refine::{
     cortical_masks, refine_segmentation, refine_segmentation_excluding, FreezeOptions, IterationStats, RefineOptions,
-    RefineResult,
+    RefineResult, ScannerState,
 };
 pub use result::{CbmResult, FitInfo, VolumetricInfo};
 pub use surface::mesh::Mesh;
