@@ -23,12 +23,13 @@ Pipelines:
   hull                    the starting segmentation for CBM: threshold 320,
                           median, largest component, per-slice convex hull
                           (cbm.hull_segmentation; per bone for the knee);
-  local, multigrid, regularized, reg+curvature, curvature
+  local, multigrid, regularized, reg+curvature, curvature, volumetric
                           one CBM fit on the hull's surface; the cortex is the
                           region between the fitted surfaces;
-  refine, refine+curvature
+  refine, refine+curvature, refine volumetric
                           CBM segmentation refinement from the hull
-                          (regularized, and regularized + curvature).
+                          (regularized, regularized + curvature, and the
+                          volumetric model).
 
 CBM uses the parameters of Table 1 of Neeteson & Boyd (2025)
 (``Options.preset``) except for the sampling distances, which are scaled to
@@ -99,10 +100,12 @@ FITS = {
     "regularized": dict(method="regularized"),
     "reg+curvature": dict(method="regularized", curvature="change", curvature_weight=1.0),
     "curvature": dict(method="regularized", reg_lambda=0.0, curvature="change", curvature_weight=1.0),
+    "volumetric": dict(method="volumetric"),
 }
 REFINES = {
     "refine": FITS["regularized"],
     "refine+curvature": FITS["reg+curvature"],
+    "refine volumetric": FITS["volumetric"],
 }
 SAMPLING = dict(outside=1.0, inside=3.0)
 FIGURE = ("osteoporotic", "neighbour 0.5 mm", "breaks", "knee OA")
@@ -110,6 +113,14 @@ FIGURE = ("osteoporotic", "neighbour 0.5 mm", "breaks", "knee OA")
 
 def options(site):
     return cbm.Options.preset(site, H, rho_c="estimate", **SAMPLING)
+
+
+def for_site(kw, site):
+    """A method's options for a site: on the shafts every normal is in-plane,
+    so the volumetric model's axial blur is tied to the in-plane one."""
+    if kw.get("method") == "volumetric" and site == "radius_tibia":
+        return dict(kw, vol_sigma_z="tied")
+    return kw
 
 
 # ---------------------------------------------------------------- metrics
@@ -323,7 +334,7 @@ def run_scenario(sc, rows):
 
     for name, kw in FITS.items():
         t0 = time.perf_counter()
-        res = ref if name == "regularized" else cbm.cortical_bone_mapping(sc.img, hull, options=o, **kw)
+        res = ref if name == "regularized" else cbm.cortical_bone_mapping(sc.img, hull, options=o, **for_site(kw, sc.site))
         sec = ref.info["time"] if name == "regularized" else time.perf_counter() - t0
         p, e, c = res.masks(sc.img.shape)
         add(name, p, c, fit_edges(res), res.points, res.normals, sec,
@@ -332,12 +343,13 @@ def run_scenario(sc, rows):
     refined = None
     for name, kw in REFINES.items():
         t0 = time.perf_counter()
-        rr = cbm.refine_segmentation(sc.img, hull, options=o, **kw)
+        rr = cbm.refine_segmentation(sc.img, hull, options=o, **for_site(kw, sc.site))
         sec = time.perf_counter() - t0
         add(name, rr.periosteal_mask, rr.cortical_mask, fit_edges(rr.result), rr.result.points,
             rr.result.normals, sec, dict(iterations=len(rr.history), converged=rr.converged,
                                          rho_c=rr.result.rho_c))
-        refined = rr
+        if name == "refine+curvature":  # the figure's refinement
+            refined = rr
     return hull, buie, refined
 
 

@@ -76,6 +76,9 @@ VARIANTS = {
     "closing_freeze_lambda_0.1": ("as closing_freeze, lambda 0.1",
                                   dict(global_params=(), reg_lambda=0.1),
                                   dict(level_set=True, freeze=True), CLOSING),
+    "closing_freeze_volumetric": ("as closing_freeze, the volumetric model as the inner fit",
+                                  dict(method="volumetric", vol_scanner_axis=0),
+                                  dict(level_set=True, freeze=True), CLOSING),
     # the earlier stages, from the convex hull, with the 20 moves they were run with
     "same_nodes": ("convex hull, same nodes moved every iteration, global densities, full fits",
                    {}, dict(refine_iterations=20, edge_ratio=0.0, stall_iterations=0,

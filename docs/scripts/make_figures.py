@@ -30,6 +30,8 @@ METHODS = {
     "multigrid": dict(method="multigrid", multigrid_spacings=(4.0, 2.0, 1.0)),
     "regularized": dict(method="regularized", reg_neighbours=64, reg_sigma=1.0),
     "curvature": dict(method="regularized", reg_lambda=0.0, curvature="change"),
+    # a shaft: every normal is in-plane, so the axial blur is tied
+    "volumetric": dict(method="volumetric", vol_sigma_z="tied", reg_neighbours=64, reg_sigma=1.0),
 }
 plt.rcParams.update({"figure.dpi": 110, "font.size": 9, "axes.titlesize": 10})
 
@@ -87,7 +89,7 @@ def fig_methods():
     img, mask = ph.generate()
     res = {k: cbm.cortical_bone_mapping(img, mask, ph.spacing, **CYL, **v) for k, v in METHODS.items()}
     ref = res["local"]
-    fig, axes = plt.subplots(2, 5, figsize=(13, 5.2), gridspec_kw=dict(height_ratios=[1, 0.8]))
+    fig, axes = plt.subplots(2, len(res) + 1, figsize=(2.6 * (len(res) + 1), 5.2), gridspec_kw=dict(height_ratios=[1, 0.8]))
     th, z = theta_z(ph, ref.points)
     kw = dict(s=2, cmap="viridis", vmin=0.4, vmax=1.2, rasterized=True)
     axes[0, 0].scatter(th, z, c=ph.true_thickness(ref.points), **kw)
@@ -171,6 +173,11 @@ def fig_curvature():
                                       reg_neighbours=64, reg_sigma=1.0)
         rn.append(np.sqrt(((r.thickness - ph.true_thickness(r.points)) ** 2).mean()))
     ax.plot(lam, np.array(rn) * 1000, "k--", marker="s", label="Neeteson λ (k=64)")
+    rv = []
+    for wgt in ws:
+        r = cbm.cortical_bone_mapping(img, mask, ph.spacing, **CYL, **{**METHODS["volumetric"], "vol_curvature_weight": wgt})
+        rv.append(np.sqrt(((r.thickness - ph.true_thickness(r.points)) ** 2).mean()))
+    ax.plot(ws, np.array(rv) * 1000, "k:", marker="^", label="volumetric μ (scale 0.25 mm)")
     ax.axhline(e0 * 1000, color="gray", lw=1, label="local")
     ax.set_xscale("log")
     ax.set_yscale("log")
@@ -245,17 +252,25 @@ def fig_refine():
     print("wrote", IMG / "refinement.gif")
     draw(len(rr.surfaces) - 1)
     save(fig, "refinement_final.png")
-    # convergence
+    # convergence, with the volumetric model as the inner fit for comparison
+    rv = cbm.refine_segmentation(img, bad, ph.spacing, **CYL, **METHODS["volumetric"], keep_history=True,
+                                 tolerance=0.002, refine_iterations=12)
+    dices_v = [2 * (m & (truth > 0)).sum() / (m.sum() + truth.sum())
+               for m in (cbm.voxelize(v, faces, img.shape, ph.spacing) for v in rv.surfaces)]
     fig, (c1, c2) = plt.subplots(1, 2, figsize=(8, 3))
-    rms = [hh["rms_displacement"] for hh in rr.history]
-    c1.semilogy(range(1, len(rms) + 1), rms, "o-")
+    for hist, dc, lab in ((rr.history, dices, "regularized"), (rv.history, dices_v, "volumetric")):
+        rms = [hh["rms_displacement"] for hh in hist]
+        c1.semilogy(range(1, len(rms) + 1), rms, "o-", label=lab)
+        c2.plot(range(len(dc)), dc, "o-", label=lab)
     c1.set_xlabel("iteration")
     c1.set_ylabel("RMS vertex displacement [mm]")
     c1.set_title("geometric convergence (α = 0.5)")
-    c2.plot(range(len(dices)), dices, "o-")
+    c1.legend(fontsize=7)
     c2.set_xlabel("iteration")
     c2.set_ylabel("Dice with true segmentation")
     save(fig, "refinement_convergence.png")
+    print("refinement: regularized Dice %.4f, volumetric Dice %.4f, iterations %d / %d"
+          % (dices[-1], dices_v[-1], len(rr.history), len(rv.history)))
 
 
 # --------------------------------------------------------------------------

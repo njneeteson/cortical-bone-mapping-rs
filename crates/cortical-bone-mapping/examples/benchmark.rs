@@ -1,7 +1,11 @@
 //! Run time and peak memory of every method on cylinder phantoms of
 //! increasing size (number of surface nodes).
 //!
-//!     cargo run --release --example benchmark -p cortical-bone-mapping [--json out.json]
+//!     cargo run --release --example benchmark -p cortical-bone-mapping [--json out.json] [--volumetric]
+//!
+//! `--volumetric` instead runs ablations of the volumetric model on the
+//! largest phantom (density smoothing over 64 neighbours, global densities,
+//! no curvature penalty), to show where its time and memory go.
 //!
 //! Peak memory is the largest amount of heap allocated *during* the call,
 //! above what was allocated before it (image + mask). The phantoms mimic a
@@ -40,7 +44,8 @@ static ALLOC: Counting = Counting;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let json_path = args.iter().position(|a| a == "--json").map(|i| args[i + 1].clone());
-    let slices: Vec<usize> = vec![8, 32, 128];
+    let ablation = args.iter().any(|a| a == "--volumetric");
+    let slices: Vec<usize> = if ablation { vec![128] } else { vec![8, 32, 128] };
     let mut rows = Vec::new();
     for &d0 in &slices {
         let h = 0.0607;
@@ -56,33 +61,11 @@ fn main() {
             ..ShellPhantom::default()
         };
         let (image, mask) = ph.generate();
-        let methods: Vec<(&str, Method)> = vec![
-            ("local", Method::Local),
-            ("multigrid", Method::multigrid()),
-            (
-                "regularized k=64",
-                Method::Regularized {
-                    lambda: 1.0,
-                    sigma: 1.9424,
-                    neighbours: 64,
-                    cutoff: 3.0,
-                    init_from_local: false,
-                    curvature: None,
-                },
-            ),
-            ("regularized k=500", Method::regularized()),
-            (
-                "reg+curvature",
-                Method::Regularized {
-                    lambda: 1.0,
-                    sigma: 1.9424,
-                    neighbours: 64,
-                    cutoff: 3.0,
-                    init_from_local: false,
-                    curvature: Some(CurvatureOptions::default()),
-                },
-            ),
-        ];
+        let methods = if ablation {
+            volumetric_ablations()
+        } else {
+            all_methods()
+        };
         for (name, method) in methods {
             let o = Options {
                 geometry: ph.geometry(),
@@ -135,4 +118,75 @@ fn main() {
         std::fs::write(&p, format!("[\n  {}\n]\n", rows.join(",\n  "))).unwrap();
         println!("wrote {p}");
     }
+}
+
+/// Every method, with the settings of the table in `docs/performance.md`.
+fn all_methods() -> Vec<(&'static str, Method)> {
+    vec![
+        ("local", Method::Local),
+        ("multigrid", Method::multigrid()),
+        (
+            "regularized k=64",
+            Method::Regularized {
+                lambda: 1.0,
+                sigma: 1.9424,
+                neighbours: 64,
+                cutoff: 3.0,
+                init_from_local: false,
+                curvature: None,
+            },
+        ),
+        ("regularized k=500", Method::regularized()),
+        (
+            "reg+curvature",
+            Method::Regularized {
+                lambda: 1.0,
+                sigma: 1.9424,
+                neighbours: 64,
+                cutoff: 3.0,
+                init_from_local: false,
+                curvature: Some(CurvatureOptions::default()),
+            },
+        ),
+        // a shaft: every normal is in-plane, so the axial blur is tied
+        (
+            "volumetric",
+            Method::Volumetric(VolumetricOptions {
+                sigma_z: AxialBlur::Tied,
+                ..Default::default()
+            }),
+        ),
+    ]
+}
+
+/// The volumetric model and variants without its costliest parts.
+fn volumetric_ablations() -> Vec<(&'static str, Method)> {
+    let tied = VolumetricOptions {
+        sigma_z: AxialBlur::Tied,
+        ..Default::default()
+    };
+    vec![
+        ("volumetric", Method::Volumetric(tied.clone())),
+        (
+            "volumetric k=64",
+            Method::Volumetric(VolumetricOptions {
+                neighbours: 64,
+                ..tied.clone()
+            }),
+        ),
+        (
+            "volumetric, global densities",
+            Method::Volumetric(VolumetricOptions {
+                global_densities: true,
+                ..tied.clone()
+            }),
+        ),
+        (
+            "volumetric, no curvature",
+            Method::Volumetric(VolumetricOptions {
+                curvature: None,
+                ..tied
+            }),
+        ),
+    ]
 }

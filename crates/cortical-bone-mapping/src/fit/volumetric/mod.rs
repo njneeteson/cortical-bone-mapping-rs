@@ -51,6 +51,7 @@ use ndarray::ArrayView3;
 use self::band::{Band, BandSpec};
 use self::problem::{Prepared, VolumetricProblem, M, NV, RHO_B, RHO_S, SXY, SZ, T};
 use super::global::{minimise, Role};
+use super::profiles::{sampling_normals, NormalConstraint};
 use super::regularized::curvature_operator;
 use super::{global_settings, held_subset, FitConstraints, Nodes};
 use crate::error::Error;
@@ -59,8 +60,8 @@ use crate::operators::{CurvatureOperator, Neighbours, SmoothingOperator};
 use crate::options::{AxialBlur, Options, RhoCMode, VolumetricOptions};
 use crate::result::{CbmResult, FitInfo, VolumetricInfo};
 use crate::surface::mesh::Mesh;
-use crate::util::{quantile, scale, V3};
-use crate::volume::Voxel;
+use crate::util::{dot, quantile, scale, V3};
+use crate::volume::{Geometry, Voxel};
 
 /// Fit the volumetric model on the nodes `keep` of an (already smoothed)
 /// `surface`; see the module documentation. `warm_start` holds initial
@@ -76,7 +77,9 @@ pub(crate) fn fit_surface<T: Voxel>(
 ) -> Result<CbmResult, Error> {
     let t0 = Instant::now();
     let mut timings = Vec::new();
-    let nodes = FitNodes::new(&surface, keep)?;
+    let (d0, d1, d2) = image.dim();
+    let cut = ImageEdge::new([d0, d1, d2], &options.geometry);
+    let nodes = FitNodes::new(&surface, keep, options.sampling.normal_constraint, &cut)?;
     let band = Band::build(
         image,
         &surface,
@@ -118,7 +121,7 @@ pub(crate) fn fit_surface<T: Voxel>(
         vertex_ids: nodes.ids.clone(),
         points: nodes.mesh.vertices.clone(),
         faces: nodes.mesh.faces.clone(),
-        normals: nodes.normals.clone(),
+        normals: nodes.directions.clone(),
         params: out.params,
         residual: out.residual,
         rho_c,
@@ -133,23 +136,64 @@ pub(crate) fn fit_surface<T: Voxel>(
 }
 
 /// The fitted nodes: the sub-mesh of `keep`, the surface vertex of each
-/// node, inward vertex normals, and the fitted-face number of every surface
-/// face (`None` unless all its vertices are fitted).
+/// node, its inward normal and reporting direction, and the fitted-face
+/// number of every surface face (`None` unless all its vertices are
+/// fitted).
+///
+/// The model measures `m` and `t` along the surface normal (each voxel's
+/// direction to its closest point); the curvature penalty and the axial
+/// part of the PSF use the node's inward normal `n`. The results report
+/// them along the direction `d` of the sampling's normal constraint, as the
+/// 1D methods' profiles are: for a planar cortex, an edge at distance `x`
+/// along `n` lies at `x / (n · d)` along `d`, so reported values are the
+/// model's divided by `n · d` (and warm starts, which come in reported
+/// values, multiplied by it). Without a constraint `d = n`. On a shaft the
+/// in-plane constraint also keeps the reported edges from folding where the
+/// surface is rounded off at the image's cut ends, whose normals tilt
+/// towards the axis. That tilt is the rounding, not anatomy, so within
+/// [`ImageEdge::MARGIN`] voxels of the image's edge no conversion is made
+/// (`n · d` taken as 1); elsewhere it is clamped at [`MIN_COS`].
 struct FitNodes {
     mesh: Mesh,
     ids: Vec<u32>,
     normals: Vec<V3>,
+    directions: Vec<V3>,
+    /// `n · d`, at least [`MIN_COS`].
+    cos: Vec<f64>,
     fitted: Vec<Option<u32>>,
 }
 
+/// The smallest `n · d` used to convert between the model's and the
+/// reported distances (60°).
+const MIN_COS: f64 = 0.5;
+
+/// The edge of the image, where a bone that leaves it is cut.
+struct ImageEdge<'a> {
+    dims: [usize; 3],
+    geom: &'a Geometry,
+}
+
+impl<'a> ImageEdge<'a> {
+    /// Voxels from the edge within which the surface is the cut's rounding.
+    const MARGIN: f64 = 2.0;
+
+    fn new(dims: [usize; 3], geom: &'a Geometry) -> Self {
+        ImageEdge { dims, geom }
+    }
+
+    /// Whether physical point `p` is within [`Self::MARGIN`] voxels of the
+    /// image's edge.
+    fn near(&self, p: V3) -> bool {
+        let q = self.geom.to_index(p);
+        (0..3).any(|a| q[a] < Self::MARGIN || q[a] > self.dims[a] as f64 - 1.0 - Self::MARGIN)
+    }
+}
+
 impl FitNodes {
-    fn new(surface: &Mesh, keep: &[bool]) -> Result<Self, Error> {
+    fn new(surface: &Mesh, keep: &[bool], constraint: NormalConstraint, cut: &ImageEdge) -> Result<Self, Error> {
         let outward = surface.vertex_normals();
-        let keep: Vec<bool> = keep
-            .iter()
-            .zip(&outward)
-            .map(|(&k, n)| k && n.iter().any(|&c| c != 0.0))
-            .collect();
+        let dirs = sampling_normals(&outward, constraint);
+        let keep: Vec<bool> = keep.iter().zip(&dirs).map(|(&k, d)| k && d.is_some()).collect();
         let (mesh, ids) = surface.submesh(&keep);
         if ids.is_empty() || mesh.faces.is_empty() {
             return Err(Error::NoNodes);
@@ -165,11 +209,25 @@ impl FitNodes {
                 })
             })
             .collect();
-        let normals = ids.iter().map(|&v| scale(outward[v as usize], -1.0)).collect();
+        let normals: Vec<V3> = ids.iter().map(|&v| scale(outward[v as usize], -1.0)).collect();
+        let directions: Vec<V3> = ids.iter().map(|&v| dirs[v as usize].unwrap()).collect();
+        let cos = ids
+            .iter()
+            .zip(normals.iter().zip(&directions))
+            .map(|(&v, (n, d))| {
+                if cut.near(surface.vertices[v as usize]) {
+                    1.0
+                } else {
+                    dot(*n, *d).max(MIN_COS)
+                }
+            })
+            .collect();
         Ok(FitNodes {
             mesh,
             ids,
             normals,
+            directions,
+            cos,
             fitted,
         })
     }
@@ -378,8 +436,10 @@ impl<'a, 'c> Fit<'a, 'c> {
         self.nodes
             .ids
             .iter()
-            .map(|&v| match warm.and_then(|w| w[v as usize]) {
-                Some(p) => [p[PM], p[PT], p[PRS], p[PRB]],
+            .zip(&self.nodes.cos)
+            .map(|(&v, &c)| match warm.and_then(|w| w[v as usize]) {
+                // warm starts are in reported distances (along `d`)
+                Some(p) => [p[PM] * c, p[PT] * c, p[PRS], p[PRB]],
                 None => [global[M], global[T], global[RHO_S], global[RHO_B]],
             })
             .collect()
@@ -453,7 +513,15 @@ impl<'a, 'c> Fit<'a, 'c> {
             .map(|v| {
                 let a2 = self.nodes.normals[v][axis].powi(2);
                 let sn = (scalars[SXY].powi(2) * (1.0 - a2) + scalars[SZ].powi(2) * a2).sqrt();
-                [values[M][v], values[T][v], sn, values[RHO_S][v], values[RHO_B][v]]
+                // reported along `d` (FitNodes)
+                let c = self.nodes.cos[v];
+                [
+                    values[M][v] / c,
+                    values[T][v] / c,
+                    sn,
+                    values[RHO_S][v],
+                    values[RHO_B][v],
+                ]
             })
             .collect();
         let rel = reliability::assess(&prep, x, global_psf(&scalars), axis);

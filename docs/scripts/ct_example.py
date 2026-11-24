@@ -3,7 +3,8 @@
     python docs/scripts/ct_example.py DICOM_FOLDER [--crop Z0:Z1,Y0:Y1,X0:X1]
         [--threshold otsu|VALUE] [--otsu-floor HU] [--min-volume MM3] [--max-bones N]
         [--landmark NAME=Z,Y,X ...] [--hysteresis auto|off|VALUE] [--closing MM]
-        [--outside MM] [--rounds N] [--no-exclude] [--progress N] [--slices Z,Y,X]
+        [--outside MM] [--rounds N] [--no-exclude] [--method regularized|volumetric]
+        [--progress N] [--slices Z,Y,X]
         [--figures PREFIX] [--vtk OUTDIR] [--cache FILE]
 
 Every processing step is a library call; this script only reads the DICOM
@@ -35,7 +36,10 @@ series (or a .npy volume with ``--spacing``), crops it, and draws figures.
    no surface moves into another bone (``--no-exclude`` turns this off;
    ``--rounds`` repeats the pass over the bones).
    A progress line every ``--progress`` solver iterations and after every
-   fit.
+   fit. ``--method volumetric`` uses the volumetric model as the inner fit.
+   The bones share the scanner, so they share its PSF: it is fitted once,
+   to all the bones' starting surfaces together, and held in the per-bone
+   refinements.
 
 Figures: ``PREFIX_threshold.png``, ``PREFIX_segmentation.png``,
 ``PREFIX_refinement.gif``, ``PREFIX_thickness.png``.
@@ -155,6 +159,11 @@ def run(a):
                 half_width_inside=a.half_width,
                 rho_c=a.rho_c if a.rho_c == "estimate" else float(a.rho_c))
     t0 = time.perf_counter()
+    psf = None
+    if a.method == "volumetric":
+        psf = scan_psf(img, starts, spacing, replace(o, method="volumetric", vol_scanner_axis=0))
+        print(f"PSF of the scan (all bones): {psf[0]:.3f} mm in-plane, {psf[1]:.3f} mm axial", flush=True)
+        o = replace(o, method="volumetric", vol_scanner_axis=0, vol_sigma_xy=psf[0], vol_sigma_z=psf[1])
     results = cbm.refine_bones(img, starts, spacing, options=o, refine=REFINE, names=names,
                                progress_every=a.progress, origin=origin, exclude_others=not a.no_exclude,
                                rounds=a.rounds)
@@ -168,8 +177,15 @@ def run(a):
     hist = np.histogram(body, bins=np.linspace(a.otsu_floor, float(body.max()), 440))
     return dict(img=img, spacing=spacing, origin=origin, threshold=thr, labels=labels, hulls=hulls, seeds=seeds,
                 low_threshold=low, outside=a.outside, half_width=a.half_width, rho_c_option=a.rho_c, rounds=a.rounds, exclude=not a.no_exclude,
-                starts=starts, closing=a.closing,
+                starts=starts, closing=a.closing, method=a.method, psf=psf,
                 names=names, used=used, results=results, hist=hist)
+
+
+def scan_psf(img, starts, spacing, options):
+    """The scan's PSF ``(sigma_xy, sigma_z)``: one volumetric fit of all the
+    bones' surfaces together (one mesh component per bone)."""
+    r = cbm.cortical_bone_mapping(img, starts > 0, spacing, options=options)
+    return r.volumetric["sigma_xy"], r.volumetric["sigma_z"]
 
 
 # ---------------------------------------------------------------- figures
@@ -361,6 +377,8 @@ def main(argv=None):
     ap.add_argument("--rho-c", default="estimate",
                     help="cortical density: 'estimate' (default, per bone) or a value in image units")
     ap.add_argument("--rounds", type=int, default=1, help="passes over all bones (default 1)")
+    ap.add_argument("--method", default="regularized", choices=("regularized", "volumetric"),
+                    help="inner fit (default regularized; volumetric fits the scan's PSF to all bones first)")
     ap.add_argument("--no-exclude", action="store_true",
                     help="do not exclude the other bones' regions while refining a bone")
     ap.add_argument("--closing", type=float, default=4.0,

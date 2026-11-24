@@ -150,27 +150,33 @@ See [method](docs/method.md#cortical-density).
 ## Results at a glance
 
 * **Accuracy.** On smooth phantoms the spatially constrained methods reduce
-  thickness error 1.5–5× relative to the local fit
+  thickness error 1.5–5 times relative to the local fit
   ([examples](docs/examples.md)).
+* **Volumetric model.** On phantoms of the distal radius and tibia at HR-pQCT
+  resolution, the volumetric model is nearly unbiased, with a third of the
+  regularised fit's thickness error and 5–11 times its precision; at
+  clinical resolution it is as good as the best 1D fit, and its PSF is
+  recovered to within about 10%. Refinement with it is not yet reliable
+  ([volumetric validation](docs/volumetric_validation.md)).
 * **Automatic segmentation.** On phantoms built from published HR-pQCT
-  values, hull → CBM refinement with the curvature penalty is as good as or
-  better than Buie on every shaft (thickness RMSE 40–85 µm). It corrects
-  Buie's −0.13 mm bias on a thin porous cortex (cortex Dice 0.81 → 0.93) and
-  bridges a 1.2 mm cortical break that makes Buie's marrow leak into the
-  cortex. Still hard: a neighbouring bone within the outside sampling range
-  (0.5 mm gap) and the knee's subchondral plate
-  ([segmentation](docs/segmentation.md)).
+  values, starting from a convex hull, CBM matches or beats Buie's
+  dual-threshold method on every shaft: thickness RMSE 28–45 µm for the
+  volumetric model on the healthy, osteoporotic and neighbour shafts, and
+  40–85 µm for refinement with the curvature penalty where Buie is
+  unbiased. It corrects Buie's −0.13 mm bias on a thin porous cortex (cortex
+  Dice 0.81 → 0.93–0.96), and the curvature penalty bridges a 1.2 mm
+  cortical break that makes Buie's marrow leak into the cortex. The knee's
+  subchondral plate is still hard ([segmentation](docs/segmentation.md)).
 * **Real data.** On a clinical knee CT, all four bones (femur, tibia,
-  patella, fibula) are segmented and mapped from the image alone in 138 s.
-  Each converges in 5–7 moves, with the femoral notch followed
-  ([clinical CT](docs/clinical_ct.md)). Getting there took hysteresis
-  thresholding, a local convex hull start, per-node densities, remeshing,
-  regional convergence and excluding the other bones
-  ([refinement experiments](docs/refinement_experiments.md)).
+  patella, fibula) are segmented and mapped from the image alone in 138 s,
+  each converging in 5–7 moves with the femoral notch followed
+  ([clinical CT](docs/clinical_ct.md),
+  [refinement experiments](docs/refinement_experiments.md)).
 * **Speed and memory.** Against the original Python implementation (Bonelab)
-  on the same profiles, the local fit is ~420× faster, multigrid ~45× and the
-  regularised fit ~10–20× (against a converged solve), with equal or better
-  accuracy; 134k nodes take 2–22 s and 0.1–0.75 GB
+  on the same profiles, the local fit is about 420 times faster, multigrid
+  45 times and the regularised fit 10–20 times (against a converged solve),
+  with equal or better accuracy. At 134k nodes the 1D methods take 2–15 s
+  and 0.1–0.8 GB, the volumetric model 41 s and 2 GB
   ([performance](docs/performance.md)).
 
 ![Methods on a noisy phantom](docs/images/methods_comparison.png)

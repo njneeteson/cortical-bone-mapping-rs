@@ -56,6 +56,8 @@ fn all_methods_are_accurate_on_a_noisy_cylinder() {
             ),
             0.02,
         ),
+        // a shaft: every normal is in-plane, so the axial blur is tied
+        ("volumetric", volumetric_tied(), 0.02),
     ];
     for (name, method, tol) in cases {
         let r = run(img.view(), mask.view(), NO_SUB, &options(&ph, method)).unwrap();
@@ -92,8 +94,14 @@ fn spatial_constraints_improve_precision_under_heavy_noise() {
         ),
     )
     .unwrap();
+    let vol = run(img.view(), mask.view(), NO_SUB, &options(&ph, volumetric_tied())).unwrap();
     let e_local = thickness_error(&ph, &local).1;
-    for (name, r) in [("regularized", &reg), ("curvature", &curv), ("multigrid", &mg)] {
+    for (name, r) in [
+        ("regularized", &reg),
+        ("curvature", &curv),
+        ("multigrid", &mg),
+        ("volumetric", &vol),
+    ] {
         let e = thickness_error(&ph, r).1;
         assert!(e < 0.6 * e_local, "{name}: rmse {e} vs local {e_local}");
     }

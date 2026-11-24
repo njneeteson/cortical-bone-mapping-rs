@@ -248,9 +248,9 @@ pub struct VolumetricOptions {
     /// roughly one profile's worth of voxels and the precision is that of the
     /// local fit. The default weight 0.3 is the best compromise over the
     /// phantoms (`docs/volumetric_validation.md`): thickness RMS error
-    /// against weights 0.1 and 1.0 of 0.0079 (0.0070, 0.0107) and 0.0088
-    /// (0.0100, 0.0106) mm on the shell at noise 30 and 120, 0.032 (0.042,
-    /// 0.026) mm on the distal radius, 0.063 (0.063, 0.065) mm on the
+    /// against weights 0.1 and 1.0 of 0.0077 (0.0069, 0.0106) and 0.0087
+    /// (0.0099, 0.0104) mm on the shell at noise 30 and 120, 0.029 (0.041,
+    /// 0.021) mm on the distal radius, 0.063 (0.063, 0.065) mm on the
     /// proximal femur and 0.162 (0.158, 0.166) mm on the knee. Heavier
     /// weights suit HR-pQCT; at clinical resolution the choice matters little.
     pub curvature: Option<CurvatureOptions>,

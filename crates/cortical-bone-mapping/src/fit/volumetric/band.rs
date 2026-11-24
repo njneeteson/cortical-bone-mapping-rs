@@ -28,10 +28,11 @@
 
 use std::collections::{HashMap, HashSet};
 
-use ndarray::ArrayView3;
+use ndarray::{Array3, ArrayView3};
 use rayon::prelude::*;
 
 use crate::model::residual_weight;
+use crate::segmentation::morphology::scaled_sq_distance;
 use crate::surface::closest::MeshPoints;
 use crate::surface::mesh::Mesh;
 use crate::surface::voxelize::index_box;
@@ -130,6 +131,11 @@ fn samples<T: Voxel>(image: &ArrayView3<T>, mesh: &Mesh, fitted: &[Option<u32>],
     let real = RealSurface::new(mesh, [d0, d1, d2], spec.geom);
     let points = MeshPoints::new(&real.mesh);
     let h = spec.geom.spacing.iter().cloned().fold(0.0, f64::max);
+    // the surface passes within a voxel diagonal of the voxelisation's
+    // boundary, so a voxel more than `reach + 2h` from that boundary is out
+    // of the band: skip it without the closest-point search
+    let near = boundary_distance2(&inside, spec.geom.spacing);
+    let far2 = ((reach + 2.0 * h) * (reach + 2.0 * h)) as f32;
     let step = spec.stride.max(1);
     (lo[0]..=hi[0])
         .step_by(step)
@@ -139,7 +145,9 @@ fn samples<T: Voxel>(image: &ArrayView3<T>, mesh: &Mesh, fitted: &[Option<u32>],
             let mut out = Vec::new();
             for j in (lo[1]..=hi[1]).step_by(step) {
                 for k in (lo[2]..=hi[2]).step_by(step) {
-                    if spec.exclude.as_ref().is_some_and(|e| e[[i, j, k]]) {
+                    if near[[i - lo[0], j - lo[1], k - lo[2]]] > far2
+                        || spec.exclude.as_ref().is_some_and(|e| e[[i, j, k]])
+                    {
                         continue;
                     }
                     let q = spec.geom.to_physical([i as f64, j as f64, k as f64]);
@@ -172,6 +180,30 @@ fn samples<T: Voxel>(image: &ArrayView3<T>, mesh: &Mesh, fitted: &[Option<u32>],
             out
         })
         .collect()
+}
+
+/// Squared physical distance of every voxel to the nearest boundary voxel of
+/// `inside` (a voxel with a 6-neighbour on the other side, or on the edge of
+/// the box).
+fn boundary_distance2(inside: &Array3<bool>, spacing: [f64; 3]) -> Array3<f32> {
+    let (n0, n1, n2) = inside.dim();
+    let boundary = Array3::from_shape_fn((n0, n1, n2), |(i, j, k)| {
+        let v = inside[[i, j, k]];
+        let differs = |a: usize, b: usize, c: usize| inside[[a, b, c]] != v;
+        i == 0
+            || j == 0
+            || k == 0
+            || i + 1 == n0
+            || j + 1 == n1
+            || k + 1 == n2
+            || differs(i - 1, j, k)
+            || differs(i + 1, j, k)
+            || differs(i, j - 1, k)
+            || differs(i, j + 1, k)
+            || differs(i, j, k - 1)
+            || differs(i, j, k + 1)
+    });
+    scaled_sq_distance(&boundary, spacing.map(|h| 1.0 / h))
 }
 
 /// The bone's real surface: the mesh without its caps (the faces closing a
@@ -307,6 +339,40 @@ mod tests {
     use super::*;
     use crate::surface::mesh::Mesh;
     use ndarray::Array3;
+
+    /// The far-voxel test (`boundary_distance2`) never drops a voxel that
+    /// the closest-point search would have put in the band.
+    #[test]
+    fn pruning_keeps_every_band_voxel() {
+        let mut mesh = Mesh::uv_sphere(5.5, 48, 32);
+        for v in &mut mesh.vertices {
+            *v = crate::util::add(*v, [9.0, 9.3, 8.7]);
+        }
+        let spacing = [0.9, 1.1, 1.0];
+        let geom = Geometry::new(spacing);
+        let dims = [20usize, 18, 20];
+        let (outside, inside): (f64, f64) = (2.0, 2.5);
+        let inside_mask = mesh.voxelize((dims[0], dims[1], dims[2]), &geom);
+        let near = boundary_distance2(&inside_mask, spacing);
+        let h: f64 = 1.1;
+        let far2 = ((inside.max(outside) + 2.0 * h).powi(2)) as f32;
+        let points = MeshPoints::new(&mesh);
+        let mut in_band = 0;
+        for i in 0..dims[0] {
+            for j in 0..dims[1] {
+                for k in 0..dims[2] {
+                    let q = geom.to_physical([i as f64, j as f64, k as f64]);
+                    let Some(c) = points.closest(q, 100.0) else { continue };
+                    let depth = if inside_mask[[i, j, k]] { c.dist } else { -c.dist };
+                    if (-outside..=inside).contains(&depth) {
+                        in_band += 1;
+                        assert!(near[[i, j, k]] <= far2, "voxel {:?} at depth {depth} pruned", [i, j, k]);
+                    }
+                }
+            }
+        }
+        assert!(in_band > 1000);
+    }
 
     #[test]
     fn sphere_band_has_the_right_depths_and_normals() {

@@ -56,6 +56,15 @@ pub fn regularized(neighbours: usize, curvature: Option<CurvatureOptions>) -> Me
     }
 }
 
+/// The volumetric model with the axial blur tied to the in-plane one (for
+/// shafts, whose normals are all in-plane).
+pub fn volumetric_tied() -> Method {
+    Method::Volumetric(VolumetricOptions {
+        sigma_z: AxialBlur::Tied,
+        ..Default::default()
+    })
+}
+
 /// (bias, rmse) of fitted thickness against the phantom truth.
 pub fn thickness_error(ph: &ShellPhantom, r: &CbmResult) -> (f64, f64) {
     let e: Vec<f64> = r

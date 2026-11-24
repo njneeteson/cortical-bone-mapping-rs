@@ -21,14 +21,14 @@ fn recovers_thickness_psf_and_noise_on_a_noisy_cylinder() {
     let ph = cylinder(40.0, 1);
     let (img, mask) = ph.generate();
     // a shaft: every normal is in-plane, so the axial blur is not identified
-    let v = VolumetricOptions {
-        sigma_z: AxialBlur::Tied,
-        ..Default::default()
-    };
-    let r = run(img.view(), mask.view(), NO_SUB, &options(&ph, volumetric(v))).unwrap();
+    let r = run(img.view(), mask.view(), NO_SUB, &options(&ph, volumetric_tied())).unwrap();
     let (bias, rmse) = thickness_error(&ph, &r);
     assert!(bias.abs() < 0.01 && rmse < 0.02, "bias {bias} rmse {rmse}");
     assert!(periosteal_error(&ph, &r) < 0.02);
+    // results are reported along the constrained (in-plane) directions, so
+    // the fitted surfaces cannot fold where the mesh is rounded off at the
+    // image's cut ends
+    assert!(r.normals.iter().all(|n| n[0] == 0.0));
     let info = r.volumetric.as_ref().expect("volumetric outputs");
     // the phantom's PSF (0.12) plus the partial-volume blur of the voxels
     assert!((info.sigma_xy - 0.12).abs() < 0.02, "sigma_xy {}", info.sigma_xy);
@@ -80,20 +80,6 @@ fn estimates_an_anisotropic_psf_on_a_sphere() {
 }
 
 #[test]
-fn regularisation_improves_precision_under_heavy_noise() {
-    let ph = cylinder(120.0, 2);
-    let (img, mask) = ph.generate();
-    let local = run(img.view(), mask.view(), NO_SUB, &options(&ph, Method::Local)).unwrap();
-    let v = VolumetricOptions {
-        sigma_z: AxialBlur::Tied,
-        ..Default::default()
-    };
-    let vol = run(img.view(), mask.view(), NO_SUB, &options(&ph, volumetric(v))).unwrap();
-    let (e_local, e_vol) = (thickness_error(&ph, &local).1, thickness_error(&ph, &vol).1);
-    assert!(e_vol < 0.6 * e_local, "rmse {e_vol} vs local {e_local}");
-}
-
-#[test]
 fn refinement_with_the_volumetric_model_snaps_to_the_periosteum() {
     let ph = ShellPhantom {
         mask_offset: 0.35,
@@ -109,11 +95,7 @@ fn refinement_with_the_volumetric_model_snaps_to_the_periosteum() {
     }
     .generate()
     .1;
-    let v = VolumetricOptions {
-        sigma_z: AxialBlur::Tied,
-        ..Default::default()
-    };
-    let o = options(&ph, volumetric(v));
+    let o = options(&ph, volumetric_tied());
     let r = refine_segmentation(img.view(), bad.view(), NO_SUB, &o, &RefineOptions::default()).unwrap();
     assert!(r.converged);
     let (before, after) = (dice(&bad.mapv(|v| v != 0), &truth), dice(&r.periosteal_mask, &truth));

@@ -47,6 +47,14 @@ fn main() {
             },
             SigmaMode::Free,
         ),
+        (
+            "volumetric",
+            Method::Volumetric(VolumetricOptions {
+                sigma_z: AxialBlur::Tied,
+                ..Default::default()
+            }),
+            SigmaMode::Free,
+        ),
     ];
     for (name, method, sigma) in methods {
         let mut o = base.clone();
