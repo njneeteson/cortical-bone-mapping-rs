@@ -25,6 +25,37 @@ pub(crate) fn voxelize<'py>(
     Ok(out.into_pyarray(py))
 }
 
+/// The curvature measure at every vertex of a mesh (see
+/// `cbm::mesh_curvature`).
+#[pyfunction]
+#[pyo3(signature = (vertices, faces, measure, scale, neighbours, distance))]
+pub(crate) fn mesh_curvature<'py>(
+    py: Python<'py>,
+    vertices: PyReadonlyArray2<'py, f64>,
+    faces: PyReadonlyArray2<'py, u32>,
+    measure: &str,
+    scale: Option<f64>,
+    neighbours: usize,
+    distance: &str,
+) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
+    let mesh = mesh_from(vertices, faces)?;
+    let measure = match measure {
+        "mean" => cbm::CurvatureMeasure::Mean,
+        "total" => cbm::CurvatureMeasure::Total,
+        o => return Err(PyValueError::new_err(format!("unknown measure {o:?}"))),
+    };
+    let distance = match distance {
+        "euclidean" => cbm::Distance::Euclidean,
+        "surface" => cbm::Distance::Surface,
+        o => return Err(PyValueError::new_err(format!("unknown distance {o:?}"))),
+    };
+    if scale.is_some_and(|s| s.is_nan() || s <= 0.0) || neighbours < 3 {
+        return Err(PyValueError::new_err("scale must be positive and neighbours >= 3"));
+    }
+    let out = py.detach(|| cbm::mesh_curvature(&mesh, measure, scale, neighbours, distance));
+    Ok(out.into_pyarray(py))
+}
+
 /// Write a mesh with point data as legacy binary VTK PolyData.
 #[pyfunction]
 #[pyo3(signature = (path, vertices, faces, scalars, vectors))]

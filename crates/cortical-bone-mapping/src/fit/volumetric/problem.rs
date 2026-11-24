@@ -455,16 +455,15 @@ impl<'a> VolumetricProblem<'a> {
             }
         }
         if let Some(cv) = self.curvature {
-            let cd = cv.gram_diag();
+            let (cm, ct) = cv.gram_diag();
             for (fi, &c) in lay.fields.iter().enumerate() {
-                // two surfaces: m gets 2D, t gets 2D/4 (cross terms cancel)
-                let k = match c {
-                    M => 2.0,
-                    T => 0.5,
-                    _ => 0.0,
+                let cd = match c {
+                    M => &cm,
+                    T => &ct,
+                    _ => continue,
                 };
                 for v in 0..n {
-                    d[v * nfc + fi] += k * cd[v];
+                    d[v * nfc + fi] += cd[v];
                 }
             }
         }

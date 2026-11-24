@@ -204,7 +204,9 @@ surfaces `S_peri = V + (m − t/2) n` and `S_endo = V + (m + t/2) n`, using a
 fixed discrete Laplace–Beltrami operator `L` of the input surface `V`, with
 `½ L S ≈ H n` and the scalar mean curvature taken as the normal component
 `H_i = n_i · ½ (L S)_i`, which is robust to the tangential drift of
-point-cloud Laplacians on irregular sampling. There are two modes:
+point-cloud Laplacians on irregular sampling. There are three modes (see
+[volumetric_refinement.md](volumetric_refinement.md#1-curvature-penalties)
+for how they compare in refinement):
 
 - `"change"` penalises the curvature added by the fit, in excess of the
   parallel surface of `V` at the local offset. To first order
@@ -215,10 +217,22 @@ point-cloud Laplacians on irregular sampling. There are two modes:
   meant to be more curved than the periosteal one: −0.6 mm on the cylinder
   phantom.) The residual per node and surface is
   `r = √(μ/N) · ρc · ℓ · n_i · ½ Σ_k L_ik (d_k − d_i) n_k`, linear in `(m, t)`.
-- `"excess"` penalises absolute mean curvature above a threshold `κ`,
-  `r = √(μ/N) · ρc · ℓ · max(0, |H_i| − κ)`, leaving curvature below `κ`
-  free (Gauss–Newton with the active set and sign re-evaluated each
-  iteration).
+- `"absolute"` penalises the curvature of the fitted surface above a
+  threshold `κ`, `r = √(μ/N) · ρc · ℓ · max(0, K_i − κ)`, leaving curvature
+  below `κ` free (Gauss–Newton with the active set re-evaluated each
+  iteration). `K` is `|κ₁ + κ₂| = 2|H|` (`curvature_measure="mean"`) or
+  `√(κ₁² + κ₂²)` (`"total"`, from a weighted quadric fit to the neighbours
+  in each node's tangent plane), which is not zero at a saddle. Both equal
+  the contour curvature `1/R` on a shaft; the default `κ = 5 mm⁻¹` is the
+  contour-curvature threshold of our HR-pQCT segmentation network (Neeteson
+  et al. 2023).
+- `"variation"` penalises how fast the curvature changes along the surface,
+  `½ ∫ |∇(κ₁ + κ₂)|²` (after the minimum-variation surfaces of Moreton &
+  Séquin 1992), with the neighbours and weights of the Laplacian: smoothly
+  curved bone is free, bumps and dents are not. It is quadratic in `(m, t)`,
+  with `ℓ²` in place of `ℓ`.
+
+The endosteal surface can take its own weight (`curvature_endosteal_weight`).
 
 `ℓ` (by default the globally fitted thickness `t0`) makes curvature
 dimensionless, so that `μ` plays the same role as `λ`. Either or both

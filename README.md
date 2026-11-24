@@ -205,6 +205,9 @@ See [method](docs/method.md#cortical-density).
   volumetric model against the 1D methods on phantoms of the distal radius
   and tibia (HR-pQCT) and the proximal femur and knee (clinical CT), and on
   the clinical knee.
+* **[docs/volumetric_refinement.md](docs/volumetric_refinement.md)**: work in
+  progress on making refinement with the volumetric model converge, phase by
+  phase.
 * **[docs/performance.md](docs/performance.md)**: run time and memory, and
   comparisons with the original Python implementation and with SciPy.
 
@@ -212,8 +215,9 @@ See [method](docs/method.md#cortical-density).
 
 * **Methods**: `local` (Treece et al.), `multigrid` and `regularized`
   (Neeteson & Boyd), the latter optionally with the curvature penalty
-  (`"change"`: curvature added by the fit; `"excess"`: curvature above a
-  threshold), or with the curvature penalty alone; `volumetric` (extension),
+  (`"change"`: curvature added by the fit; `"absolute"`: curvature above a
+  threshold; `"variation"`: how fast the curvature changes), or with the
+  curvature penalty alone; `volumetric` (extension),
   with a global PSF, the curvature penalty on the edges, smoothed density
   fields, and per-node reliability (local standard error, data share,
   misfit).

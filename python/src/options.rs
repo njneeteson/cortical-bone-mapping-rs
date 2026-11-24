@@ -174,7 +174,8 @@ fn parse_curvature(d: &Bound<'_, PyDict>, mode_key: &str, weight_key: &str) -> P
     let mode = match opt::<String>(d, mode_key)?.as_deref() {
         None | Some("none") => return Ok(None),
         Some("change") => cbm::CurvatureMode::Change,
-        Some("excess") => cbm::CurvatureMode::Excess {
+        Some("variation") => cbm::CurvatureMode::Variation,
+        Some("absolute") => cbm::CurvatureMode::Absolute {
             kappa: req(d, "curvature_kappa")?,
         },
         Some(o) => return Err(unknown("curvature mode", o)),
@@ -185,9 +186,16 @@ fn parse_curvature(d: &Bound<'_, PyDict>, mode_key: &str, weight_key: &str) -> P
         "endosteal" => (false, true),
         o => return Err(unknown("curvature_surfaces", o)),
     };
+    let measure = match req::<String>(d, "curvature_measure")?.as_str() {
+        "mean" => cbm::CurvatureMeasure::Mean,
+        "total" => cbm::CurvatureMeasure::Total,
+        o => return Err(unknown("curvature_measure", o)),
+    };
     Ok(Some(cbm::CurvatureOptions {
         mode,
+        measure,
         weight: req(d, weight_key)?,
+        endosteal_weight: opt(d, "curvature_endosteal_weight")?,
         length: opt(d, "curvature_length")?,
         periosteal,
         endosteal,

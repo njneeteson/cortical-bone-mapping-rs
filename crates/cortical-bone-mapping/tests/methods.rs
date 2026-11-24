@@ -42,15 +42,45 @@ fn all_methods_are_accurate_on_a_noisy_cylinder() {
         ("regularized", regularized(100, None), 0.02),
         (
             "curvature-change",
-            regularized(100, Some(CurvatureOptions::default())),
-            0.02,
-        ),
-        (
-            "curvature-excess",
             regularized(
                 100,
                 Some(CurvatureOptions {
-                    mode: CurvatureMode::Excess { kappa: 0.5 },
+                    mode: CurvatureMode::Change,
+                    ..Default::default()
+                }),
+            ),
+            0.02,
+        ),
+        (
+            "curvature-absolute-mean",
+            regularized(
+                100,
+                Some(CurvatureOptions {
+                    mode: CurvatureMode::Absolute { kappa: 0.5 },
+                    ..Default::default()
+                }),
+            ),
+            0.02,
+        ),
+        (
+            "curvature-absolute-total",
+            regularized(
+                100,
+                Some(CurvatureOptions {
+                    mode: CurvatureMode::Absolute { kappa: 0.5 },
+                    measure: CurvatureMeasure::Total,
+                    ..Default::default()
+                }),
+            ),
+            0.02,
+        ),
+        (
+            "curvature-variation",
+            regularized(
+                100,
+                Some(CurvatureOptions {
+                    mode: CurvatureMode::Variation,
+                    weight: 0.1,
                     ..Default::default()
                 }),
             ),
@@ -166,7 +196,7 @@ fn fixed_sigma_and_psf_modes() {
 }
 
 #[test]
-fn excess_curvature_with_huge_threshold_is_a_no_op() {
+fn absolute_curvature_with_huge_threshold_is_a_no_op() {
     let ph = cylinder(40.0, 3);
     let (img, mask) = ph.generate();
     let a = run(img.view(), mask.view(), NO_SUB, &options(&ph, regularized(64, None))).unwrap();
@@ -179,7 +209,7 @@ fn excess_curvature_with_huge_threshold_is_a_no_op() {
             regularized(
                 64,
                 Some(CurvatureOptions {
-                    mode: CurvatureMode::Excess { kappa: 1e6 },
+                    mode: CurvatureMode::Absolute { kappa: 1e6 },
                     weight: 100.0,
                     ..Default::default()
                 }),

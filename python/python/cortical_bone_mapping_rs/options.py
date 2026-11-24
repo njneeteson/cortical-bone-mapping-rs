@@ -125,14 +125,27 @@ class Options:
     **Curvature penalty** (``method="regularized"`` only; extension)
 
     curvature
-        ``None``, ``"change"`` (penalise curvature added to the fitted
-        periosteal/endosteal surfaces relative to the parallel surface of the
-        input, ~ Laplacian of the offset; uniform offsets are free) or
-        ``"excess"`` (penalise mean curvature above ``curvature_kappa``,
-        1/length).
+        ``None``, ``"absolute"`` (penalise the curvature of the fitted
+        periosteal/endosteal surfaces above ``curvature_kappa``, 1/length;
+        ``curvature_kappa=0`` prefers a flat surface; the default, 5 / mm, is
+        the contour curvature threshold of Neeteson et al. 2023, from real
+        HR-pQCT radius and tibia segmentations), ``"variation"`` (penalise
+        how fast the curvature changes along the surface, ``|grad(k1 + k2)|^2``:
+        smoothly curved bone is free, bumps and dents are not; mean curvature
+        only) or ``"change"`` (penalise curvature added relative to the
+        parallel surface of the input, so uniform offsets are free; over a
+        refinement its reference moves with the surface).
+    curvature_measure
+        ``"mean"`` (``|k1 + k2| = 2|H|``) or ``"total"``
+        (``sqrt(k1^2 + k2^2)``, which unlike ``H`` is not zero at a saddle);
+        both equal the contour curvature ``1/R`` on a shaft. ``"absolute"``
+        only.
     curvature_weight
         Weight ``mu``. The residual is
-        ``sqrt(mu / N) * rho_c * curvature_length * curvature``.
+        ``sqrt(mu / N) * rho_c * curvature_length * max(0, curvature - kappa)``.
+    curvature_endosteal_weight
+        Weight of the endosteal surface (``None`` = the same as the
+        periosteal one).
     curvature_length
         Length scale (``None`` = globally fitted thickness).
     curvature_scale, curvature_neighbours
@@ -161,8 +174,8 @@ class Options:
         One global ``rho_s`` and ``rho_b`` instead of fields.
     vol_curvature, vol_curvature_weight
         The curvature penalty on the fitted surfaces (the regulariser of
-        ``m, t``): ``"change"``, ``"excess"`` or ``None``, with its weight;
-        ``curvature_kappa``, ``curvature_length``, ``curvature_scale``,
+        ``m, t``): ``"absolute"``, ``"variation"``, ``"change"`` or ``None``, with its weight;
+        ``curvature_kappa``, ``curvature_measure``, ``curvature_length``, ``curvature_scale``,
         ``curvature_neighbours`` and ``curvature_surfaces`` apply.
     vol_voxel_stride
         Use every n-th voxel along each axis.
@@ -237,9 +250,11 @@ class Options:
     init_from_local: bool = False
     init_from_global: bool = True
     # curvature
-    curvature: Optional[Literal["change", "excess"]] = None
+    curvature: Optional[Literal["absolute", "variation", "change"]] = None
+    curvature_measure: Literal["mean", "total"] = "mean"
     curvature_weight: float = 1.0
-    curvature_kappa: float = 0.5
+    curvature_kappa: float = 5.0
+    curvature_endosteal_weight: Optional[float] = None
     curvature_length: Optional[float] = None
     curvature_scale: Optional[float] = 0.25
     curvature_neighbours: int = 64
@@ -250,7 +265,7 @@ class Options:
     vol_sigma_z: Union[Literal["fit", "tied"], float] = "fit"
     vol_lambda: float = 1.0
     vol_global_densities: bool = False
-    vol_curvature: Optional[Literal["change", "excess"]] = "change"
+    vol_curvature: Optional[Literal["absolute", "variation", "change"]] = "change"
     vol_curvature_weight: float = 0.3
     vol_voxel_stride: int = 1
     # neighbourhoods

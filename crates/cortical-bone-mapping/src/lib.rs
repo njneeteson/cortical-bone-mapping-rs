@@ -105,7 +105,7 @@ pub mod volume;
 pub use error::Error;
 pub use fit::profiles::NormalConstraint;
 pub use fit::psf::PsfModel;
-pub use operators::{CurvatureMode, Distance};
+pub use operators::{mesh_curvature, CurvatureMeasure, CurvatureMode, Distance};
 pub use options::{
     AxialBlur, CurvatureOptions, Method, ModelOptions, Options, RhoCMode, SamplingOptions, SigmaMode, Site,
     SolverOptions, SurfaceOptions, VolumetricOptions,

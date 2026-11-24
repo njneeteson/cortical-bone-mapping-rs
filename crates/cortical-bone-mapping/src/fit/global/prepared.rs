@@ -40,7 +40,7 @@ struct Prepared<'p, 'a> {
     problem: &'p Problem<'a>,
     lay: Layout,
     smooth_diag: Option<Vec<f64>>,
-    curv_diag: Option<Vec<f64>>,
+    curv_diag: Option<(Vec<f64>, Vec<f64>)>,
     template: State,
 }
 

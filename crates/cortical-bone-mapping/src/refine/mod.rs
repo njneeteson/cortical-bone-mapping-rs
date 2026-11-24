@@ -58,6 +58,7 @@
 //!   Computational Physics 79(1):12–49, 1988.
 
 mod diagnosis;
+mod fill;
 mod motion;
 mod options;
 mod state;
@@ -81,7 +82,8 @@ use crate::surface::mesh::{Adjacency, Mesh};
 use crate::util::{dot, norm, V3};
 use crate::volume::Voxel;
 use diagnosis::{max_regional_rms, stall_diagnosis};
-use motion::{displacements, harmonic_fill, locked_axes, move_level_set, move_vertices, Step};
+use fill::harmonic_fill;
+use motion::{displacements, locked_axes, move_level_set, move_vertices, Step};
 use state::{Freeze, NodeState};
 
 /// Refine the outer-surface segmentation `mask` of `image`.
@@ -430,7 +432,7 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
                 step.known[v] = true;
             }
         }
-        harmonic_fill(&self.adj, &step.known, &mut step.disp, 50);
+        harmonic_fill(&self.adj, &step.known, &mut step.disp);
         if let Some(fz) = &self.freeze {
             fz.update(&mut self.state, &self.mesh, &step);
         }

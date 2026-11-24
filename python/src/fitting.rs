@@ -83,6 +83,24 @@ pub(crate) fn run<'py>(
     result_dict(py, &res)
 }
 
+/// Vertices, faces and cap flags of a surface.
+type SurfaceArrays<'py> = (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<u32>>, Vec<bool>);
+
+/// The smoothed surface of a mask, as the pipeline extracts it: vertices,
+/// faces, and whether each vertex lies on a cap cut by the image edge.
+#[pyfunction]
+#[pyo3(signature = (mask, options))]
+pub(crate) fn mask_surface<'py>(
+    py: Python<'py>,
+    mask: PyReadonlyArray3<'py, u8>,
+    options: &Bound<'py, PyDict>,
+) -> PyResult<SurfaceArrays<'py>> {
+    let opts = parse_options(options)?;
+    let m = mask.as_array();
+    let (mesh, border) = py.detach(|| cbm::pipeline::prepare_surface(&m, &opts));
+    Ok((v3_array(py, &mesh.vertices), faces_array(py, &mesh.faces), border))
+}
+
 /// Refine a segmentation; returns a dict of arrays.
 #[pyfunction]
 #[pyo3(signature = (image, mask, sub_mask, options, refine, exclude=None))]

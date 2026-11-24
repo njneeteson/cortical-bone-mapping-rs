@@ -37,8 +37,8 @@ True
 
 from . import _core
 from .bones import map_bones, name_bones, refine_bones, separate_bones
-from .mapping import cortical_bone_mapping, refine_segmentation
-from .mesh import mesh_section, voxelize, write_vtk
+from .mapping import cortical_bone_mapping, mask_surface, refine_segmentation
+from .mesh import mesh_curvature, mesh_section, voxelize, write_vtk
 from .model import fit_profiles, profile_model
 from .options import PARAM_NAMES, Options, RefineOptions
 from .phantoms import SITES, BonePhantom, FemurPhantom, JointPhantom, Phantom, site_phantom
@@ -77,11 +77,13 @@ __all__ = [
     "separate_bones",
     "cortical_bone_mapping",
     "refine_segmentation",
+    "mask_surface",
     "map_bones",
     "refine_bones",
     "voxelize",
     "write_vtk",
     "mesh_section",
+    "mesh_curvature",
     "fit_profiles",
     "profile_model",
     "PARAM_NAMES",

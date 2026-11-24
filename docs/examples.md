@@ -77,7 +77,7 @@ default `μ = 0.3`.
 So the curvature penalty does not win on raw accuracy on smooth anatomy. Its
 advantages are that its scale is explicit and physical, that it acts on the
 fitted surfaces (so the periosteal and endosteal surfaces can be penalised
-separately), and that its `"excess"` mode leaves curvature below a threshold
+separately), and that its `"absolute"` mode leaves curvature below a threshold
 untouched. Which penalty suits real bone, with genuinely sharp features,
 needs real data.
 

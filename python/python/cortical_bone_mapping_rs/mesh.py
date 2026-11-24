@@ -1,4 +1,4 @@
-"""Meshes: rasterisation, sections, and VTK output."""
+"""Meshes: rasterisation, sections, curvature, and VTK output."""
 
 from __future__ import annotations
 
@@ -19,6 +19,20 @@ def voxelize(vertices, faces, shape, spacing=1.0, origin=0.0) -> np.ndarray:
     if len(shape) != 3:
         raise ValueError("shape must have 3 entries")
     return _core.voxelize(v, f, shape, _triple(spacing, "spacing"), _triple(origin, "origin"))
+
+
+def mesh_curvature(vertices, faces, measure: str = "mean", scale: Optional[float] = 0.25,
+                   neighbours: int = 64, distance: str = "euclidean") -> np.ndarray:
+    """The curvature at every vertex of a triangle mesh (physical
+    coordinates), as the curvature penalty measures it (1/length): ``"mean"``
+    (``|k1 + k2| = 2|H|``) or ``"total"`` (``sqrt(k1^2 + k2^2)``), with a
+    Gaussian surface Laplacian at ``scale`` over ``neighbours`` points
+    (``distance``: ``"euclidean"`` or ``"surface"``), or the cotangent
+    Laplacian (``scale=None``). For choosing ``curvature_kappa`` from
+    reference surfaces."""
+    v = np.ascontiguousarray(vertices, dtype=np.float64)
+    f = np.ascontiguousarray(faces, dtype=np.uint32)
+    return _core.mesh_curvature(v, f, measure, None if scale is None else float(scale), int(neighbours), distance)
 
 
 def write_vtk(path, vertices, faces, scalars: Optional[dict] = None, vectors: Optional[dict] = None) -> None:

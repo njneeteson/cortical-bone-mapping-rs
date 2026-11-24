@@ -5,7 +5,7 @@ use crate::error::Error;
 use crate::fit::profiles::NormalConstraint;
 use crate::fit::psf::PsfModel;
 use crate::model::{Params, NPARAM, SIGMA, T};
-use crate::operators::{CurvatureMode, Distance};
+use crate::operators::{CurvatureMeasure, CurvatureMode, Distance};
 use crate::volume::Geometry;
 
 /// Surface extraction and smoothing.
@@ -181,8 +181,14 @@ impl Default for SolverOptions {
 #[derive(Clone, Debug, PartialEq)]
 pub struct CurvatureOptions {
     pub mode: CurvatureMode,
+    /// The curvature the absolute mode measures (the change mode always
+    /// measures mean curvature).
+    pub measure: CurvatureMeasure,
     /// Weight `μ` (dimensionless, like `λ`).
     pub weight: f64,
+    /// Weight of the endosteal surface, if different (`None` = `weight`):
+    /// the endosteal edge, a transition into trabecular bone, is noisier.
+    pub endosteal_weight: Option<f64>,
     /// Length scale `ℓ` that makes curvature dimensionless; `None` = the
     /// globally fitted thickness `t0`.
     pub length: Option<f64>,
@@ -203,7 +209,9 @@ impl Default for CurvatureOptions {
     fn default() -> Self {
         CurvatureOptions {
             mode: CurvatureMode::Change,
+            measure: CurvatureMeasure::Mean,
             weight: 1.0,
+            endosteal_weight: None,
             length: None,
             periosteal: true,
             endosteal: true,
@@ -417,6 +425,25 @@ impl Default for Options {
     }
 }
 
+/// Checks of [`CurvatureOptions`].
+fn validate_curvature(c: &CurvatureOptions) -> Result<(), Error> {
+    let bad = |s: &str| Err(Error::InvalidOption(s.to_string()));
+    let negative = c.weight < 0.0 || c.endosteal_weight.is_some_and(|w| !(w >= 0.0));
+    if negative || c.length.is_some_and(|l| !(l > 0.0)) || c.scale.is_some_and(|l| !(l > 0.0)) {
+        return bad("curvature weights must be >= 0, length and scale > 0");
+    }
+    if c.scale.is_some() && c.neighbours < 3 {
+        return bad("curvature neighbours must be >= 3");
+    }
+    match c.mode {
+        CurvatureMode::Absolute { kappa } if !(kappa >= 0.0) => bad("curvature threshold must be >= 0"),
+        CurvatureMode::Change | CurvatureMode::Variation if c.measure == CurvatureMeasure::Total => {
+            bad("the change and variation modes measure mean curvature only")
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Checks of [`VolumetricOptions`].
 fn validate_volumetric(v: &VolumetricOptions, o: &Options) -> Result<(), Error> {
     let bad = |s: &str| Err(Error::InvalidOption(s.to_string()));
@@ -430,9 +457,7 @@ fn validate_volumetric(v: &VolumetricOptions, o: &Options) -> Result<(), Error> 
         return bad("volumetric needs lambda >= 0, sigma > 0, neighbours > 0, voxel_stride > 0");
     }
     if let Some(c) = &v.curvature {
-        if c.weight < 0.0 || c.length.is_some_and(|l| !(l > 0.0)) || c.scale.is_some_and(|l| !(l > 0.0)) {
-            return bad("curvature weight must be >= 0, length and scale > 0");
-        }
+        validate_curvature(c)?;
     }
     if o.model.rho_c_mode == RhoCMode::ProfileMax {
         return bad("the volumetric model takes a fixed or estimated rho_c, not profile maxima");
@@ -536,17 +561,7 @@ impl Options {
                     return bad("regularized needs lambda >= 0, sigma > 0, neighbours > 0");
                 }
                 if let Some(c) = curvature.as_ref() {
-                    if c.weight < 0.0 || c.length.is_some_and(|l| !(l > 0.0)) || c.scale.is_some_and(|l| !(l > 0.0)) {
-                        return bad("curvature weight must be >= 0, length and scale > 0");
-                    }
-                    if c.scale.is_some() && c.neighbours < 3 {
-                        return bad("curvature neighbours must be >= 3");
-                    }
-                    if let CurvatureMode::Excess { kappa } = c.mode {
-                        if kappa < 0.0 {
-                            return bad("curvature threshold must be >= 0");
-                        }
-                    }
+                    validate_curvature(c)?;
                 }
             }
             Method::Local => {}

@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import fields, replace
 from typing import Optional, Sequence, Union
 
+import numpy as np
 
 from . import _core
 from ._util import _as_image, _as_u8
@@ -51,6 +52,17 @@ def cortical_bone_mapping(
     s = None if sub_mask is None else _as_u8(sub_mask, "sub_mask")
     d = _core.run(img, m, s, o._to_core())
     return CbmResult._from_core(d, o)
+
+
+def mask_surface(mask, spacing: Union[float, Sequence[float], None] = None, *,
+                 options: Optional[Options] = None, **kwargs):
+    """The surface of a mask as the pipeline extracts it (surface nets and
+    Taubin smoothing, with the ``mask_smoothing`` and ``taubin_*`` options):
+    ``(vertices, faces, border)``, vertices in physical coordinates, and
+    ``border[i]`` whether vertex ``i`` lies on a cap cut by the image edge."""
+    o = _make_options(options, spacing, kwargs)
+    v, f, border = _core.mask_surface(_as_u8(mask, "mask"), o._to_core())
+    return v, f, np.asarray(border)
 
 
 def refine_segmentation(
