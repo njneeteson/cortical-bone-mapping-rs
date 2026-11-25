@@ -2,6 +2,8 @@
 name = "cortical-bone-mapping"
 description = "Cortical bone mapping (Treece et al.) with global, regularised and curvature-penalised model fitting, and model-driven segmentation refinement"
 readme = "../../README.md"
+documentation = "https://docs.rs/cortical-bone-mapping"
+homepage = "https://njneeteson.github.io/cortical-bone-mapping-rs/"
 keywords = ["cortical-thickness", "bone", "hr-pqct", "ct", "image-analysis"]
 categories = ["science", "computer-vision", "algorithms"]
 version.workspace = true

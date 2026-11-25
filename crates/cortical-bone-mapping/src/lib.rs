@@ -20,24 +20,57 @@
 //!   nodes, refined coarse to fine (Neeteson & Boyd 2025);
 //! * **regularized**: `m, t, σ` per node with a spatial smoothness penalty
 //!   (Neeteson & Boyd 2025), optionally plus a **curvature penalty** on the
-//!   fitted periosteal/endosteal surfaces ([`CurvatureMode`], extension).
+//!   fitted periosteal/endosteal surfaces ([`CurvatureMode`], extension);
+//! * **volumetric**: the model evaluated at every voxel of a band around the
+//!   surface, with one PSF for the scan ([`VolumetricOptions`], extension).
 //!
 //! The blur can be free, fixed, given by a PSF, or estimated as a PSF from
 //! the data ([`SigmaMode`], after Treece et al. 2012, 2015).
 //! [`refine_segmentation`] iteratively snaps a poor segmentation to the fitted
 //! periosteal surface (extension).
 //!
-//! ```no_run
-//! use cortical_bone_mapping::{run, Options, Method, Geometry};
-//! # let image = ndarray::Array3::<i16>::zeros((10, 10, 10));
-//! # let mask = ndarray::Array3::<u8>::zeros((10, 10, 10));
+//! The Python package (`cortical-bone-mapping-rs`) wraps this crate and has a
+//! user guide.
+//!
+//! # Example
+//!
+//! A phantom shell with a known cortex, measured on its own mask and then
+//! refined from a mask that lies 0.3 mm outside the bone:
+//!
+//! ```
+//! use cortical_bone_mapping::phantoms::shell::ShellPhantom;
+//! use cortical_bone_mapping::{
+//!     refine_segmentation, run, Method, NormalConstraint, Options, RefineOptions, SamplingOptions,
+//! };
+//! # fn main() -> Result<(), cortical_bone_mapping::Error> {
+//! let phantom = ShellPhantom { noise: 20.0, ..ShellPhantom::default() };
+//! let (image, mask) = phantom.generate();
 //! let opts = Options {
-//!     geometry: Geometry::new([0.0607; 3]),
+//!     geometry: phantom.geometry(),
+//!     sampling: SamplingOptions {
+//!         outside: 1.5,
+//!         inside: 2.5,
+//!         normal_constraint: NormalConstraint::InPlane(0), // normals in each slice's plane
+//!         ..Default::default()
+//!     },
 //!     method: Method::regularized(),
 //!     ..Options::default()
 //! };
-//! let res = run(image.view(), mask.view(), None::<ndarray::ArrayView3<u8>>, &opts).unwrap();
-//! let thickness = res.thickness();
+//! let res = run(image.view(), mask.view(), None::<ndarray::ArrayView3<u8>>, &opts)?;
+//! let t = res.thickness();
+//! let rmse = (res.points.iter().zip(&t)
+//!     .map(|(&p, &t)| (t - phantom.true_thickness(p)).powi(2))
+//!     .sum::<f64>() / t.len() as f64).sqrt();
+//! assert!(rmse < 0.03); // mm
+//!
+//! let rough = ShellPhantom { mask_offset: 0.3, ..phantom.clone() }.generate().1;
+//! let refine = RefineOptions { verbose: false, ..RefineOptions::default() };
+//! let rr = refine_segmentation(image.view(), rough.view(), None::<ndarray::ArrayView3<u8>>, &opts, &refine)?;
+//! assert!(rr.converged);
+//! let cortex = &rr.cortical_mask; // boolean, the image's shape
+//! # let _ = cortex;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! # Where each part comes from

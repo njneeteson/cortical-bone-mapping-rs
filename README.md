@@ -4,6 +4,9 @@ Cortical bone mapping (CBM) in Rust, with Python bindings: model-based
 measurement of cortical thickness, and automatic segmentation of the
 periosteal and endosteal surfaces, from CT and HR-pQCT images.
 
+**Documentation: [njneeteson.github.io/cortical-bone-mapping-rs](https://njneeteson.github.io/cortical-bone-mapping-rs/)**
+(user guide and API reference).
+
 CBM samples a density profile along the inward normal at every vertex of
 the bone's outer surface and fits a blurred three-level step model (soft
 tissue, cortex, trabecular bone). At every surface point the result is the
@@ -184,6 +187,11 @@ See [method](docs/method.md#cortical-density).
 
 ## Documentation
 
+The [user guide and API reference](https://njneeteson.github.io/cortical-bone-mapping-rs/)
+cover installation, choosing a method, parameters for each scanner,
+automatic segmentation and scans with several bones. The pages below,
+also part of the site, describe the method and how each part was tested.
+
 * **[docs/method.md](docs/method.md)**: the model, every method and the
   solver, cortical density, the extensions, the starting segmentations, the
   memory/performance design, and the deliberate differences from the
@@ -204,8 +212,8 @@ See [method](docs/method.md#cortical-density).
   behind the volumetric (voxel-wise) model, which runs alongside the 1D one.
 * **[docs/volumetric_validation.md](docs/volumetric_validation.md)**: the
   volumetric model against the 1D methods on phantoms of the distal radius
-  and tibia (HR-pQCT) and the proximal femur and knee (clinical CT), and on
-  the clinical knee.
+  and tibia (HR-pQCT) and the proximal femur (clinical CT), and on the
+  clinical knee.
 * **[docs/volumetric_refinement.md](docs/volumetric_refinement.md)**: how
   refinement with the volumetric model was made to converge, one change at a
   time, and how the methods then compare.
@@ -271,6 +279,7 @@ See [method](docs/method.md#cortical-density).
 cargo test --workspace && cargo clippy --all-targets -- -D warnings
 cd python && maturin develop --release && pytest tests
 python docs/scripts/make_figures.py                 # docs/images
+nox -s docs                                         # the documentation site, docs/_build/html
 python docs/scripts/segmentation_experiment.py      # docs/segmentation.md results (~70 min)
 python docs/scripts/ct_example.py DICOM_DIR ...     # docs/clinical_ct.md (image not included)
 python docs/scripts/notch_experiment.py knee.pkl --out results run  # docs/refinement_experiments.md
