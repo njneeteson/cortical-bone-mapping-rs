@@ -112,8 +112,7 @@ class Options:
         regularisation of Neeteson & Boyd (``reg_lambda``, Gaussian
         ``reg_sigma`` over ``reg_neighbours`` nearest nodes, truncated at
         ``reg_cutoff * reg_sigma``), optionally plus a curvature penalty.
-        ``"volumetric"``: the volumetric model (extension; see
-        ``docs/volumetric_model.md``): the profile model evaluated at every
+        ``"volumetric"``: the volumetric model (extension): the profile model evaluated at every
         voxel of the band ``[-outside, inside]`` around the surface, with a
         global PSF, a curvature penalty on ``m, t`` and spatial smoothing of
         the density fields (``vol_*`` options below).

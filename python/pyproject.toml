@@ -24,7 +24,7 @@ dynamic = ["version"]
 [project.optional-dependencies]
 test = ["pytest>=7", "scipy>=1.7", "hypothesis>=6"]
 docs = [
-    "matplotlib>=3.5", "scipy>=1.7", "pillow>=9",
+    "matplotlib>=3.5", "scipy>=1.7", "pillow>=9", "pyvista>=0.44", "pydicom>=2.4",
     "sphinx>=8", "furo>=2024.8", "myst-parser>=4", "sphinx-copybutton>=0.5",
 ]
 

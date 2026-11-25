@@ -5,7 +5,7 @@
 //! soft tissue below it. The density fields then take the values of what the
 //! band does contain (a "soft tissue" of trabecular bone, a "marrow" of soft
 //! tissue), the fit sees no edge, yet passes every trust test, and the
-//! surface drifts (`docs/volumetric_refinement.md`, phase 3).
+//! surface drifts.
 //!
 //! The adaptive band therefore extends each node's reach along its normal
 //! until the band has crossed a bone edge, as one would look along a profile

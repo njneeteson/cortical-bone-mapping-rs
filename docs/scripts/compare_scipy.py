@@ -11,14 +11,14 @@ Reports wall time, peak Python-heap memory (tracemalloc, which includes NumPy
 buffers) for SciPy and the crate's own peak (from the Rust benchmark,
 separately), final cost and thickness error against the phantom truth.
 
-    python docs/scripts/compare_scipy.py            # writes docs/results/scipy_comparison.json
+    python docs/scripts/compare_scipy.py            # prints the rows
+
+``docs/scripts/benchmarks.py`` runs it with the other benchmarks.
 """
 
-import json
 import sys
 import time
 import tracemalloc
-from pathlib import Path
 
 import numpy as np
 from scipy import sparse
@@ -28,7 +28,6 @@ from scipy.special import erf
 
 import cortical_bone_mapping_rs as cbm
 
-OUT = Path(__file__).resolve().parents[1] / "results" / "scipy_comparison.json"
 RHO_C = 1000.0
 LOWER = np.array([-3.0, 0.0607, 0.01, -200.0, -200.0])
 UPPER = np.array([6.0, 12.0, 2.0, 400.0, 400.0])
@@ -124,6 +123,7 @@ def scipy_regularized(points, profiles, x, w, gp, lam, sigma_reg, k):
 
 
 def main():
+    """The comparison rows, one per method and phantom size."""
     rows = []
     for slices in [8, 32]:
         ph, img, mask = phantom(slices)
@@ -163,9 +163,8 @@ def main():
                          rust_rmse=float(np.sqrt(((reg.thickness - truth) ** 2).mean())),
                          scipy_rmse=float(np.sqrt(((t_sp - truth) ** 2).mean()))))
         print(rows[-1], flush=True)
-    OUT.write_text(json.dumps(rows, indent=2))
-    print("wrote", OUT)
+    return rows
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

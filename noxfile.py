@@ -2,7 +2,7 @@
 
     nox                 # rust + python tests
     nox -s tests        # Python tests only
-    nox -s figures      # regenerate docs/images
+    nox -s figures      # the phantom results and figures (docs/scripts/phantoms.py)
     nox -s docs         # build the user documentation into docs/_build/html
 """
 
@@ -25,9 +25,12 @@ def tests(session):
 
 @nox.session
 def figures(session):
-    """Regenerate docs/images (and the benchmark JSON first with `cargo run --release --example benchmark`)."""
+    """The phantom results and figures. The knee and benchmark pages need the
+    CT and a Bonelab checkout: ``python docs/scripts/knee.py DICOM_DIR`` and
+    ``python docs/scripts/benchmarks.py BONELAB_DIR``."""
     session.install("./python[docs]")
-    session.run("python", "docs/scripts/make_figures.py", *session.posargs)
+    session.chdir("docs/scripts")
+    session.run("python", "phantoms.py", *session.posargs)
 
 
 @nox.session

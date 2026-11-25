@@ -38,21 +38,21 @@ periosteal, cortical and trabecular masks.
 
 ## Which fit to refine with
 
-`refine_segmentation` takes every option of the fit. On phantoms built from
-published HR-pQCT values, refinement converged from a convex hull with every
-method; the volumetric model was the most accurate (thickness RMSE 34–47 µm,
-against 70–147 µm for Buie's method) and was not drawn towards a
-neighbouring bone 0.5 mm away
-([automatic segmentation](../segmentation.md)). The regularised fit with
-the curvature penalty is cheaper:
+`refine_segmentation` takes every option of the fit. In the
+[examples](../examples.md):
+
+- on the HR-pQCT phantoms every method converges from a convex hull, and the
+  volumetric model is the most accurate (thickness RMSE 26–34 µm);
+- on the clinical knee CT only the regularised and volumetric fits converge
+  on every bone; use one of them.
+
+The regularised fit is the cheaper of the two:
 
 ```python
-rr = cbm.refine_segmentation(image, start, options=options,
-                             curvature="change", curvature_weight=1.0)
+rr = cbm.refine_segmentation(image, start, options=options, method="regularized")
 ```
 
-These phantom results show that the pipeline works; its accuracy on real
-HR-pQCT scans is still to be measured.
+Accuracy on real HR-pQCT scans is still to be measured.
 
 ## Refinement options
 
@@ -75,8 +75,7 @@ rr = cbm.refine_segmentation(image, start, options=options, refine=refine)
 | `verbose` | on | one line per move on stderr |
 
 Level-set remeshing and freezing are on by default because they made
-refinement converge on real data
-([refinement experiments](../refinement_experiments.md)).
+refinement converge on the clinical knee CT.
 
 The scanner's parameters (an estimated `ρc`, the volumetric PSF) are held
 fixed during a pass and re-estimated on the refined surface between passes

@@ -47,7 +47,7 @@ pub struct RefineOptions {
     pub region_tolerance: Option<f64>,
     /// Carry the surface as a level set and extract a new mesh every
     /// iteration (remeshing) instead of moving the same vertices (default:
-    /// on, as on the clinical knee CT, `docs/refinement_experiments.md`).
+    /// on, as on the clinical knee CT).
     pub level_set: bool,
     /// Regional convergence: freeze regions that have stopped moving
     /// (default: on).

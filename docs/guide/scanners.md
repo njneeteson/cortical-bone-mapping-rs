@@ -34,7 +34,7 @@ in Table 1; `rho_c="estimate"` measures it from the image instead (see
 
 Clinical CT has voxels about ten times larger, densities in Hounsfield units
 and no density calibration. These options worked on the clinical knee CT
-of [the clinical example](../clinical_ct.md) (0.65 mm voxels):
+of the [examples](../examples.md#clinical-knee-ct) (0.65 mm voxels):
 
 ```python
 options = cbm.Options(

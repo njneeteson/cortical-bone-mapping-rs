@@ -1,5 +1,5 @@
 //! The volumetric model (extension): the profile model evaluated at every
-//! voxel of a band around the surface (`docs/volumetric_model.md`).
+//! voxel of a band around the surface (see the method page of the documentation).
 //!
 //! The 1D methods sample one interpolated profile per node along a normal
 //! taken from the mesh. Here every voxel within `[−outside, inside]` of the

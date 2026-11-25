@@ -4,8 +4,8 @@ A scan often holds several bones: a knee CT has the femur, tibia, patella
 and fibula. Each bone is mapped as its own closed surface with its own fit,
 since bones differ in size, cortex and convergence, but they share the
 scanner, so they share its blur and cortical density. This is the pipeline
-of [the clinical knee example](../clinical_ct.md), which maps all four bones
-of a clinical knee CT from the image alone.
+of the [clinical knee example](../examples.md#clinical-knee-ct), which maps
+all eight bones of a CT of both knees from the image alone.
 
 ## 1. A threshold
 
@@ -70,16 +70,19 @@ from the smallest to the largest:
 - the scanner's parameters (an estimated `ρc`, the volumetric model's PSF)
   are estimated once on all the bones together and held in every bone's
   fit ({func}`~cortical_bone_mapping_rs.shared_scanner`; `shared=False` to
-  estimate them per bone);
+  estimate them per bone). Give the options as an `Options` object, as
+  above: a keyword argument such as `rho_c="estimate"` overrides the shared
+  value, and each bone then estimates its own;
 - every other bone's region is excluded, so a bone's surface never moves
   into its neighbour (`exclude_others=True`);
 - each bone is cropped to its bounding box plus the sampling range
   (`crop=True`), with results in the full image's coordinates;
 - `per_bone={label: {...}}` overrides options for one bone.
 
-Masks come back at the full image's shape. On the clinical knee CT, all four
-bones converged in 5–6 moves with the regularised fit (166 s in all) and in
-4–7 moves with the volumetric model (252 s).
+Masks come back at the full image's shape. On the CT of both knees, all
+eight bones converge in 4–11 moves with the regularised fit and 4–10 with
+the volumetric model; with the local fit or multigrid most do not converge
+([examples](../examples.md#clinical-knee-ct)).
 
 {func}`~cortical_bone_mapping_rs.map_bones` is the same without refinement:
 one fit per bone on the given labels.

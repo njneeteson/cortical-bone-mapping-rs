@@ -48,8 +48,8 @@ class BuieOptions:
 def buie_segmentation(image, options: Optional[BuieOptions] = None, **kwargs):
     """Dual-threshold cortical/trabecular segmentation of Buie et al. (2007),
     Bone 41:505-515, doi:10.1016/j.bone.2007.07.007. Returns boolean
-    ``(periosteal, cortical, trabecular)`` masks. See ``docs/method.md`` for
-    how each step of the paper's Fig. 1 is implemented.
+    ``(periosteal, cortical, trabecular)`` masks, following the steps of the
+    paper's Fig. 1.
     """
     o = replace(options or BuieOptions(), **kwargs)
     d = asdict(o)
