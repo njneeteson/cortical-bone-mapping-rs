@@ -304,21 +304,26 @@ validation does with five noise realisations.
    control-point spacing, and whether coarse centres can stand in for much of
    the explicit regularisation.
 4. `ρc`: fixed, estimated or a field. The validation shows that the estimate
-   fails when no cortex in view is much thicker than the blur.
+   fails when no cortex in view is much thicker than the blur. The model now
+   takes the 1D estimate (its own, from the band, was lower still on clinical
+   CT), shared by the bones of a scan.
 5. The shape of the PSF: is a slowly varying `σ_xy` field, or a kernel with a
    negative lobe, worth the extra parameters?
-6. Refinement with the volumetric model plateaus at about a tenth of a voxel
-   on phantoms and does not finish on real data. A likely cause is that the
-   fit is not exactly shift-equivariant: it regroups the voxels by their
-   closest face whenever the surface moves.
+6. Refinement with the volumetric model used to plateau on phantoms and not
+   finish on real data. With the edges smoothed like the regularised
+   method's, `ρc` from the 1D estimate, and the surface carried as a level
+   set with regional freezing, it converges on the phantoms and on the
+   clinical knee ([volumetric_refinement.md](volumetric_refinement.md)).
 7. Topology: the level set allows topology changes, which could split the
    notch region or the condyles in pathological cases.
 
 ## 8. Status
 
 Implemented: the volumetric model with barycentric fields (`A = I`), the
-global anisotropic PSF, the curvature penalty on the edge positions and
-smoothing of the density fields (`method="volumetric"`); surface-distance
+global anisotropic PSF, the regularised method's smoothing of the edge and
+density fields plus a curvature penalty on the edge positions
+(`method="volumetric"`); an adaptive band (`vol_adaptive_band`) and a global
+soft-tissue density (`vol_global_soft_tissue`) as options; surface-distance
 neighbourhoods for every method (`neighbour_distance`); the reliability
 measures 1, 2 and 4; refinement with the volumetric inner fit; site phantoms
 of the distal radius and tibia (HR-pQCT) and the proximal femur and knee

@@ -5,11 +5,6 @@
    0.5,
    0.5
   ],
-  "knee": [
-   0.45,
-   0.4,
-   0.4
-  ],
   "distal_radius": [
    0.08,
    0.08,
@@ -174,52 +169,52 @@
    "femur: volumetric": {
     "all": {
      "nodes": 29265,
-     "t bias": 0.12867024505780286,
-     "t rmse": 0.15495759568704112,
-     "t precision (rms sd)": 0.015318576332985183,
-     "periosteum bias": 0.014953392915282875,
-     "periosteum rmse": 0.04825504332061434,
-     "periosteum precision (rms sd)": 0.011007019088250901
+     "t bias": 0.12810887868870333,
+     "t rmse": 0.14483405378826714,
+     "t precision (rms sd)": 0.01640051258843695,
+     "periosteum bias": 0.017284602911693543,
+     "periosteum rmse": 0.046682742404476986,
+     "periosteum precision (rms sd)": 0.01972969182517383
     },
     "t/sigma 0-1": {
      "nodes": 76,
-     "t bias": 0.13893131244942158,
-     "t rmse": 0.15305835111862423,
-     "t precision (rms sd)": 0.013173440582032304,
-     "periosteum bias": 0.06406390181366806,
-     "periosteum rmse": 0.07371535907442466,
-     "periosteum precision (rms sd)": 0.013873689111809638
+     "t bias": 0.14294305841463648,
+     "t rmse": 0.15406263573690873,
+     "t precision (rms sd)": 0.017253464811880507,
+     "periosteum bias": 0.07229553041537519,
+     "periosteum rmse": 0.08184575855896456,
+     "periosteum precision (rms sd)": 0.01787197607643651
     },
     "t/sigma 1-2": {
      "nodes": 11783,
-     "t bias": 0.1407584951913166,
-     "t rmse": 0.15946467920129487,
-     "t precision (rms sd)": 0.012278415093511998,
-     "periosteum bias": 0.03463852233032543,
-     "periosteum rmse": 0.05769550240816817,
-     "periosteum precision (rms sd)": 0.010549574661114402
+     "t bias": 0.1408108197273521,
+     "t rmse": 0.15506849481317192,
+     "t precision (rms sd)": 0.017281404454859053,
+     "periosteum bias": 0.037302149108933924,
+     "periosteum rmse": 0.05924867938133438,
+     "periosteum precision (rms sd)": 0.019581905581178546
     },
     "t/sigma 2-4": {
      "nodes": 8027,
-     "t bias": 0.1325560468882282,
-     "t rmse": 0.14900010859498805,
-     "t precision (rms sd)": 0.013155935106933303,
-     "periosteum bias": 0.00813483330556397,
-     "periosteum rmse": 0.03522991869988996,
-     "periosteum precision (rms sd)": 0.009267458964298451
+     "t bias": 0.13132364527945858,
+     "t rmse": 0.14278727449711023,
+     "t precision (rms sd)": 0.01684329527790519,
+     "periosteum bias": 0.01041496280763246,
+     "periosteum rmse": 0.03675151176724202,
+     "periosteum precision (rms sd)": 0.01997751559571714
     },
     "t/sigma 4-inf": {
      "nodes": 9379,
-     "t bias": 0.11007476326467139,
-     "t rmse": 0.15422718817853806,
-     "t precision (rms sd)": 0.019830820726876114,
-     "periosteum bias": -0.004339676770878764,
-     "periosteum rmse": 0.044468422010948264,
-     "periosteum precision (rms sd)": 0.01277300330931754
+     "t bias": 0.10927965378822768,
+     "t rmse": 0.13267376632804173,
+     "t precision (rms sd)": 0.01479429673482268,
+     "periosteum bias": -0.002430182909509669,
+     "periosteum rmse": 0.03434381620234764,
+     "periosteum precision (rms sd)": 0.01971557096358222
     },
     "psf": [
-     0.5583956599709406,
-     0.6865106907993674
+     0.5595470507885517,
+     0.6887714497201808
     ]
    },
    "femur: local, true rho_c": {
@@ -366,822 +361,52 @@
    "femur: volumetric, true rho_c": {
     "all": {
      "nodes": 29265,
-     "t bias": 0.11659971953233945,
-     "t rmse": 0.1456298014289958,
-     "t precision (rms sd)": 0.015668359771912697,
-     "periosteum bias": 0.02047402138240703,
-     "periosteum rmse": 0.04907152853338868,
-     "periosteum precision (rms sd)": 0.011289654106371184
+     "t bias": 0.11899425163697264,
+     "t rmse": 0.13698361188447025,
+     "t precision (rms sd)": 0.016131446511208684,
+     "periosteum bias": 0.02138334449783235,
+     "periosteum rmse": 0.04775812776880387,
+     "periosteum precision (rms sd)": 0.0194837476819985
     },
     "t/sigma 0-1": {
      "nodes": 76,
-     "t bias": 0.13517514799465258,
-     "t rmse": 0.14990893275781558,
-     "t precision (rms sd)": 0.013527487710842768,
-     "periosteum bias": 0.06657254751142724,
-     "periosteum rmse": 0.07570265174228474,
-     "periosteum precision (rms sd)": 0.014365832579259462
+     "t bias": 0.14057882933283422,
+     "t rmse": 0.1513884526058682,
+     "t precision (rms sd)": 0.017008763490170515,
+     "periosteum bias": 0.07430453240449877,
+     "periosteum rmse": 0.08363530450329874,
+     "periosteum precision (rms sd)": 0.017605505137506108
     },
     "t/sigma 1-2": {
      "nodes": 11783,
-     "t bias": 0.13450593904489108,
-     "t rmse": 0.15420306643908324,
-     "t precision (rms sd)": 0.012558685241690837,
-     "periosteum bias": 0.038168629710166636,
-     "periosteum rmse": 0.05958670935703749,
-     "periosteum precision (rms sd)": 0.010820429330791767
+     "t bias": 0.13606749329926782,
+     "t rmse": 0.15040195829084935,
+     "t precision (rms sd)": 0.017036568078653783,
+     "periosteum bias": 0.03989421427743914,
+     "periosteum rmse": 0.06084826383158097,
+     "periosteum precision (rms sd)": 0.01931217798829677
     },
     "t/sigma 2-4": {
      "nodes": 8027,
-     "t bias": 0.12066783014236072,
-     "t rmse": 0.1384138250984407,
-     "t precision (rms sd)": 0.013417873788413113,
-     "periosteum bias": 0.013647681573319474,
-     "periosteum rmse": 0.03616948347269693,
-     "periosteum precision (rms sd)": 0.009526294270482925
+     "t bias": 0.12246830144789646,
+     "t rmse": 0.1341933216140929,
+     "t precision (rms sd)": 0.01659237511799439,
+     "periosteum bias": 0.014482197974203448,
+     "periosteum rmse": 0.03787224686715373,
+     "periosteum precision (rms sd)": 0.01972160526004602
     },
     "t/sigma 4-inf": {
      "nodes": 9379,
-     "t bias": 0.0904716204870071,
-     "t rmse": 0.1404370325740865,
-     "t precision (rms sd)": 0.02030521854534052,
-     "periosteum bias": 0.0037127431795867753,
-     "periosteum rmse": 0.04343866205391923,
-     "periosteum precision (rms sd)": 0.013086838237115924
+     "t bias": 0.09439667916186927,
+     "t rmse": 0.12055611851815165,
+     "t precision (rms sd)": 0.014469378263310741,
+     "periosteum bias": 0.0036053206414676953,
+     "periosteum rmse": 0.034366712621441566,
+     "periosteum precision (rms sd)": 0.019508003164007078
     },
     "psf": [
-     0.5658647566929228,
-     0.6861410117930492
-    ]
-   }
-  },
-  "knee": {
-   "tibia: local": {
-    "all": {
-     "nodes": 36581,
-     "t bias": 0.5318706416075988,
-     "t rmse": 0.5848344052578435,
-     "t precision (rms sd)": 0.028641464399844527,
-     "periosteum bias": -0.13735069835737193,
-     "periosteum rmse": 0.14233290367328033,
-     "periosteum precision (rms sd)": 0.013062908947961586
-    },
-    "t/sigma 0-1": {
-     "nodes": 354,
-     "t bias": 0.6929591619465247,
-     "t rmse": 0.7525260924004551,
-     "t precision (rms sd)": 0.03377072099301328,
-     "periosteum bias": -0.047824683414453825,
-     "periosteum rmse": 0.07926848674899428,
-     "periosteum precision (rms sd)": 0.01818938236870595
-    },
-    "t/sigma 1-2": {
-     "nodes": 10824,
-     "t bias": 0.5418010996314306,
-     "t rmse": 0.5989804141383263,
-     "t precision (rms sd)": 0.031173604251064774,
-     "periosteum bias": -0.12628518359020394,
-     "periosteum rmse": 0.13233797380321605,
-     "periosteum precision (rms sd)": 0.013609377418054546
-    },
-    "t/sigma 2-4": {
-     "nodes": 25279,
-     "t bias": 0.5258559350734512,
-     "t rmse": 0.5765208114080239,
-     "t precision (rms sd)": 0.027426273006471824,
-     "periosteum bias": -0.1433230831131046,
-     "periosteum rmse": 0.14706266202487614,
-     "periosteum precision (rms sd)": 0.012730813491842456
-    },
-    "t/sigma 4-inf": {
-     "nodes": 124,
-     "t bias": 0.4313315498881228,
-     "t rmse": 0.45641060710388603,
-     "t precision (rms sd)": 0.023983627777711763,
-     "periosteum bias": -0.14129768940134854,
-     "periosteum rmse": 0.14406031460960517,
-     "periosteum precision (rms sd)": 0.01368334209072086
-    }
-   },
-   "tibia: local, estimated PSF": {
-    "all": {
-     "nodes": 36581,
-     "t bias": 0.47966140016926023,
-     "t rmse": 0.5226395179091207,
-     "t precision (rms sd)": 0.02429020090826735,
-     "periosteum bias": -0.12703109039182092,
-     "periosteum rmse": 0.13423589417499307,
-     "periosteum precision (rms sd)": 0.012518901749349009
-    },
-    "t/sigma 0-1": {
-     "nodes": 354,
-     "t bias": 0.5078622787745228,
-     "t rmse": 0.5423916925454766,
-     "t precision (rms sd)": 0.021732469101122164,
-     "periosteum bias": -0.025142515010903428,
-     "periosteum rmse": 0.06474662797911507,
-     "periosteum precision (rms sd)": 0.01605411951686567
-    },
-    "t/sigma 1-2": {
-     "nodes": 10824,
-     "t bias": 0.46213168102673385,
-     "t rmse": 0.5036763744886699,
-     "t precision (rms sd)": 0.02304771133234773,
-     "periosteum bias": -0.11017563968498104,
-     "periosteum rmse": 0.1198116968584165,
-     "periosteum precision (rms sd)": 0.012925197088613557
-    },
-    "t/sigma 2-4": {
-     "nodes": 25279,
-     "t bias": 0.48682510502534504,
-     "t rmse": 0.5304351245881553,
-     "t precision (rms sd)": 0.02485295573066439,
-     "periosteum bias": -0.13551254422551626,
-     "periosteum rmse": 0.14050641997681249,
-     "periosteum precision (rms sd)": 0.012287209474096002
-    },
-    "t/sigma 4-inf": {
-     "nodes": 124,
-     "t bias": 0.4689136091650513,
-     "t rmse": 0.48823377032854326,
-     "t precision (rms sd)": 0.020549205652763424,
-     "periosteum bias": -0.160170466792587,
-     "periosteum rmse": 0.16171696640727345,
-     "periosteum precision (rms sd)": 0.011731891525339773
-    }
-   },
-   "tibia: regularized": {
-    "all": {
-     "nodes": 36581,
-     "t bias": 0.48559478699743736,
-     "t rmse": 0.5054306718357618,
-     "t precision (rms sd)": 0.006463590160873758,
-     "periosteum bias": -0.13611927684544128,
-     "periosteum rmse": 0.14135037877732815,
-     "periosteum precision (rms sd)": 0.006622407199382322
-    },
-    "t/sigma 0-1": {
-     "nodes": 354,
-     "t bias": 0.8734653155925195,
-     "t rmse": 0.8810116193955752,
-     "t precision (rms sd)": 0.006667780351756869,
-     "periosteum bias": -0.09394880960728012,
-     "periosteum rmse": 0.10839451419586857,
-     "periosteum precision (rms sd)": 0.007351114653500525
-    },
-    "t/sigma 1-2": {
-     "nodes": 10824,
-     "t bias": 0.5257568592410461,
-     "t rmse": 0.5435389447855428,
-     "t precision (rms sd)": 0.006334759925945268,
-     "periosteum bias": -0.1320326017120214,
-     "periosteum rmse": 0.13799713013073567,
-     "periosteum precision (rms sd)": 0.0066734776397751085
-    },
-    "t/sigma 2-4": {
-     "nodes": 25279,
-     "t bias": 0.4644799875268933,
-     "t rmse": 0.4817605022197669,
-     "t precision (rms sd)": 0.006508583501613395,
-     "periosteum bias": -0.13854557746761698,
-     "periosteum rmse": 0.1432565944004389,
-     "periosteum precision (rms sd)": 0.006590322554781515
-    },
-    "t/sigma 4-inf": {
-     "nodes": 124,
-     "t bias": 0.17705106706521165,
-     "t rmse": 0.20776345726972803,
-     "t precision (rms sd)": 0.007685177854941734,
-     "periosteum bias": -0.11860366086532806,
-     "periosteum rmse": 0.12101000149422596,
-     "periosteum precision (rms sd)": 0.006475866108319404
-    }
-   },
-   "tibia: volumetric": {
-    "all": {
-     "nodes": 36581,
-     "t bias": 0.6575302440607381,
-     "t rmse": 0.6793255416886749,
-     "t precision (rms sd)": 0.00881683960773951,
-     "periosteum bias": -0.20457080562314384,
-     "periosteum rmse": 0.2083152019505142,
-     "periosteum precision (rms sd)": 0.00520308913751472
-    },
-    "t/sigma 0-1": {
-     "nodes": 354,
-     "t bias": 1.0846273601912133,
-     "t rmse": 1.097701481678611,
-     "t precision (rms sd)": 0.010104221658821695,
-     "periosteum bias": -0.16145317602476095,
-     "periosteum rmse": 0.16953669367817484,
-     "periosteum precision (rms sd)": 0.006399631216395147
-    },
-    "t/sigma 1-2": {
-     "nodes": 10824,
-     "t bias": 0.7073152976314196,
-     "t rmse": 0.7285660771360674,
-     "t precision (rms sd)": 0.009029155308217567,
-     "periosteum bias": -0.1988392577336596,
-     "periosteum rmse": 0.2025959692404453,
-     "periosteum precision (rms sd)": 0.005438913881906982
-    },
-    "t/sigma 2-4": {
-     "nodes": 25279,
-     "t bias": 0.6317541044935354,
-     "t rmse": 0.6503571002991823,
-     "t precision (rms sd)": 0.008705575187688757,
-     "periosteum bias": -0.2075373549680479,
-     "periosteum rmse": 0.21111922524540255,
-     "periosteum precision (rms sd)": 0.005083058360725024
-    },
-    "t/sigma 4-inf": {
-     "nodes": 124,
-     "t bias": 0.34728212438390144,
-     "t rmse": 0.37435243629946313,
-     "t precision (rms sd)": 0.008655081447692534,
-     "periosteum bias": -0.2232039858148675,
-     "periosteum rmse": 0.22495016377515284,
-     "periosteum precision (rms sd)": 0.004479983792219993
-    },
-    "psf": [
-     0.29664377837685396,
-     0.36106736696302755
-    ]
-   },
-   "tibia: local, true rho_c": {
-    "all": {
-     "nodes": 36581,
-     "t bias": 0.15658911733677416,
-     "t rmse": 0.243595793089866,
-     "t precision (rms sd)": 0.02133721198713068,
-     "periosteum bias": 0.023335375193554997,
-     "periosteum rmse": 0.04692236470319491,
-     "periosteum precision (rms sd)": 0.01239832142655499
-    },
-    "t/sigma 0-1": {
-     "nodes": 354,
-     "t bias": 0.4124205168024608,
-     "t rmse": 0.46652395762534893,
-     "t precision (rms sd)": 0.02470839711671384,
-     "periosteum bias": 0.0771749984529349,
-     "periosteum rmse": 0.11345645319748743,
-     "periosteum precision (rms sd)": 0.018324376510076505
-    },
-    "t/sigma 1-2": {
-     "nodes": 10824,
-     "t bias": 0.19372907514018434,
-     "t rmse": 0.27357213550469195,
-     "t precision (rms sd)": 0.023238066962272038,
-     "periosteum bias": 0.02491761626428336,
-     "periosteum rmse": 0.05271831523303901,
-     "periosteum precision (rms sd)": 0.0131220335023143
-    },
-    "t/sigma 2-4": {
-     "nodes": 25279,
-     "t bias": 0.13809681929132697,
-     "t rmse": 0.22517664894734515,
-     "t precision (rms sd)": 0.02042897700791289,
-     "periosteum bias": 0.02177615011229528,
-     "periosteum rmse": 0.04244404024003952,
-     "periosteum precision (rms sd)": 0.011973454360512285
-    },
-    "t/sigma 4-inf": {
-     "nodes": 124,
-     "t bias": -0.04583359543826624,
-     "t rmse": 0.11995108163912639,
-     "t precision (rms sd)": 0.01868562484217609,
-     "periosteum bias": 0.04938575298210525,
-     "periosteum rmse": 0.05399798189222846,
-     "periosteum precision (rms sd)": 0.011519868865213683
-    }
-   },
-   "tibia: local, estimated PSF, true rho_c": {
-    "all": {
-     "nodes": 36581,
-     "t bias": 0.11003173862853974,
-     "t rmse": 0.1673775784715167,
-     "t precision (rms sd)": 0.017695648211478968,
-     "periosteum bias": 0.02809983999425433,
-     "periosteum rmse": 0.0525193501345353,
-     "periosteum precision (rms sd)": 0.012021456622192053
-    },
-    "t/sigma 0-1": {
-     "nodes": 354,
-     "t bias": 0.31624826027954667,
-     "t rmse": 0.339346544580732,
-     "t precision (rms sd)": 0.016041207641133075,
-     "periosteum bias": 0.07142362287344416,
-     "periosteum rmse": 0.09968693132888685,
-     "periosteum precision (rms sd)": 0.01644223212416723
-    },
-    "t/sigma 1-2": {
-     "nodes": 10824,
-     "t bias": 0.13951869269067246,
-     "t rmse": 0.18274322288262085,
-     "t precision (rms sd)": 0.017191543986356424,
-     "periosteum bias": 0.028759588143155983,
-     "periosteum rmse": 0.056932961331126866,
-     "periosteum precision (rms sd)": 0.012511415475945906
-    },
-    "t/sigma 2-4": {
-     "nodes": 25279,
-     "t bias": 0.09538312435830677,
-     "t rmse": 0.15671622123799056,
-     "t precision (rms sd)": 0.017927546371448423,
-     "periosteum bias": 0.027078314558909744,
-     "periosteum rmse": 0.04946256737013188,
-     "periosteum precision (rms sd)": 0.011733759866954022
-    },
-    "t/sigma 4-inf": {
-     "nodes": 124,
-     "t bias": -0.06629986859534676,
-     "t rmse": 0.11848365523702495,
-     "t precision (rms sd)": 0.017987062971893102,
-     "periosteum bias": 0.05507893980982883,
-     "periosteum rmse": 0.06038323660506248,
-     "periosteum precision (rms sd)": 0.011371381297701806
-    }
-   },
-   "tibia: regularized, true rho_c": {
-    "all": {
-     "nodes": 36581,
-     "t bias": 0.11843377323358877,
-     "t rmse": 0.17687571835977972,
-     "t precision (rms sd)": 0.0036496566096345055,
-     "periosteum bias": 0.021506270780533434,
-     "periosteum rmse": 0.054918838901737765,
-     "periosteum precision (rms sd)": 0.0038382200326737073
-    },
-    "t/sigma 0-1": {
-     "nodes": 354,
-     "t bias": 0.564808879719271,
-     "t rmse": 0.5716836083079213,
-     "t precision (rms sd)": 0.003645092603909319,
-     "periosteum bias": 0.042766250806242516,
-     "periosteum rmse": 0.07790619906625676,
-     "periosteum precision (rms sd)": 0.003915653673183283
-    },
-    "t/sigma 1-2": {
-     "nodes": 10824,
-     "t bias": 0.18268477253849666,
-     "t rmse": 0.21946956123945455,
-     "t precision (rms sd)": 0.0035624121727802814,
-     "periosteum bias": 0.017348478926041563,
-     "periosteum rmse": 0.05546130871062274,
-     "periosteum precision (rms sd)": 0.0037978847822032606
-    },
-    "t/sigma 2-4": {
-     "nodes": 25279,
-     "t bias": 0.08691894523536849,
-     "t rmse": 0.13948868148718307,
-     "t precision (rms sd)": 0.0036819368086472384,
-     "periosteum bias": 0.022760966864133824,
-     "periosteum rmse": 0.05416265899105045,
-     "periosteum precision (rms sd)": 0.0038533355886638866
-    },
-    "t/sigma 4-inf": {
-     "nodes": 124,
-     "t bias": -0.33968128487321125,
-     "t rmse": 0.3538729555609806,
-     "t precision (rms sd)": 0.004482405768276631,
-     "periosteum bias": 0.0679614627691189,
-     "periosteum rmse": 0.07673543769171479,
-     "periosteum precision (rms sd)": 0.004025183980717781
-    }
-   },
-   "tibia: volumetric, true rho_c": {
-    "all": {
-     "nodes": 36581,
-     "t bias": 0.1033333053967923,
-     "t rmse": 0.1617005553311586,
-     "t precision (rms sd)": 0.006784457309507426,
-     "periosteum bias": 0.020865605426651654,
-     "periosteum rmse": 0.04548341874733168,
-     "periosteum precision (rms sd)": 0.004994398750192065
-    },
-    "t/sigma 0-1": {
-     "nodes": 354,
-     "t bias": 0.473798723821369,
-     "t rmse": 0.48485643000970435,
-     "t precision (rms sd)": 0.007177952615308883,
-     "periosteum bias": 0.09704857870205871,
-     "periosteum rmse": 0.1140727420001434,
-     "periosteum precision (rms sd)": 0.006014595072313527
-    },
-    "t/sigma 1-2": {
-     "nodes": 10824,
-     "t bias": 0.1597107387620199,
-     "t rmse": 0.1968945421058717,
-     "t precision (rms sd)": 0.006748668754344689,
-     "periosteum bias": 0.02617557870956684,
-     "periosteum rmse": 0.05156910817775292,
-     "periosteum precision (rms sd)": 0.005156373332743213
-    },
-    "t/sigma 2-4": {
-     "nodes": 25279,
-     "t bias": 0.07575837582173088,
-     "t rmse": 0.13246386259325263,
-     "t precision (rms sd)": 0.006788872013173109,
-     "periosteum bias": 0.01750025711423529,
-     "periosteum rmse": 0.04080715648661476,
-     "periosteum precision (rms sd)": 0.004909067547152705
-    },
-    "t/sigma 4-inf": {
-     "nodes": 124,
-     "t bias": -0.2539848570189046,
-     "t rmse": 0.2851740447545498,
-     "t precision (rms sd)": 0.007772095095236386,
-     "periosteum bias": 0.02593590087669365,
-     "periosteum rmse": 0.039135924111902774,
-     "periosteum precision (rms sd)": 0.004651867947084943
-    },
-    "psf": [
-     0.46213630461605415,
-     0.535676047500333
-    ]
-   },
-   "femur: local": {
-    "all": {
-     "nodes": 36940,
-     "t bias": 0.5913873501041356,
-     "t rmse": 0.6762299814203331,
-     "t precision (rms sd)": 0.05297134170668759,
-     "periosteum bias": -0.11079389314143719,
-     "periosteum rmse": 0.15947758825454297,
-     "periosteum precision (rms sd)": 0.023625861323636067
-    },
-    "t/sigma 0-1": {
-     "nodes": 6795,
-     "t bias": 0.5936469270584175,
-     "t rmse": 0.7534350209090284,
-     "t precision (rms sd)": 0.09569869847274859,
-     "periosteum bias": 0.03993463621582158,
-     "periosteum rmse": 0.15566836149334076,
-     "periosteum precision (rms sd)": 0.044321690407139507
-    },
-    "t/sigma 1-2": {
-     "nodes": 17322,
-     "t bias": 0.562276967945702,
-     "t rmse": 0.6420165411848522,
-     "t precision (rms sd)": 0.042500006991469996,
-     "periosteum bias": -0.11498713679899256,
-     "periosteum rmse": 0.13471067714783705,
-     "periosteum precision (rms sd)": 0.017223522238897747
-    },
-    "t/sigma 2-4": {
-     "nodes": 12779,
-     "t bias": 0.6299728296390799,
-     "t rmse": 0.6785554628001582,
-     "t precision (rms sd)": 0.028140927778963293,
-     "periosteum bias": -0.18500782657311254,
-     "periosteum rmse": 0.18951916554858964,
-     "periosteum precision (rms sd)": 0.012888959921351577
-    },
-    "t/sigma 4-inf": {
-     "nodes": 44,
-     "t bias": 0.49621397208106793,
-     "t rmse": 0.5022329713570376,
-     "t precision (rms sd)": 0.01803660530542872,
-     "periosteum bias": -0.18318332548279567,
-     "periosteum rmse": 0.18502512494362436,
-     "periosteum precision (rms sd)": 0.014736653026256347
-    }
-   },
-   "femur: local, estimated PSF": {
-    "all": {
-     "nodes": 36940,
-     "t bias": 0.483261172320812,
-     "t rmse": 0.5489099090002726,
-     "t precision (rms sd)": 0.02769769885218998,
-     "periosteum bias": -0.10969459729365717,
-     "periosteum rmse": 0.14410979214881234,
-     "periosteum precision (rms sd)": 0.016406591398790128
-    },
-    "t/sigma 0-1": {
-     "nodes": 6795,
-     "t bias": 0.3028895057390292,
-     "t rmse": 0.37756892261889186,
-     "t precision (rms sd)": 0.026997411282632527,
-     "periosteum bias": 0.012324338410723994,
-     "periosteum rmse": 0.0868962403404639,
-     "periosteum precision (rms sd)": 0.024982156787812994
-    },
-    "t/sigma 1-2": {
-     "nodes": 17322,
-     "t bias": 0.46148711362158706,
-     "t rmse": 0.5225704208122312,
-     "t precision (rms sd)": 0.028252033265449183,
-     "periosteum bias": -0.10427527477847605,
-     "periosteum rmse": 0.12395912166583227,
-     "periosteum precision (rms sd)": 0.014681182746582979
-    },
-    "t/sigma 2-4": {
-     "nodes": 12779,
-     "t bias": 0.6084314624684716,
-     "t rmse": 0.651089089483005,
-     "t precision (rms sd)": 0.02733598866691045,
-     "periosteum bias": -0.18156416396128264,
-     "periosteum rmse": 0.18716417818071124,
-     "periosteum precision (rms sd)": 0.012392485168243938
-    },
-    "t/sigma 4-inf": {
-     "nodes": 44,
-     "t bias": 0.5570016590082305,
-     "t rmse": 0.5618780243996946,
-     "t precision (rms sd)": 0.01592724153758834,
-     "periosteum bias": -0.2135805126039368,
-     "periosteum rmse": 0.2145942221301853,
-     "periosteum precision (rms sd)": 0.012157250237625523
-    }
-   },
-   "femur: regularized": {
-    "all": {
-     "nodes": 36940,
-     "t bias": 0.5099205470264666,
-     "t rmse": 0.5241302446283614,
-     "t precision (rms sd)": 0.006271240306586019,
-     "periosteum bias": -0.11795728223198267,
-     "periosteum rmse": 0.14085668057087236,
-     "periosteum precision (rms sd)": 0.006552439780084691
-    },
-    "t/sigma 0-1": {
-     "nodes": 6795,
-     "t bias": 0.45570072305575987,
-     "t rmse": 0.47282764387965714,
-     "t precision (rms sd)": 0.006755898044389825,
-     "periosteum bias": -0.011064720197693112,
-     "periosteum rmse": 0.04511766791499456,
-     "periosteum precision (rms sd)": 0.006931095359903213
-    },
-    "t/sigma 1-2": {
-     "nodes": 17322,
-     "t bias": 0.48189735961915486,
-     "t rmse": 0.49561033855872,
-     "t precision (rms sd)": 0.006249497754486496,
-     "periosteum bias": -0.11412500306133652,
-     "periosteum rmse": 0.126489639207154,
-     "periosteum precision (rms sd)": 0.006551931364579146
-    },
-    "t/sigma 2-4": {
-     "nodes": 12779,
-     "t bias": 0.5768685180152251,
-     "t rmse": 0.5843881065655275,
-     "t precision (rms sd)": 0.006032879902877623,
-     "periosteum bias": -0.17976139081111092,
-     "periosteum rmse": 0.18564550043083877,
-     "periosteum precision (rms sd)": 0.006340795905658576
-    },
-    "t/sigma 4-inf": {
-     "nodes": 44,
-     "t bias": 0.4715849762323812,
-     "t rmse": 0.47203526434994664,
-     "t precision (rms sd)": 0.004821584061906666,
-     "periosteum bias": -0.18438899323767421,
-     "periosteum rmse": 0.18560437122343273,
-     "periosteum precision (rms sd)": 0.007043487934792876
-    }
-   },
-   "femur: volumetric": {
-    "all": {
-     "nodes": 36940,
-     "t bias": 0.4223395845338484,
-     "t rmse": 0.4439583963858435,
-     "t precision (rms sd)": 0.00845029812321225,
-     "periosteum bias": -0.09544119571807494,
-     "periosteum rmse": 0.12142317312520441,
-     "periosteum precision (rms sd)": 0.005311167382084343
-    },
-    "t/sigma 0-1": {
-     "nodes": 6795,
-     "t bias": 0.35161864129898796,
-     "t rmse": 0.3732868928583891,
-     "t precision (rms sd)": 0.007583055051504097,
-     "periosteum bias": 0.010461711587122864,
-     "periosteum rmse": 0.042240846957852296,
-     "periosteum precision (rms sd)": 0.006002777188726101
-    },
-    "t/sigma 1-2": {
-     "nodes": 17322,
-     "t bias": 0.39355153843666907,
-     "t rmse": 0.413102433554935,
-     "t precision (rms sd)": 0.008291616596691944,
-     "periosteum bias": -0.0936038563618472,
-     "periosteum rmse": 0.10705492055388348,
-     "periosteum precision (rms sd)": 0.005160852188649071
-    },
-    "t/sigma 2-4": {
-     "nodes": 12779,
-     "t bias": 0.49884946682677467,
-     "t rmse": 0.5134322480818662,
-     "t precision (rms sd)": 0.009082154465391219,
-     "periosteum bias": -0.15396795603219196,
-     "periosteum rmse": 0.16133018524246845,
-     "periosteum precision (rms sd)": 0.005115338532333612
-    },
-    "t/sigma 4-inf": {
-     "nodes": 44,
-     "t bias": 0.45632953805463056,
-     "t rmse": 0.4581193964316118,
-     "t precision (rms sd)": 0.006871687530816774,
-     "periosteum bias": -0.17551340965658777,
-     "periosteum rmse": 0.17684940210837147,
-     "periosteum precision (rms sd)": 0.0057015584406224585
-    },
-    "psf": [
-     0.36111510186059403,
-     0.5092471470686739
-    ]
-   },
-   "femur: local, true rho_c": {
-    "all": {
-     "nodes": 36940,
-     "t bias": 0.1985405022717383,
-     "t rmse": 0.3081494478125961,
-     "t precision (rms sd)": 0.036574707467117544,
-     "periosteum bias": 0.05715056217016532,
-     "periosteum rmse": 0.12831287392367857,
-     "periosteum precision (rms sd)": 0.026773668634744344
-    },
-    "t/sigma 0-1": {
-     "nodes": 6795,
-     "t bias": 0.3139800917841071,
-     "t rmse": 0.45165137357822055,
-     "t precision (rms sd)": 0.06391565477122087,
-     "periosteum bias": 0.16324915416086247,
-     "periosteum rmse": 0.25491304204915227,
-     "periosteum precision (rms sd)": 0.052439635348990744
-    },
-    "t/sigma 1-2": {
-     "nodes": 17322,
-     "t bias": 0.18163616388944667,
-     "t rmse": 0.28386598394258217,
-     "t precision (rms sd)": 0.030714711395048895,
-     "periosteum bias": 0.04924555350802446,
-     "periosteum rmse": 0.09202445133414706,
-     "periosteum precision (rms sd)": 0.018550530089738466
-    },
-    "t/sigma 2-4": {
-     "nodes": 12779,
-     "t bias": 0.16075832542442126,
-     "t rmse": 0.238284557190111,
-     "t precision (rms sd)": 0.020374432509728216,
-     "periosteum bias": 0.011563188560288006,
-     "periosteum rmse": 0.0394726434355717,
-     "periosteum precision (rms sd)": 0.011957461532023497
-    },
-    "t/sigma 4-inf": {
-     "nodes": 44,
-     "t bias": -0.0009282101515433066,
-     "t rmse": 0.0643289229465603,
-     "t precision (rms sd)": 0.014864473094532182,
-     "periosteum bias": 0.02423408102105246,
-     "periosteum rmse": 0.03073220418194874,
-     "periosteum precision (rms sd)": 0.011642177750837555
-    }
-   },
-   "femur: local, estimated PSF, true rho_c": {
-    "all": {
-     "nodes": 36940,
-     "t bias": 0.10929833169539288,
-     "t rmse": 0.16178730153943832,
-     "t precision (rms sd)": 0.015718644581150493,
-     "periosteum bias": 0.04810621598113089,
-     "periosteum rmse": 0.08635470030310015,
-     "periosteum precision (rms sd)": 0.016554413770114462
-    },
-    "t/sigma 0-1": {
-     "nodes": 6795,
-     "t bias": 0.13983834069440443,
-     "t rmse": 0.19164564164195882,
-     "t precision (rms sd)": 0.015935094104058283,
-     "periosteum bias": 0.10265043965292926,
-     "periosteum rmse": 0.14717762780634866,
-     "periosteum precision (rms sd)": 0.027017815512852213
-    },
-    "t/sigma 1-2": {
-     "nodes": 17322,
-     "t bias": 0.10221043103078307,
-     "t rmse": 0.15402725900476089,
-     "t precision (rms sd)": 0.01520517060643186,
-     "periosteum bias": 0.0467582301979284,
-     "periosteum rmse": 0.07595288960479922,
-     "periosteum precision (rms sd)": 0.0141788067062432
-    },
-    "t/sigma 2-4": {
-     "nodes": 12779,
-     "t bias": 0.10304833847348908,
-     "t rmse": 0.15480011090791476,
-     "t precision (rms sd)": 0.016279282250182957,
-     "periosteum bias": 0.021012237303242892,
-     "periosteum rmse": 0.047066745671411975,
-     "periosteum precision (rms sd)": 0.01144861206210939
-    },
-    "t/sigma 4-inf": {
-     "nodes": 44,
-     "t bias": -0.0014762695137940014,
-     "t rmse": 0.061070082375322826,
-     "t precision (rms sd)": 0.015164925856129345,
-     "periosteum bias": 0.024373566242365974,
-     "periosteum rmse": 0.0306749673547558,
-     "periosteum precision (rms sd)": 0.011598401635651246
-    }
-   },
-   "femur: regularized, true rho_c": {
-    "all": {
-     "nodes": 36940,
-     "t bias": 0.13812642447299192,
-     "t rmse": 0.15912905020652793,
-     "t precision (rms sd)": 0.0032695379406431128,
-     "periosteum bias": 0.04133063298585123,
-     "periosteum rmse": 0.0696113853706218,
-     "periosteum precision (rms sd)": 0.0033329524752072457
-    },
-    "t/sigma 0-1": {
-     "nodes": 6795,
-     "t bias": 0.22037809253353294,
-     "t rmse": 0.23678086840817186,
-     "t precision (rms sd)": 0.003515384880967114,
-     "periosteum bias": 0.08885573695233807,
-     "periosteum rmse": 0.09782989625210883,
-     "periosteum precision (rms sd)": 0.003455255815880817
-    },
-    "t/sigma 1-2": {
-     "nodes": 17322,
-     "t bias": 0.12214489008592923,
-     "t rmse": 0.13869380341036333,
-     "t precision (rms sd)": 0.003212310211294365,
-     "periosteum bias": 0.0416929244514853,
-     "periosteum rmse": 0.06348107300356486,
-     "periosteum precision (rms sd)": 0.003307351742099628
-    },
-    "t/sigma 2-4": {
-     "nodes": 12779,
-     "t bias": 0.1168622873148973,
-     "t rmse": 0.13144581812344883,
-     "t precision (rms sd)": 0.003212884455301027,
-     "periosteum bias": 0.015579700088701432,
-     "periosteum rmse": 0.05872594430488337,
-     "periosteum precision (rms sd)": 0.003300062902147935
-    },
-    "t/sigma 4-inf": {
-     "nodes": 44,
-     "t bias": -0.09672669087666165,
-     "t rmse": 0.09916799956753237,
-     "t precision (rms sd)": 0.0024049979362288517,
-     "periosteum bias": 0.03820511645597822,
-     "periosteum rmse": 0.04587105819939484,
-     "periosteum precision (rms sd)": 0.0036304879167571437
-    }
-   },
-   "femur: volumetric, true rho_c": {
-    "all": {
-     "nodes": 36940,
-     "t bias": 0.12450604450913957,
-     "t rmse": 0.15383610335590547,
-     "t precision (rms sd)": 0.0070656017500330195,
-     "periosteum bias": 0.03819477341179915,
-     "periosteum rmse": 0.06560803975672869,
-     "periosteum precision (rms sd)": 0.005638850031928368
-    },
-    "t/sigma 0-1": {
-     "nodes": 6795,
-     "t bias": 0.1847307873585775,
-     "t rmse": 0.21070353975865988,
-     "t precision (rms sd)": 0.006767899156749486,
-     "periosteum bias": 0.10535916902398491,
-     "periosteum rmse": 0.11555856383879742,
-     "periosteum precision (rms sd)": 0.006656571673683977
-    },
-    "t/sigma 1-2": {
-     "nodes": 17322,
-     "t bias": 0.11139216960149513,
-     "t rmse": 0.13853293968896907,
-     "t precision (rms sd)": 0.006948097253067016,
-     "periosteum bias": 0.033829012946698225,
-     "periosteum rmse": 0.05299959448037231,
-     "periosteum precision (rms sd)": 0.0054237089939744385
-    },
-    "t/sigma 2-4": {
-     "nodes": 12779,
-     "t bias": 0.11063639393910797,
-     "t rmse": 0.1370579822811856,
-     "t precision (rms sd)": 0.007377297287838689,
-     "periosteum bias": 0.008498719765638468,
-     "periosteum rmse": 0.03915937712019755,
-     "periosteum precision (rms sd)": 0.005329159372824489
-    },
-    "t/sigma 4-inf": {
-     "nodes": 44,
-     "t bias": 0.014771456389138266,
-     "t rmse": 0.03353404394754821,
-     "t precision (rms sd)": 0.005168883728266626,
-     "periosteum bias": 0.009274412865507307,
-     "periosteum rmse": 0.01741285412266029,
-     "periosteum precision (rms sd)": 0.00477661747993334
-    },
-    "psf": [
-     0.46124944186319156,
-     0.5655023625049042
+     0.5651734213534159,
+     0.6884841715989289
     ]
    }
   },
@@ -1330,12 +555,12 @@
    "radius: volumetric": {
     "all": {
      "nodes": 40502,
-     "t bias": 0.001946143147347166,
-     "t rmse": 0.029545016300606623,
-     "t precision (rms sd)": 0.0008981580178895846,
-     "periosteum bias": -0.000373089327662566,
-     "periosteum rmse": 0.005553464319318723,
-     "periosteum precision (rms sd)": 0.000660665454619956
+     "t bias": 0.0017370186397751514,
+     "t rmse": 0.02803134309476057,
+     "t precision (rms sd)": 0.0007498668517466814,
+     "periosteum bias": -0.0005151691644310162,
+     "periosteum rmse": 0.005610515609032207,
+     "periosteum precision (rms sd)": 0.0005274285785877918
     },
     "t/sigma 0-1": {
      "nodes": 0,
@@ -1366,16 +591,16 @@
     },
     "t/sigma 4-inf": {
      "nodes": 40502,
-     "t bias": 0.001946143147347166,
-     "t rmse": 0.029545016300606623,
-     "t precision (rms sd)": 0.0008981580178895846,
-     "periosteum bias": -0.000373089327662566,
-     "periosteum rmse": 0.005553464319318723,
-     "periosteum precision (rms sd)": 0.000660665454619956
+     "t bias": 0.0017370186397751514,
+     "t rmse": 0.02803134309476057,
+     "t precision (rms sd)": 0.0007498668517466814,
+     "periosteum bias": -0.0005151691644310162,
+     "periosteum rmse": 0.005610515609032207,
+     "periosteum precision (rms sd)": 0.0005274285785877918
     },
     "psf": [
-     0.08942340168655218,
-     0.08942340168655218
+     0.08929684342185384,
+     0.08929684342185384
     ]
    }
   },
@@ -1524,12 +749,12 @@
    "tibia: volumetric": {
     "all": {
      "nodes": 69945,
-     "t bias": -0.012011588524618024,
-     "t rmse": 0.034273541565719164,
-     "t precision (rms sd)": 0.000657620387584679,
-     "periosteum bias": -0.00022321937704202133,
-     "periosteum rmse": 0.0059232375718109255,
-     "periosteum precision (rms sd)": 0.000427364753718864
+     "t bias": -0.011115884590648425,
+     "t rmse": 0.03363252135892192,
+     "t precision (rms sd)": 0.0006072340523126209,
+     "periosteum bias": -0.0006226045439275369,
+     "periosteum rmse": 0.005941120070092355,
+     "periosteum precision (rms sd)": 0.0003661396979080372
     },
     "t/sigma 0-1": {
      "nodes": 0,
@@ -1560,16 +785,16 @@
     },
     "t/sigma 4-inf": {
      "nodes": 69945,
-     "t bias": -0.012011588524618024,
-     "t rmse": 0.034273541565719164,
-     "t precision (rms sd)": 0.000657620387584679,
-     "periosteum bias": -0.00022321937704202133,
-     "periosteum rmse": 0.0059232375718109255,
-     "periosteum precision (rms sd)": 0.000427364753718864
+     "t bias": -0.011115884590648425,
+     "t rmse": 0.03363252135892192,
+     "t precision (rms sd)": 0.0006072340523126209,
+     "periosteum bias": -0.0006226045439275369,
+     "periosteum rmse": 0.005941120070092355,
+     "periosteum precision (rms sd)": 0.0003661396979080372
     },
     "psf": [
-     0.08940081690698697,
-     0.08940081690698697
+     0.08887174011873819,
+     0.08887174011873819
     ]
    }
   }

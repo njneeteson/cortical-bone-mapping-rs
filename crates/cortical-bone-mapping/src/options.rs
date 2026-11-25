@@ -278,24 +278,21 @@ pub struct VolumetricOptions {
     pub global_densities: bool,
     /// Weight `λ` of the spatial smoothing of the edge fields `m` and `t`
     /// (the regularised method's penalty, with the same operator and
-    /// weighting, `λ ρc² / (N t0²)`; 0 = none, the curvature penalty then
-    /// being the only regulariser of the edges).
+    /// weighting, `λ ρc² / (N t0²)`; default 1, as Table 1 of Neeteson &
+    /// Boyd 2025). With it the refinement of the knee CT converges, where the
+    /// curvature penalty alone let the surface sink into marrow
+    /// (`docs/volumetric_refinement.md`).
     pub edge_lambda: f64,
     /// One global soft-tissue density `ρs`, with `ρb` a field. Soft tissue
     /// varies less than marrow, and a global `ρs` keeps a node whose band
     /// lies inside the bone from explaining bone outside its surface as soft
     /// tissue (which lets the surface sink; `docs/volumetric_refinement.md`).
     pub global_soft_tissue: bool,
-    /// Curvature penalty on the fitted surfaces (on `m`, `t`), the only
-    /// regulariser of the edge positions: without it each node's support is
-    /// roughly one profile's worth of voxels and the precision is that of the
-    /// local fit. The default weight 0.3 is the best compromise over the
-    /// phantoms (`docs/volumetric_validation.md`): thickness RMS error
-    /// against weights 0.1 and 1.0 of 0.0077 (0.0069, 0.0106) and 0.0087
-    /// (0.0099, 0.0104) mm on the shell at noise 30 and 120, 0.029 (0.041,
-    /// 0.021) mm on the distal radius, 0.063 (0.063, 0.065) mm on the
-    /// proximal femur and 0.162 (0.158, 0.166) mm on the knee. Heavier
-    /// weights suit HR-pQCT; at clinical resolution the choice matters little.
+    /// Curvature penalty on the fitted surfaces (on `m`, `t`), beside the
+    /// edge smoothing: by default the change mode at weight 0.3, which with
+    /// the edge smoothing gave the most precise thickness on the noisy
+    /// cylinder phantom and converged on the knee CT
+    /// (`docs/volumetric_refinement.md`, section 6).
     pub curvature: Option<CurvatureOptions>,
     /// Use every `voxel_stride`-th voxel along each axis (1 = all).
     pub voxel_stride: usize,
@@ -316,7 +313,7 @@ impl Default for VolumetricOptions {
             neighbours: 500,
             cutoff: 3.0,
             global_densities: false,
-            edge_lambda: 0.0,
+            edge_lambda: 1.0,
             global_soft_tissue: false,
             curvature: Some(CurvatureOptions {
                 weight: 0.3,

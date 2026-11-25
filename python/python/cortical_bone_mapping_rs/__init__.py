@@ -36,12 +36,12 @@ True
 
 
 from . import _core
-from .bones import map_bones, name_bones, refine_bones, separate_bones
+from .bones import map_bones, name_bones, refine_bones, separate_bones, shared_scanner
 from .mapping import cortical_bone_mapping, mask_surface, refine_segmentation
 from .mesh import mesh_curvature, mesh_section, voxelize, write_vtk
 from .model import fit_profiles, profile_model
 from .options import PARAM_NAMES, Options, RefineOptions
-from .phantoms import SITES, BonePhantom, FemurPhantom, JointPhantom, Phantom, site_phantom
+from .phantoms import SITES, BonePhantom, FemurPhantom, Phantom, site_phantom
 from .results import CbmResult, RefineResult
 from .segmentation import (
     BuieOptions,
@@ -61,7 +61,6 @@ __all__ = [
     "RefineResult",
     "Phantom",
     "BonePhantom",
-    "JointPhantom",
     "FemurPhantom",
     "site_phantom",
     "SITES",
@@ -80,6 +79,7 @@ __all__ = [
     "mask_surface",
     "map_bones",
     "refine_bones",
+    "shared_scanner",
     "voxelize",
     "write_vtk",
     "mesh_section",

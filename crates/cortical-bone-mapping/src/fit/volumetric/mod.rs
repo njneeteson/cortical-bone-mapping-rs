@@ -20,13 +20,15 @@
 //! 2. one model for all band voxels, every parameter global (as the 1D
 //!    methods' initialisation; skipped when refinement passes a PSF to start
 //!    from);
-//! 3. the fields released: `m`, `t` per node with the curvature penalty on
-//!    the fitted surfaces (they define the periosteal and endosteal
-//!    surfaces), `ρs`, `ρb` per node with the spatial smoothing `ω`, and the
-//!    PSF global (`problem`, on the shared Gauss–Newton/PCG solver);
-//! 4. with `ρc` estimated, the cortical plateau from the voxels well inside
-//!    the fitted cortex, and one refit;
-//! 5. the reliability outputs (`reliability`).
+//! 3. the fields released: `m`, `t` per node with the spatial smoothing `ω`
+//!    of the regularised method and optionally a curvature penalty on the
+//!    fitted surfaces (they define the periosteal and endosteal surfaces),
+//!    `ρs`, `ρb` per node with the same smoothing, and the PSF global
+//!    (`problem`, on the shared Gauss–Newton/PCG solver);
+//! 4. the reliability outputs (`reliability`).
+//!
+//! `ρc` is given, or, to be estimated, estimated beforehand from the nodes'
+//! profiles by the 1D estimate (`fit::profile_rho_c`).
 //!
 //! The surface is fixed during a fit; refinement moves it by the fitted
 //! `m − t/2`, as for the 1D methods. Neighbourhoods default to distance along
@@ -59,10 +61,10 @@ use super::{global_settings, held_subset, FitConstraints, Nodes};
 use crate::error::Error;
 use crate::model::{Params, M as PM, RHO_B as PRB, RHO_S as PRS, SIGMA as PS, T as PT};
 use crate::operators::{CurvatureOperator, Neighbours, SmoothingOperator};
-use crate::options::{AxialBlur, Options, RhoCMode, VolumetricOptions};
+use crate::options::{AxialBlur, Options, VolumetricOptions};
 use crate::result::{CbmResult, FitInfo, VolumetricInfo};
 use crate::surface::mesh::Mesh;
-use crate::util::{dot, quantile, scale, V3};
+use crate::util::{dot, scale, V3};
 use crate::volume::{Geometry, Voxel};
 
 /// Fit the volumetric model on the nodes `keep` of an (already smoothed)
@@ -98,20 +100,13 @@ pub(crate) fn fit_surface<T: Voxel>(
         method: "volumetric".to_string(),
         ..Default::default()
     };
-    let mut rho_c = fit.initial_rho_c();
+    let rho_c = fit.rho_c();
     let tg = Instant::now();
     let global = fit.global_stage(rho_c, &mut info);
     timings.push(("global fit".to_string(), tg.elapsed().as_secs_f64()));
     let tf = Instant::now();
     let starts = fit.node_starts(&global, warm_start);
-    let mut x = fit.field_stage(rho_c, &global, &starts, &mut info);
-    if c.rho_c.is_none() && options.model.rho_c_mode == RhoCMode::Estimate {
-        if let Some(rc) = fit.plateau(rho_c, &global, &x) {
-            let refit = fit.field_starts_from(rho_c, &global, &x);
-            rho_c = rc;
-            x = fit.field_stage(rho_c, &global, &refit, &mut info);
-        }
-    }
+    let x = fit.field_stage(rho_c, &global, &starts, &mut info);
     timings.push(("volumetric fit".to_string(), tf.elapsed().as_secs_f64()));
     let tr = Instant::now();
     let out = fit.outputs(rho_c, &global, &x);
@@ -333,22 +328,10 @@ impl<'a, 'c> Fit<'a, 'c> {
         }
     }
 
-    /// The cortical density to start from: given, fixed, or (to be
-    /// estimated) the 90th percentile of the band voxels inside the surface.
-    fn initial_rho_c(&self) -> f64 {
-        if let Some(rc) = self.c.rho_c {
-            return rc;
-        }
-        match self.o.model.rho_c_mode {
-            RhoCMode::Estimate => {
-                let inside: Vec<f64> = (0..self.band.len())
-                    .filter(|&e| self.band.depth[e] >= 0.0)
-                    .map(|e| self.band.value[e] as f64)
-                    .collect();
-                quantile(inside, 0.9)
-            }
-            _ => self.o.model.rho_c,
-        }
+    /// The cortical density: given (held, or estimated from the profiles by
+    /// the caller, `fit::profile_rho_c`), else the options' fixed value.
+    fn rho_c(&self) -> f64 {
+        self.c.rho_c.unwrap_or(self.o.model.rho_c)
     }
 
     /// Roles of the parameters: `fields` for the field stage, all global
@@ -492,15 +475,6 @@ impl<'a, 'c> Fit<'a, 'c> {
             .collect()
     }
 
-    /// Node starts from a previous field fit `x`.
-    fn field_starts_from(&self, rho_c: f64, global: &[f64; NV], x: &[f64]) -> Vec<[f64; 4]> {
-        let pr = self.problem(true, rho_c, global, None);
-        let values = Prepared::new(&pr).node_values(x);
-        (0..self.nodes.ids.len())
-            .map(|v| [values[M][v], values[T][v], values[RHO_S][v], values[RHO_B][v]])
-            .collect()
-    }
-
     /// The curvature penalty on the fitted surfaces (lengths default to the
     /// global thickness).
     fn curvature(&self, rho_c: f64, global: &[f64; NV]) -> Option<CurvatureOperator> {
@@ -531,21 +505,6 @@ impl<'a, 'c> Fit<'a, 'c> {
         let si = minimise(&prep, &mut x, &settings);
         info.add_solve(&si);
         x
-    }
-
-    /// Stage 4: the cortical plateau (`ρc` estimate) from the field fit `x`:
-    /// per node the median of its voxels well inside the fitted cortex (at
-    /// least 3), and the median over nodes (at least 10).
-    fn plateau(&self, rho_c: f64, global: &[f64; NV], x: &[f64]) -> Option<f64> {
-        let pr = self.problem(true, rho_c, global, None);
-        let mut samples = Prepared::new(&pr).cortical_samples(x);
-        samples.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
-        let medians: Vec<f64> = samples
-            .chunk_by(|a, b| a.0 == b.0)
-            .filter(|g| g.len() >= 3)
-            .map(|g| g[g.len() / 2].1 as f64)
-            .collect();
-        (medians.len() >= 10).then(|| quantile(medians, 0.5))
     }
 
     /// Stage 5: node parameters, residuals and reliability at `x` (only the

@@ -6,9 +6,6 @@ ground truth (60.7 um voxels, noise sigma = 80):
 
   healthy, osteoporotic, thick      long-bone shafts (cbm.BonePhantom)
   neighbour 2.0 / 1.0 / 0.5 mm      an ulna-like bone at that gap (soft tissue between)
-  breaks                            four round cortical breaks 0.3-1.2 mm across
-  knee, knee OA                     tibia / femur contact region
-                                    (cbm.JointPhantom), joint space 4.5 / 2.0 mm
 
 The shafts are distal-radius sized (periosteal radius 8.5 mm, ~230 mm^2) with
 HR-pQCT (XtremeCT II) values: see docs/segmentation.md#phantoms.
@@ -17,12 +14,11 @@ Pipelines:
 
   buie                    Buie et al. (2007), paper parameters, 450/320, as
                           the reference standard-of-care segmentation;
-  buie 2D                 the same with per-slice connectivity (breaks only);
   buie (no prepro.)       without the largest-bone pre-processing, as in
                           Bonelab's autocontour (neighbour scenarios only);
   hull                    the starting segmentation for CBM: threshold 320,
                           median, largest component, per-slice convex hull
-                          (cbm.hull_segmentation; per bone for the knee);
+                          (cbm.hull_segmentation);
   local, multigrid, regularized, reg+curvature, curvature, volumetric
                           one CBM fit on the hull's surface; the cortex is the
                           region between the fitted surfaces;
@@ -41,24 +37,29 @@ Metrics:
   * along each sampling line of the fit (for Buie and the hull: the lines of
     the regularized fit): mean absolute errors of the periosteal and endosteal
     edge positions, and bias / RMSE of the thickness, against the exact
-    crossings of the true surfaces. Lines through cortical breaks are
-    excluded (there is no cortex to measure);
+    crossings of the true surfaces;
   * shafts also: Dice of the cortex, mean symmetric 3D boundary distances of
     the periosteal and endosteal surfaces, and semi-derived Ct.Th (cortical
     area / periosteal perimeter per slice);
-  * breaks: mean distance of the periosteal boundary near the breaks from the
-    true (bridging) periosteal surface; neighbours: fraction of the
-    neighbouring bone inside the periosteal mask.
+  * neighbours: fraction of the neighbouring bone inside the periosteal mask.
 
 A second table compares cortical-density choices for the regularized fit on
 the hull: the true tissue density (oracle), Table 1's fixed 1000, the
 estimate, and the per-node profile maximum.
 
     python docs/scripts/segmentation_experiment.py   # docs/results/segmentation_experiment.json + figure
+    python docs/scripts/segmentation_experiment.py --refine-only   # re-run the refinements only
+    python docs/scripts/segmentation_experiment.py --figure        # redraw the figures only
+
+The figures are docs/images/segmentation.png (Buie, 1D and volumetric
+refinement on the middle slice) and docs/images/segmentation_volumetric.png
+(thickness maps of the refinements, unrolled around the shaft).
 """
 
 import json
+import pickle
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -83,16 +84,6 @@ SHAFTS = {
     "neighbour 2.0 mm": dict(HEALTHY, dims=(40, 500, 500), neighbour=(3.5, 0.8, 2.0, np.pi / 4)),
     "neighbour 1.0 mm": dict(HEALTHY, dims=(40, 480, 480), neighbour=(3.5, 0.8, 1.0, np.pi / 4)),
     "neighbour 0.5 mm": dict(HEALTHY, dims=(40, 470, 470), neighbour=(3.5, 0.8, 0.5, np.pi / 4)),
-    # round breaks spanning the sizes seen on HR-pQCT: detection limit ~0.25 mm; median
-    # volumes ~0.2 mm^3 (healthy) and ~0.5 mm^3 (rheumatoid arthritis), i.e. ~0.3-1.2 mm across
-    "breaks": dict(HEALTHY, breaks=[(0.3, 0.3, 1.2, 0.3), (1.9, 0.5, 1.2, 0.5), (3.5, 0.8, 1.2, 0.8),
-                                    (5.0, 1.2, 1.2, 1.2)]),
-}
-KNEES = {
-    # bone-to-bone distance at the contact point: healthy (~4.8-5.7 mm radiographic JSW) and
-    # moderate osteoarthritis; the joint space holds cartilage
-    "knee": dict(dims=(220, 200, 200), joint_level=0.38, joint_space=4.5, rho_bone=950.0),
-    "knee OA": dict(dims=(180, 200, 200), joint_level=0.45, joint_space=2.0, rho_bone=950.0),
 }
 FITS = {
     "local": dict(method="local"),
@@ -108,7 +99,10 @@ REFINES = {
     "refine volumetric": FITS["volumetric"],
 }
 SAMPLING = dict(outside=1.0, inside=3.0)
-FIGURE = ("osteoporotic", "neighbour 0.5 mm", "breaks", "knee OA")
+FIGURE = ("healthy", "osteoporotic", "neighbour 0.5 mm")
+FIGURE_REFINES = ("refine+curvature", "refine volumetric")
+# the refinements drawn in the figures, kept so that they can be redrawn without re-running
+FIGURE_CACHE = Path(tempfile.gettempdir()) / "cbm_segmentation_figure.pkl"
 
 
 def options(site):
@@ -144,14 +138,6 @@ def surface_distance(a, b):
     da = ndimage.distance_transform_edt(~boundary(b), sampling=H)
     db = ndimage.distance_transform_edt(~boundary(a), sampling=H)
     return float(0.5 * (da[ba].mean() + db[bb].mean()))
-
-
-def one_sided_distance(a, b, region):
-    """Mean distance of a's boundary voxels within ``region`` from b's boundary."""
-    ba = boundary(a) & region
-    if not ba.any():
-        return float("nan")
-    return float(ndimage.distance_transform_edt(~boundary(b), sampling=H)[ba].mean())
 
 
 def ct_th(peri, cort):
@@ -215,12 +201,9 @@ class Shaft:
         self.ph = cbm.BonePhantom(dims=dims, radius=SHAFT_RADIUS, noise=NOISE, seed=7, **kw)
         self.img, self.tp, self.te = self.ph.generate()
         self.labels = self.ph.labels()
-        self.tc = self.tp & ~self.te & (self.labels != 2)
+        self.tc = self.tp & ~self.te
         self.rho_true = kw["rho_bone"]
         self.has_neighbour = self.ph.neighbour is not None
-        self.break_region = None
-        if (self.labels == 2).any():
-            self.break_region = ndimage.binary_dilation(self.labels == 2, structure=np.ones((1, 9, 9), bool))
 
     def buie(self, **kw):
         return cbm.buie_segmentation(self.img, **kw)
@@ -231,9 +214,6 @@ class Shaft:
     def truth(self, points, normals, o):
         e = self.ph.edges_along(points, normals, -o.outside, o.inside)
         keep = (points[:, 0] > MARGIN * H) & (points[:, 0] < (self.img.shape[0] - 1 - MARGIN) * H)
-        if self.break_region is not None:
-            idx = np.clip(np.round(points / H).astype(int), 0, np.array(self.img.shape) - 1)
-            keep &= ~self.break_region[tuple(idx.T)]
         return e, keep
 
     def mask_metrics(self, peri, cort):
@@ -242,52 +222,9 @@ class Shaft:
                    periosteal_distance_mm=surface_distance(peri, self.tp),
                    endosteal_distance_mm=surface_distance(peri & ~cort, self.te),
                    ct_th_mm=ct_th(peri, cort), ct_th_true_mm=ct_th(self.tp, self.tc))
-        if self.break_region is not None:
-            out["break_periosteal_distance_mm"] = one_sided_distance(peri, self.tp, self.break_region)
         if self.has_neighbour:
             out["neighbour_included"] = float(peri[self.labels == 1].mean())
         return out
-
-
-class Knee(Shaft):
-    site = "knee"
-
-    def __init__(self, name, kw):
-        self.name = name
-        self.ph = cbm.JointPhantom(noise=NOISE, seed=5, **kw)
-        self.img, tp, te = self.ph.generate()
-        self.tp, self.te = tp > 0, te > 0
-        self.tc = self.tp & ~self.te
-        self.labels = np.zeros(self.img.shape, np.uint8)
-        self.rho_true = kw["rho_bone"]
-        self.has_neighbour = False
-        self.break_region = None
-
-    def buie(self, **kw):
-        return cbm.buie_segmentation(self.img, largest_bone_only=False, **kw)  # both bones
-
-    def hull(self):
-        """Per-slice hull of each of the two largest thresholded components,
-        so that the hull never bridges the joint space (unless the bones
-        touch at the threshold)."""
-        m = ndimage.median_filter(self.img >= 320.0, footprint=np.ones((1, 3, 3), bool))
-        lab, n = ndimage.label(m)
-        sizes = ndimage.sum(np.ones_like(lab), lab, index=np.arange(1, n + 1))
-        out = np.zeros_like(m)
-        for c in np.argsort(sizes)[::-1][:2] + 1:
-            out |= cbm.hull_segmentation(np.where(lab == c, self.img, 0).astype(np.float32),
-                                         median_kernel=(1, 1, 1))
-        return out
-
-    def truth(self, points, normals, o):
-        e = self.ph.edges_along(points, normals, -o.outside, o.inside)
-        keep = (points[:, 0] > MARGIN * H) & (points[:, 0] < (self.img.shape[0] - 1 - MARGIN) * H)
-        return e[:, :2], keep
-
-    def mask_metrics(self, peri, cort):
-        # side shells are not fitted (normals along the axis): line metrics only,
-        # plus whether the periosteal mask bridges the joint space
-        return dict(joint_bridged=bool(ndimage.label(peri)[1] < 2))
 
 
 # ---------------------------------------------------------------- experiment
@@ -324,8 +261,6 @@ def run_scenario(sc, rows):
         return bp, bt
 
     buie = add_buie("buie")
-    if sc.break_region is not None:
-        add_buie("buie 2D", connectivity_2d=True)
     if sc.has_neighbour:
         add_buie("buie (no prepro.)", largest_bone_only=False)
     # the hull has no endosteal surface: its cortex is empty, only the periosteal metrics apply
@@ -340,7 +275,7 @@ def run_scenario(sc, rows):
         add(name, p, c, fit_edges(res), res.points, res.normals, sec,
             dict(rho_c=res.rho_c, budget_exhausted=res.info["budget_exhausted"]))
 
-    refined = None
+    refined = {}
     for name, kw in REFINES.items():
         t0 = time.perf_counter()
         rr = cbm.refine_segmentation(sc.img, hull, options=o, **for_site(kw, sc.site))
@@ -348,8 +283,8 @@ def run_scenario(sc, rows):
         add(name, rr.periosteal_mask, rr.cortical_mask, fit_edges(rr.result), rr.result.points,
             rr.result.normals, sec, dict(iterations=len(rr.history), converged=rr.converged,
                                          rho_c=rr.result.rho_c))
-        if name == "refine+curvature":  # the figure's refinement
-            refined = rr
+        if name in FIGURE_REFINES:
+            refined[name] = rr
     return hull, buie, refined
 
 
@@ -364,16 +299,76 @@ def rho_c_table(sc, hull, rows):
         report(rows, r)
 
 
+def refine_rows(sc, rows):
+    """Only the refinement pipelines of a scenario (and Buie, for the
+    figure); returns (Buie's periosteal and marrow masks, the figures'
+    refinements by name)."""
+    o = options(sc.site)
+    hull = sc.hull()
+    refined = {}
+    for name, kw in REFINES.items():
+        t0 = time.perf_counter()
+        rr = cbm.refine_segmentation(sc.img, hull, options=o, **for_site(kw, sc.site))
+        sec = time.perf_counter() - t0
+        truth, keep = sc.truth(rr.result.points, rr.result.normals, o)
+        r = dict(scenario=sc.name, pipeline=name, time_s=sec)
+        r.update(sc.mask_metrics(rr.periosteal_mask, rr.cortical_mask))
+        r.update(line_metrics(fit_edges(rr.result), truth, keep))
+        r.update(dict(iterations=len(rr.history), converged=rr.converged, rho_c=rr.result.rho_c))
+        report(rows, r)
+        if name in FIGURE_REFINES:
+            refined[name] = rr
+    bp, _, bt = sc.buie()
+    return (bp, bt), refined
+
+
+def figure_only():
+    """Redraw the figures, re-running Buie and the figures' refinements unless
+    they are cached from an earlier run."""
+    if FIGURE_CACHE.exists():
+        figure(pickle.loads(FIGURE_CACHE.read_bytes()))
+        return
+    examples = {}
+    for name in FIGURE:
+        print("==", name, flush=True)
+        sc = Shaft(name, SHAFTS[name])
+        hull, o = sc.hull(), options(sc.site)
+        refined = {r: cbm.refine_segmentation(sc.img, hull, options=o, **for_site(REFINES[r], sc.site))
+                   for r in FIGURE_REFINES}
+        bp, _, bt = sc.buie()
+        examples[name] = (sc, (bp, bt), refined)
+    figure(examples)
+
+
+def refine_only():
+    """Re-run the refinement pipelines only (after a change to refinement),
+    replacing their rows in the saved results, and redraw the figure."""
+    path = DOCS / "results" / "segmentation_experiment.json"
+    saved = json.loads(path.read_text())
+    rows, examples = [], {}
+    scenarios = [(Shaft, n, kw) for n, kw in SHAFTS.items()]
+    for cls, name, kw in scenarios:
+        print("==", name, flush=True)
+        sc = cls(name, kw)
+        buie, refined = refine_rows(sc, rows)
+        if name in FIGURE:
+            examples[name] = (sc, buie, refined)
+    new = {(r["scenario"], r["pipeline"]): r for r in rows}
+    saved["pipelines"] = [new.get((r["scenario"], r["pipeline"]), r) for r in saved["pipelines"]]
+    path.write_text(json.dumps(saved, indent=2))
+    figure(examples)
+
+
 def main(only=None):
     rows, rho_rows, examples = [], [], {}
-    scenarios = [(Shaft, n, kw) for n, kw in SHAFTS.items()] + [(Knee, n, kw) for n, kw in KNEES.items()]
+    scenarios = [(Shaft, n, kw) for n, kw in SHAFTS.items()]
     for cls, name, kw in scenarios:
         if only and name not in only:
             continue
         print("==", name, flush=True)
         sc = cls(name, kw)
         hull, buie, refined = run_scenario(sc, rows)
-        if name in ("healthy", "osteoporotic", "thick", "knee"):
+        if name in ("healthy", "osteoporotic", "thick"):
             rho_c_table(sc, hull, rho_rows)
         if name in FIGURE:
             examples[name] = (sc, buie, refined)
@@ -383,43 +378,121 @@ def main(only=None):
     figure(examples)
 
 
+def figure_data(sc, buie, refined):
+    """What the figures draw of one scenario: the middle slice of the image,
+    the truth and every segmentation, a zoom on the gap to a neighbour, and
+    per node of each refinement its position around the shaft, thickness and
+    the true thickness along its line."""
+    o = options(sc.site)
+    k = sc.img.shape[0] // 2
+    bp, bt = buie
+    d = dict(img=sc.img[k], tp=sc.tp[k], te=sc.te[k], segs={"Buie (2007)": (bp[k], bt[k])}, maps={}, zoom=None)
+    for name, rr in refined.items():
+        d["segs"][name] = (rr.periosteal_mask[k], rr.endosteal_mask[k])
+        res = rr.result
+        truth, keep = sc.truth(res.points, res.normals, o)
+        centre = res.points[:, 1:].mean(0)
+        angle = np.degrees(np.arctan2(res.points[:, 1] - centre[0], res.points[:, 2] - centre[1])) % 360
+        ok = keep & np.isfinite(truth).all(1)
+        d["maps"][name] = dict(angle=angle[ok], z=res.points[ok, 0], thickness=res.thickness[ok],
+                               truth=truth[ok, 1] - truth[ok, 0])
+    if sc.has_neighbour:
+        # the neighbour's voxel nearest the periosteum is the middle of the gap
+        dist = ndimage.distance_transform_edt(~d["tp"])
+        nb = sc.labels[k] == 1
+        i, j = np.unravel_index(np.argmin(np.where(nb, dist, np.inf)), nb.shape)
+        d["zoom"] = (i, j)
+    return d
+
+
 def figure(examples):
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    names = list(examples)
-    fig, axes = plt.subplots(2, len(names), figsize=(4.2 * len(names), 8.8))
-    for col, name in enumerate(names):
-        sc, (bp, bt), rr = examples[name]
-        knee = isinstance(sc, Knee)
-        if knee:  # coronal section through the contact point
-            j = int(round(sc.img.shape[1] / 2 + sc.ph.contact_offset[0] / H))
-            sl = lambda a: a[:, j, :]  # noqa: E731
-        else:
-            k = sc.img.shape[0] // 2
-            sl = lambda a: a[k]  # noqa: E731
-        for row, (title, peri, marrow, colr) in enumerate([
-            ("Buie (2007)", bp, bt, "tab:red"),
-            ("hull → CBM refinement", rr.periosteal_mask, rr.endosteal_mask, "tab:cyan"),
-        ]):
-            ax = axes[row, col]
-            ax.imshow(sl(sc.img), cmap="gray", vmin=-150, vmax=1250, origin="lower" if knee else "upper")
-            ax.contour(sl(sc.tp), [0.5], colors="lime", linestyles="--", linewidths=0.9)
-            ax.contour(sl(sc.te), [0.5], colors="lime", linestyles="--", linewidths=0.9)
-            ax.contour(sl(peri), [0.5], colors=colr, linewidths=1.0)
-            if not (knee and row == 1):  # the refined knee endosteum exists only under the plates
-                ax.contour(sl(marrow), [0.5], colors=colr, linewidths=1.0)
-            ax.set_title(f"{name}: {title}", fontsize=10)
+    data = {n: (v if isinstance(v, dict) else figure_data(*v)) for n, v in examples.items()}
+    try:
+        FIGURE_CACHE.write_bytes(pickle.dumps(data))
+    except OSError:
+        pass
+    names = list(data)
+    rows = [("Buie (2007)", "Buie (2007)", "tab:red"),
+            ("refine+curvature", "hull → 1D refinement (curvature)", "tab:orange"),
+            ("refine volumetric", "hull → volumetric refinement", "tab:cyan")]
+    zoomed = [n for n in names if data[n]["zoom"] is not None]
+    cols = [(n, None) for n in names] + [(n, data[n]["zoom"]) for n in zoomed]
+    half = 55  # zoom half-width, voxels (3.3 mm)
+
+    # middle slices
+    fig, axes = plt.subplots(len(rows), len(cols), figsize=(3.6 * len(cols), 3.7 * len(rows)))
+    for c, (name, zoom) in enumerate(cols):
+        d = data[name]
+        for r, (key, title, colr) in enumerate(rows):
+            ax = axes[r, c]
+            peri, marrow = d["segs"][key]
+            ax.imshow(d["img"], cmap="gray", vmin=-150, vmax=1250)
+            for m in (d["tp"], d["te"]):
+                ax.contour(m, [0.5], colors="lime", linestyles="--", linewidths=0.9)
+            for m in (peri, marrow):
+                ax.contour(m, [0.5], colors=colr, linewidths=1.2 if zoom else 1.0)
+            if zoom:
+                i, j = zoom
+                ax.set_xlim(j - half, j + half)
+                ax.set_ylim(i + half, i - half)
+                ax.set_title(f"{name}, the gap\n{title}", fontsize=9)
+            else:
+                ax.set_title(f"{name}\n{title}", fontsize=9)
             ax.set_xticks([])
             ax.set_yticks([])
-    fig.suptitle("Truth (green, dashed) and segmentation (solid). 60.7 µm voxels, noise σ = 80; "
-                 "knee: coronal section through the contact point.", fontsize=10)
+    fig.suptitle("Truth (green, dashed) and segmentation (solid). 60.7 µm voxels, noise σ = 80, middle slice.",
+                 fontsize=10)
+    fig.tight_layout()
     out = DOCS / "images" / "segmentation.png"
     fig.savefig(out, dpi=85, bbox_inches="tight")
+    plt.close(fig)
+    print("wrote", out)
+
+    # thickness maps, unrolled around the shaft
+    from scipy.stats import binned_statistic_2d
+
+    fig, axes = plt.subplots(3, len(names), figsize=(4.4 * len(names), 6.6), sharex=True, sharey=True,
+                             squeeze=False, layout="constrained")
+    tmax = max(np.percentile(data[n]["maps"]["refine volumetric"]["truth"], 99) for n in names)
+    map_rows = [("volumetric: thickness", "mm", "refine volumetric", "thickness", "viridis", (0, tmax)),
+                ("volumetric: error", "µm", "refine volumetric", "error", "RdBu_r", (-250, 250)),
+                ("1D + curvature: error", "µm", "refine+curvature", "error", "RdBu_r", (-250, 250))]
+    a_bins = np.linspace(0, 360, 181)  # 2°
+    for r, (title, unit, key, what, cmap, (lo, hi)) in enumerate(map_rows):
+        for c, name in enumerate(names):
+            m, ax = data[name]["maps"][key], axes[r, c]
+            v = m["thickness"] if what == "thickness" else 1000 * (m["thickness"] - m["truth"])
+            z_bins = np.arange(m["z"].min(), m["z"].max() + 2 * H, 2 * H)
+            img = binned_statistic_2d(m["z"], m["angle"], v, "mean", bins=[z_bins, a_bins]).statistic
+            im = ax.imshow(img, origin="lower", aspect="auto", cmap=cmap, vmin=lo, vmax=hi,
+                           extent=(0, 360, z_bins[0], z_bins[-1]), interpolation="nearest")
+            ax.set_facecolor("0.85")
+            label = (f"{name}\n" if r == 0 else "") + title
+            if what == "error":
+                label += f", RMSE {np.sqrt(np.mean(v ** 2)):.0f} µm"
+            ax.set_title(label, fontsize=9)
+            ax.set_xticks([0, 90, 180, 270, 360])
+            if c == 0:
+                ax.set_ylabel("z (mm)")
+            if r == len(map_rows) - 1:
+                ax.set_xlabel("angle around the shaft (°)")
+        fig.colorbar(im, ax=axes[r, :], shrink=0.95, pad=0.01).set_label(unit)
+    fig.suptitle("Refinement from the hull, unrolled around the shaft (2° × 0.12 mm bins). "
+                 "Error = fitted − true thickness along each node's line.", fontsize=10)
+    out = DOCS / "images" / "segmentation_volumetric.png"
+    fig.savefig(out, dpi=85, bbox_inches="tight")
+    plt.close(fig)
     print("wrote", out)
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--refine-only"]:
+        sys.exit(refine_only())
+    if sys.argv[1:] == ["--figure"]:
+        sys.exit(figure_only())
     sys.exit(main(sys.argv[1:] or None))

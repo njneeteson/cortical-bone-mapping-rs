@@ -64,7 +64,7 @@ VARIANTS = {
     "hull_freeze": ("convex hull, level set, adaptive, density fields, regional convergence",
                     FIELDS, dict(level_set=True, freeze=True), "hull"),
     "closing": ("4 mm closing, level set, adaptive, density fields (no freezing)",
-                FIELDS, dict(level_set=True), CLOSING),
+                FIELDS, dict(level_set=True, freeze=False), CLOSING),
     "closing_freeze_global_sigma": ("as closing_freeze, global sigma",
                                     dict(global_params=("sigma",)), dict(level_set=True, freeze=True), CLOSING),
     "closing_freeze_inside_15": ("as closing_freeze, 15 mm inside profiles",
@@ -134,6 +134,15 @@ VARIANTS = {
                                         dict(method="volumetric", vol_scanner_axis=0, vol_curvature="change",
                                              vol_curvature_weight=0.3, rho_c=1270.0),
                                         dict(level_set=True, freeze=True, refine_iterations=15), CLOSING),
+    "closing_freeze_volumetric_defaults": ("the volumetric model's defaults: edge smoothing, rho_c estimated from "
+                                           "the profiles",
+                                           dict(method="volumetric", vol_scanner_axis=0),
+                                           dict(level_set=True, freeze=True, refine_iterations=15), CLOSING),
+    "closing_freeze_volumetric_defaults_curvature": ("as closing_freeze_volumetric_defaults, plus the "
+                                                     "change-of-curvature penalty (weight 0.3)",
+                                                     dict(method="volumetric", vol_scanner_axis=0,
+                                                          vol_curvature="change", vol_curvature_weight=0.3),
+                                                     dict(level_set=True, freeze=True, refine_iterations=15), CLOSING),
     "closing_freeze_volumetric_soft_tissue": ("as closing_freeze_volumetric_change, one global soft-tissue density",
                                               dict(method="volumetric", vol_scanner_axis=0, vol_curvature="change",
                                                    vol_curvature_weight=0.3, curvature_scale=1.0,
@@ -154,14 +163,16 @@ VARIANTS = {
     # the earlier stages, from the convex hull, with the 20 moves they were run with
     "same_nodes": ("convex hull, same nodes moved every iteration, global densities, full fits",
                    {}, dict(refine_iterations=20, edge_ratio=0.0, stall_iterations=0,
-                            region_tolerance=float("inf")), "hull"),
+                            region_tolerance=float("inf"), level_set=False, freeze=False), "hull"),
     "level_set": ("convex hull, level set, global densities, full fits",
                   {}, dict(refine_iterations=20, level_set=True, edge_ratio=0.0, stall_iterations=0,
-                           region_tolerance=float("inf")), "hull"),
+                           region_tolerance=float("inf"), freeze=False), "hull"),
     "level_set_adaptive": ("convex hull, level set, global densities, adaptive inner fits",
-                           {}, dict(refine_iterations=20, level_set=True, region_tolerance=float("inf")), "hull"),
+                           {}, dict(refine_iterations=20, level_set=True, region_tolerance=float("inf"),
+                                    freeze=False), "hull"),
     "density_fields": ("convex hull, level set, adaptive, density fields",
-                       FIELDS, dict(refine_iterations=20, level_set=True, region_tolerance=float("inf")), "hull"),
+                       FIELDS, dict(refine_iterations=20, level_set=True, region_tolerance=float("inf"),
+                                    freeze=False), "hull"),
 }
 
 

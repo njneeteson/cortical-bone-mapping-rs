@@ -59,7 +59,7 @@ fn phantom_statistics_and_truth() {
 }
 
 #[test]
-fn neighbour_and_breaks() {
+fn neighbour_at_its_gap() {
     let gap = 0.5;
     let ph = BonePhantom {
         dims: (6, 200, 200),
@@ -70,12 +70,6 @@ fn neighbour_and_breaks() {
             gap,
             angle: std::f64::consts::FRAC_PI_4,
         }),
-        breaks: vec![CorticalBreak {
-            angle: -2.0,
-            width: 1.0,
-            z_center: 0.15,
-            length: 0.2,
-        }],
         ..BonePhantom::default()
     };
     let (_, peri, _) = ph.generate();
@@ -91,22 +85,4 @@ fn neighbour_and_breaks() {
     let at = |d: f64| [z, cc[0] + d * a.cos(), cc[1] + d * a.sin()];
     assert!(ph.neighbour_distance(&c, at(r + 0.5 * gap)).unwrap().0 > 1.2);
     assert!(ph.neighbour_distance(&c, at(r + gap + 0.05)).unwrap().0 < 1.2);
-    // breaks: soft tissue through the cortex in the labelled slices only
-    let nb = lab.iter().filter(|&&l| l == 2).count();
-    assert!(nb > 0);
-    // |z − 0.15| < 0.1 mm: slices 1–4 at 60.7 µm
-    for (idx, &l) in lab.indexed_iter() {
-        if l == 2 {
-            assert!((1..=4).contains(&idx.0), "break at slice {}", idx.0);
-        }
-    }
-    let mid = 2.0 * g.spacing[0];
-    let cc = ph.center_at(&c, mid);
-    let (_, _, big_r, t) = ph.polar(&c, [mid, cc[0] + (-2f64).cos(), cc[1] + (-2f64).sin()]);
-    let p = [
-        mid,
-        cc[0] + (big_r - 0.5 * t) * (-2f64).cos(),
-        cc[1] + (big_r - 0.5 * t) * (-2f64).sin(),
-    ];
-    assert_eq!(ph.density(&c, p), ph.rho_soft);
 }

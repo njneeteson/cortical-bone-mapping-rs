@@ -96,7 +96,14 @@ def test_refinement_snaps_bad_segmentation():
     # one history entry per fit (on the input surface and on every moved one)
     assert len(rr.surfaces) == len(rr.history) == len(rr.surfaces_faces)
     assert rr.history[0]["full_fit"] and rr.history[-1]["full_fit"]
-    assert all(s.shape == rr.result.surface_vertices.shape for s in rr.surfaces)
+    # the level set (default) extracts a new mesh every move
+    assert all(f.max() < len(s) for s, f in zip(rr.surfaces, rr.surfaces_faces))
+    assert rr.surfaces[-1].shape == rr.result.surface_vertices.shape
     assert (rr.cortical_mask == (rr.periosteal_mask & ~rr.endosteal_mask)).all()
+    # moving the same mesh instead keeps its vertices
+    same = cbm.refine_segmentation(image, bad, ph.spacing, **CYL_OPTS, method="regularized", reg_neighbours=64,
+                                   reg_sigma=1.0, keep_history=True, level_set=False, freeze=False,
+                                   refine_iterations=3, verbose=False)
+    assert all(v.shape == same.surfaces[0].shape for v in same.surfaces)
     with pytest.raises(ValueError, match="relaxation"):
         cbm.refine_segmentation(image, bad, ph.spacing, relaxation=1.5)

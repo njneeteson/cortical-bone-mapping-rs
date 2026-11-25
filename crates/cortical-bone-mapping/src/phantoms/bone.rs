@@ -32,7 +32,7 @@
 //! The phantom is ours. Its random fields and level cuts are described in
 //! `phantoms::render` (Berk 1987; Shinozuka & Deodatis 1991); its parameters
 //! follow HR-pQCT measurements of the distal radius and tibia (Burghardt et
-//! al. 2010) and of cortical breaks (Peters et al. 2017).
+//! al. 2010).
 //!
 //! # References
 //!
@@ -45,10 +45,6 @@
 //!   *Reproducibility of direct quantitative measures
 //!   of cortical bone microarchitecture of the distal radius and tibia by
 //!   HR-pQCT*, Bone 47(3):519–528, 2010.
-//! * M. Peters et al., *An automated algorithm for the detection of cortical
-//!   interruptions on high resolution peripheral quantitative computed
-//!   tomography images of finger joints*, PLoS ONE 12(4):e0175829, 2017,
-//!   doi:10.1371/journal.pone.0175829.
 
 use ndarray::Array3;
 use rayon::prelude::*;
@@ -98,8 +94,6 @@ pub struct BonePhantom {
     pub supersample: usize,
     /// A neighbouring bone (fibula / ulna) next to the main bone.
     pub neighbour: Option<NeighbourBone>,
-    /// Cortical breaks (channels of soft tissue through the cortex).
-    pub breaks: Vec<CorticalBreak>,
 }
 
 /// A second, simpler bone beside the main one: a circular cross-section with
@@ -116,23 +110,6 @@ pub struct NeighbourBone {
     pub gap: f64,
     /// Direction from the main bone (radians; 0 = array axis 1).
     pub angle: f64,
-}
-
-/// A cortical break: a channel of soft tissue through the full cortical
-/// depth, elliptical on the periosteal surface with axes `width` (along the
-/// arc, centred on `angle`) and `length` (along the axis, centred on
-/// `z_center`), in physical units. Real breaks in HR-pQCT are small: the
-/// detectable ones are ≳ 0.25 mm across, healthy finger joints show a median
-/// break volume of ~0.2 mm³ and rheumatoid arthritis ~0.5 mm³ (Peters et al.
-/// 2017, 2019), i.e. diameters of roughly 0.3–1.2 mm through a ~0.5–1 mm
-/// cortex. At the radius and tibia the analogues are transcortical vascular
-/// foramina and, in thin osteoporotic cortices, local loss of the shell.
-#[derive(Clone, Debug, PartialEq)]
-pub struct CorticalBreak {
-    pub angle: f64,
-    pub width: f64,
-    pub z_center: f64,
-    pub length: f64,
 }
 
 impl Default for BonePhantom {
@@ -167,7 +144,6 @@ impl Default for BonePhantom {
             seed: 1,
             supersample: 2,
             neighbour: None,
-            breaks: Vec::new(),
         }
     }
 }
@@ -279,23 +255,12 @@ impl BonePhantom {
         Some((((p[1] - ny).powi(2) + (p[2] - nx).powi(2)).sqrt(), nb))
     }
 
-    /// Whether the point (taken to be in the cortex shell) lies in a break.
-    fn in_break(&self, th: f64, big_r: f64, z: f64) -> bool {
-        let tau = 2.0 * std::f64::consts::PI;
-        self.breaks.iter().any(|b| {
-            let dth = (th - b.angle + 0.5 * tau).rem_euclid(tau) - 0.5 * tau;
-            let u = dth * big_r / (0.5 * b.width);
-            let v = (z - b.z_center) / (0.5 * b.length);
-            u * u + v * v < 1.0
-        })
-    }
-
     /// The true density at `p`: soft tissue outside, cortex (with pores, the
     /// level set `f > √2 erf⁻¹(1 − 2P)`) between the surfaces, marrow with
-    /// trabeculae (`|f| < √2 erf⁻¹(BV/TV)`) inside, and the neighbouring bone and
-    /// cortical breaks if present.
+    /// trabeculae (`|f| < √2 erf⁻¹(BV/TV)`) inside, and the neighbouring bone if
+    /// present.
     fn density(&self, c: &Coeffs, p: V3) -> f64 {
-        let (r, th, big_r, t) = self.polar(c, p);
+        let (r, _, big_r, t) = self.polar(c, p);
         let re = big_r - t;
         if r >= big_r {
             match self.neighbour_distance(c, p) {
@@ -310,8 +275,6 @@ impl BonePhantom {
                 }
                 _ => self.rho_soft,
             }
-        } else if r >= re && self.in_break(th, big_r, p[0]) {
-            self.rho_soft
         } else if r >= re {
             // relative depth from the endosteal surface (0) to the periosteum (1)
             let u = (r - re) / t;
@@ -366,8 +329,7 @@ impl BonePhantom {
         (image, peri, endo)
     }
 
-    /// Feature labels at voxel centres: 1 = neighbouring bone, 2 = cortical
-    /// break (soft tissue inside the main bone's cortex shell), 0 otherwise.
+    /// Feature labels at voxel centres: 1 = neighbouring bone, 0 otherwise.
     pub fn labels(&self) -> Array3<u8> {
         let c = self.coeffs();
         let g = self.geometry();
@@ -380,14 +342,8 @@ impl BonePhantom {
             .for_each(|(lin, v)| {
                 let (i, j, k) = (lin / (d1 * d2), (lin / d2) % d1, lin % d2);
                 let p = g.to_physical([i as f64, j as f64, k as f64]);
-                let (r, th, big_r, t) = self.polar(&c, p);
-                *v = if r >= big_r {
-                    u8::from(matches!(self.neighbour_distance(&c, p), Some((d, nb)) if d < nb.radius))
-                } else if r >= big_r - t && self.in_break(th, big_r, p[0]) {
-                    2
-                } else {
-                    0
-                };
+                let (r, _, big_r, _) = self.polar(&c, p);
+                *v = u8::from(r >= big_r && matches!(self.neighbour_distance(&c, p), Some((d, nb)) if d < nb.radius));
             });
         out
     }

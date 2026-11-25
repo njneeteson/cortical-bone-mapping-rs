@@ -178,9 +178,8 @@ class Options:
         One global ``rho_s`` and ``rho_b`` instead of fields.
     vol_edge_lambda
         Weight of the spatial smoothing of ``m`` and ``t`` (the regularised
-        method's ``reg_lambda`` penalty, same operator and weighting);
-        0 = none, the curvature penalty then being the only regulariser of
-        the edges.
+        method's ``reg_lambda`` penalty, same operator and weighting;
+        default 1).
     vol_global_soft_tissue
         One global ``rho_s``, with ``rho_b`` a field: a node whose band lies
         inside the bone cannot explain bone outside its surface as soft
@@ -284,7 +283,7 @@ class Options:
     vol_sigma_z: Union[Literal["fit", "tied"], float] = "fit"
     vol_lambda: float = 1.0
     vol_global_densities: bool = False
-    vol_edge_lambda: float = 0.0
+    vol_edge_lambda: float = 1.0
     vol_global_soft_tissue: bool = False
     vol_adaptive_band: Optional[float] = None
     vol_curvature: Optional[Literal["absolute", "variation", "change"]] = "change"
@@ -424,6 +423,7 @@ class RefineOptions:
         and extract a new mesh every iteration, instead of moving the same
         vertices: the node spacing stays even and the surface cannot fold,
         however far it moves. ``smoothing_iterations`` is then unused.
+        Default on (with ``freeze``), as on the clinical knee CT.
     freeze
         Regional convergence: a node is *still* once, for
         ``freeze_patience`` consecutive iterations, it moved less than
@@ -462,8 +462,8 @@ class RefineOptions:
     stall_iterations: int = 5
     region_radius: Optional[float] = None
     region_tolerance: Optional[float] = None
-    level_set: bool = False
-    freeze: bool = False
+    level_set: bool = True
+    freeze: bool = True
     freeze_patience: int = 3
     freeze_displacement: Optional[float] = None
     freeze_thickness: Optional[float] = None

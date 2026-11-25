@@ -553,7 +553,6 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
         let refine = self.inp.refine;
         let nv = self.mesh.vertices.len();
         let keep = &self.keep;
-        let n_keep = keep.iter().filter(|&&k| k).count();
         let any_moving = (0..nv).any(|v| keep[v] && !self.state.frozen[v]);
         let full = m.settled || !any_moving || refine.edge_ratio <= 0.0 && self.freeze.is_none();
         let fit_mask: Vec<bool> = match (full, &self.freeze) {
@@ -584,7 +583,10 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
         self.clock.since("fits", tf);
         self.clock.add_fit(&self.result);
         self.shared.update(&self.result);
-        self.last_full = full && self.result.n() >= n_keep.min(fit_mask.iter().filter(|&&k| k).count());
+        // a full fit covers every candidate node with nothing held; the fit
+        // may still drop a few (no valid sampling direction), which must not
+        // keep it from counting as full
+        self.last_full = full;
         self.fit_kind = format!(
             "iteration {}/{}{}",
             self.moves,

@@ -74,7 +74,7 @@ OPTIONS = cbm.Options(
     lower=(-4.0, 0.05, 0.05, -300.0, -300.0),
     upper=(8.0, 8.0, 2.0, 400.0, 1200.0),
 )
-REFINE = cbm.RefineOptions(refine_iterations=150, keep_history=True, level_set=True, freeze=True)
+REFINE = cbm.RefineOptions(refine_iterations=150, keep_history=True)  # level set and freezing are the defaults
 
 
 def read_dicom(folder):
@@ -159,11 +159,10 @@ def run(a):
                 half_width_inside=a.half_width,
                 rho_c=a.rho_c if a.rho_c == "estimate" else float(a.rho_c))
     t0 = time.perf_counter()
-    psf = None
     if a.method == "volumetric":
-        psf = scan_psf(img, starts, spacing, replace(o, method="volumetric", vol_scanner_axis=0))
-        print(f"PSF of the scan (all bones): {psf[0]:.3f} mm in-plane, {psf[1]:.3f} mm axial", flush=True)
-        o = replace(o, method="volumetric", vol_scanner_axis=0, vol_sigma_xy=psf[0], vol_sigma_z=psf[1])
+        o = replace(o, method="volumetric", vol_scanner_axis=0)
+    # the bones share the scanner: refine_bones estimates rho_c (and the
+    # volumetric PSF) once on all the starting surfaces and holds them
     results = cbm.refine_bones(img, starts, spacing, options=o, refine=REFINE, names=names,
                                progress_every=a.progress, origin=origin, exclude_others=not a.no_exclude,
                                rounds=a.rounds)
@@ -177,15 +176,8 @@ def run(a):
     hist = np.histogram(body, bins=np.linspace(a.otsu_floor, float(body.max()), 440))
     return dict(img=img, spacing=spacing, origin=origin, threshold=thr, labels=labels, hulls=hulls, seeds=seeds,
                 low_threshold=low, outside=a.outside, half_width=a.half_width, rho_c_option=a.rho_c, rounds=a.rounds, exclude=not a.no_exclude,
-                starts=starts, closing=a.closing, method=a.method, psf=psf,
+                starts=starts, closing=a.closing, method=a.method,
                 names=names, used=used, results=results, hist=hist)
-
-
-def scan_psf(img, starts, spacing, options):
-    """The scan's PSF ``(sigma_xy, sigma_z)``: one volumetric fit of all the
-    bones' surfaces together (one mesh component per bone)."""
-    r = cbm.cortical_bone_mapping(img, starts > 0, spacing, options=options)
-    return r.volumetric["sigma_xy"], r.volumetric["sigma_z"]
 
 
 # ---------------------------------------------------------------- figures

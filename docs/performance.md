@@ -17,10 +17,11 @@ full pipeline (surface extraction and smoothing, sampling, global
 initialisation and fit). Peak heap is the most memory allocated during the
 call above the input image and mask, measured with a counting global
 allocator. `reg+curvature` is `λ = 1`, k = 64, plus the default `"change"`
-curvature penalty (scale 0.25 mm, `μ = 1`); `volumetric` is the
-[volumetric model](method.md#volumetric-model) with its defaults (curvature
-weight 0.3, density fields smoothed by the paper's operator over 500
-neighbours) and its axial blur tied to the in-plane one.
+curvature penalty (four node spacings, about 0.25 mm; `μ = 1`); `volumetric` is the
+[volumetric model](method.md#volumetric-model) with its defaults (the
+paper's smoothing of `m`, `t` and of the density fields, `λ = 1` over 500
+neighbours, plus the `"change"` curvature penalty at weight 0.3) and its
+axial blur tied to the in-plane one.
 
 ## Results
 
@@ -28,24 +29,24 @@ neighbours) and its axial blur tied to the in-plane one.
 
 | method | nodes | time [s] | peak heap [MB] | bytes/node | RMSE [µm] | outer it. | CG it. |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| local | 7392 | 0.41 | 19 | 2524 | 19.8 | 12 | 0 |
-| multigrid | 7392 | 1.13 | 19 | 2524 | 8.9 | 32 | 425 |
-| regularized k=64 | 7392 | 0.61 | 21 | 2797 | 15.2 | 7 | 50 |
-| regularized k=500 | 7392 | 1.03 | 46 | 6285 | 13.9 | 7 | 51 |
-| reg+curvature | 7392 | 1.58 | 27 | 3657 | 7.8 | 7 | 330 |
-| volumetric | 7392 | 21.01 | 92 | 12401 | 27.4 | 34 | 1909 |
-| local | 32736 | 0.60 | 34 | 1041 | 19.3 | 13 | 0 |
-| multigrid | 32736 | 1.55 | 43 | 1316 | 11.8 | 30 | 443 |
-| regularized k=64 | 32736 | 0.96 | 80 | 2449 | 15.3 | 7 | 53 |
-| regularized k=500 | 32736 | 1.73 | 194 | 5937 | 14.2 | 7 | 50 |
-| reg+curvature | 32736 | 2.91 | 107 | 3281 | 7.8 | 7 | 268 |
-| volumetric | 32736 | 8.73 | 404 | 12340 | 8.2 | 30 | 202 |
-| local | 134112 | 1.80 | 103 | 768 | 19.1 | 13 | 0 |
-| multigrid | 134112 | 4.42 | 140 | 1044 | 12.6 | 32 | 454 |
-| regularized k=64 | 134112 | 3.30 | 318 | 2370 | 15.2 | 7 | 55 |
-| regularized k=500 | 134112 | 5.48 | 786 | 5858 | 14.1 | 7 | 50 |
-| reg+curvature | 134112 | 14.38 | 429 | 3197 | 7.6 | 7 | 272 |
-| volumetric | 134112 | 40.99 | 1996 | 14880 | 6.7 | 31 | 221 |
+| local | 7392 | 0.40 | 19 | 2524 | 19.8 | 12 | 0 |
+| multigrid | 7392 | 1.07 | 19 | 2524 | 8.9 | 32 | 425 |
+| regularized k=64 | 7392 | 0.62 | 21 | 2797 | 15.2 | 7 | 50 |
+| regularized k=500 | 7392 | 1.04 | 46 | 6285 | 13.9 | 7 | 51 |
+| reg+curvature | 7392 | 1.69 | 27 | 3662 | 7.8 | 7 | 328 |
+| volumetric | 7392 | 28.95 | 92 | 12414 | 31.6 | 33 | 1645 |
+| local | 32736 | 0.61 | 34 | 1041 | 19.3 | 13 | 0 |
+| multigrid | 32736 | 1.57 | 43 | 1316 | 11.8 | 30 | 443 |
+| regularized k=64 | 32736 | 0.98 | 80 | 2449 | 15.3 | 7 | 53 |
+| regularized k=500 | 32736 | 1.78 | 194 | 5937 | 14.2 | 7 | 50 |
+| reg+curvature | 32736 | 3.18 | 107 | 3284 | 7.8 | 7 | 280 |
+| volumetric | 32736 | 11.84 | 404 | 12349 | 8.2 | 30 | 197 |
+| local | 134112 | 1.82 | 103 | 768 | 19.1 | 13 | 0 |
+| multigrid | 134112 | 4.69 | 140 | 1044 | 12.6 | 32 | 454 |
+| regularized k=64 | 134112 | 3.35 | 318 | 2370 | 15.2 | 7 | 55 |
+| regularized k=500 | 134112 | 5.67 | 786 | 5858 | 14.1 | 7 | 50 |
+| reg+curvature | 134112 | 15.91 | 429 | 3200 | 7.6 | 7 | 285 |
+| volumetric | 134112 | 50.91 | 1997 | 14889 | 6.6 | 30 | 205 |
 
 The 1D methods scale close to linearly in the number of nodes. Their memory
 at 134k nodes goes to the profiles (`N × 67 × 4 B` = 36 MB), the
@@ -55,7 +56,7 @@ the smoothing operator `ω` at 8 B per neighbour: 536 MB at the paper's
 k = 500 and 69 MB at k = 64.
 
 The volumetric model is the most accurate on the two longer slabs (8.2 and
-6.7 µm), at 4–7 times the time and 2.5 times the memory of the regularised
+6.6 µm), at 7–9 times the time and 2.5 times the memory of the regularised
 fit with the same smoothing. On the 8-slice slab (0.49 mm long) it is the
 least accurate and uses most of its CG budget: in a slab only a few voxels
 long, most band voxels have their closest surface point on the rim where the
@@ -64,31 +65,31 @@ scans are far longer (168 slices for a standard HR-pQCT stack).
 
 ### Where the volumetric model's cost goes
 
-`--volumetric` runs the volumetric model at 134k nodes with its density
-fields smoothed over 64 neighbours instead of 500, with one global density
-each instead of fields, and without the curvature penalty:
+`--volumetric` runs the volumetric model at 134k nodes with its smoothing
+over 64 neighbours instead of 500, with one global density each instead of
+fields, and without the curvature penalty (the smoothing of `m` and `t`
+then regularises the edges alone):
 
-| variant | time [s] | peak heap [MB] | RMSE [µm] | CG it. | band [s] | Gauss–Newton products [s] |
-|---|---:|---:|---:|---:|---:|---:|
-| volumetric | 41.5 | 1996 | 6.7 | 221 | 7.9 | 22.6 |
-| volumetric k=64 | 30.1 | 1528 | 6.7 | 193 | 7.7 | 12.4 |
-| volumetric, global densities | 26.1 | 924 | 6.6 | 159 | 8.0 | 8.0 |
-| volumetric, no curvature | 70.3 | 1882 | 501.5 | 387 | 8.0 | 36.0 |
+| variant | time [s] | peak heap [MB] | RMSE [µm] | CG it. |
+|---|---:|---:|---:|---:|
+| volumetric | 51.3 | 1997 | 6.6 | 205 |
+| volumetric k=64 | 33.8 | 1529 | 6.7 | 196 |
+| volumetric, global densities | 27.6 | 926 | 6.5 | 179 |
+| volumetric, no curvature | 21.4 | 1884 | 13.2 | 57 |
 
-The density fields cost a third of the time and half the memory: the
-500-neighbour operator (about 540 MB) and larger per-face Gauss–Newton
-blocks (four field parameters per vertex instead of two). On this phantom,
-whose densities are uniform, they buy nothing; on real bone, whose
-trabecular density varies, they matter, and `reg_neighbours=64` or
-`vol_global_densities=True` are the cheaper settings where they do not. The
-curvature penalty is the only regulariser of the edge positions: without it
-the fit is noise and twice as slow. Building the band (the closest surface
-point of about 8 million voxels) costs 8 s regardless of the fit; voxels
-farther from the voxelised surface than the sampling range plus two voxels
-are skipped before the search, which leaves the band unchanged and saved
-about 1 s here. Most of the fit is Gauss–Newton products, as for the other
-global fits; the curvature penalty needs about four times the CG iterations
-of the smoothing penalty alone.
+Of the default fit's 51 s, building the band (the closest surface point of
+about 8 million voxels) takes 8 s, the global initialisation 3 s, the field
+fit 38 s (32 s of it Gauss–Newton products) and the reliability outputs
+2 s. The 500-neighbour operator (about 540 MB) and the larger per-face
+Gauss–Newton blocks of the density fields cost a third of the time and half
+the memory; on this phantom, whose densities are uniform, they buy nothing,
+on real bone, whose trabecular density varies, they matter, and
+`reg_neighbours=64` or `vol_global_densities=True` are the cheaper settings
+where they do not. Without the curvature penalty the fit takes 40% of the
+time and its error doubles: the curvature penalty needs about four times the
+CG iterations of the smoothing alone. Voxels farther from the voxelised
+surface than the sampling range plus two voxels are skipped before the
+closest-point search, which leaves the band unchanged and saved about 1 s.
 
 ### Design changes driven by profiling
 

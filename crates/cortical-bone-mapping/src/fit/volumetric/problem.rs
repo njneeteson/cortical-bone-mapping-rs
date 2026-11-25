@@ -529,32 +529,6 @@ impl<'p, 'a> Prepared<'p, 'a> {
             .collect()
     }
 
-    /// The voxels well inside the fitted cortex (more than `2σ_n` from both
-    /// fitted edges), as (node with the largest barycentric weight, value):
-    /// the samples of the cortical plateau.
-    pub fn cortical_samples(&self, x: &[f64]) -> Vec<(u32, f32)> {
-        let p = self.problem;
-        let val = p.values(&self.lay, x);
-        let per_face: Vec<Vec<(u32, f32)>> = (0..p.faces.len())
-            .into_par_iter()
-            .map(|f| {
-                p.band
-                    .of(f)
-                    .filter_map(|e| {
-                        let (q, _, beta) = p.voxel(&val, f, e);
-                        let d = p.band.depth[e] as f64;
-                        let (lo, hi) = (q[PM] - 0.5 * q[PT] + 2.0 * q[PS], q[PM] + 0.5 * q[PT] - 2.0 * q[PS]);
-                        (d >= lo && d <= hi).then(|| {
-                            let s = (0..3).max_by(|&a, &b| beta[a].total_cmp(&beta[b])).unwrap();
-                            (p.faces[f][s], p.band.value[e])
-                        })
-                    })
-                    .collect()
-            })
-            .collect();
-        per_face.into_iter().flatten().collect()
-    }
-
     /// Per node, from the voxels of its faces at `x`, with `g_i` the
     /// gradient of voxel `i`'s model value in the node's own parameters
     /// (`β_i ∇f`): the data-only Gauss–Newton block `B = Σ w_i g_i g_iᵀ`,

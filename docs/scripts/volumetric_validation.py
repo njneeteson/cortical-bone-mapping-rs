@@ -50,8 +50,6 @@ SITES = {
                          extra=dict(normal_constraint="in_plane", normal_axis=0), tied=True, true_rho_c=False),
     "proximal_femur": dict(bones=((1, "femur"),), outside=2.5, inside=7.0, sigma=1.9424, k=128, extra={},
                            tied=False, true_rho_c=True),
-    "knee": dict(bones=((1, "tibia"), (2, "femur")), outside=3.0, inside=6.0, sigma=1.9424, k=128, extra={},
-                 tied=False, true_rho_c=True),
 }
 
 

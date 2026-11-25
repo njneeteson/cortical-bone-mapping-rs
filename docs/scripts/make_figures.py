@@ -118,6 +118,7 @@ def fig_methods():
         ax.set_xlabel("θ [°]")
     axes[1, 1].set_ylabel("thickness [mm]")
     e = {k: r.thickness - ph.true_thickness(r.points) for k, r in res.items()}
+    print("methods, noise 120: RMSE [um]", {k: round(float(np.sqrt((v ** 2).mean())) * 1000, 1) for k, v in e.items()})
     axes[1, 0].hist(list(e.values()), bins=40, range=(-0.2, 0.2), histtype="step", label=list(e))
     axes[1, 0].set_xlabel("thickness error [mm]")
     axes[1, 0].legend(fontsize=7)
@@ -136,6 +137,9 @@ def fig_noise():
             r = cbm.cortical_bone_mapping(img, mask, ph.spacing, **CYL, **v)
             e = r.thickness - ph.true_thickness(r.points)
             out[k].append((e.mean(), np.sqrt((e**2).mean())))
+    for k, v in out.items():
+        print(f"noise {noises}: {k:12} bias [um] {[round(b * 1000, 1) for b, _ in v]} RMSE [um] "
+              f"{[round(r * 1000, 1) for _, r in v]}")
     fig, (a, b) = plt.subplots(1, 2, figsize=(8.5, 3.2))
     for k, v in out.items():
         v = np.array(v)
@@ -166,6 +170,7 @@ def fig_curvature():
                                           curvature="change", curvature_weight=wgt, curvature_scale=scale)
             rm.append(np.sqrt(((r.thickness - ph.true_thickness(r.points)) ** 2).mean()))
         ax.plot(ws, np.array(rm) * 1000, "o-", label=f"scale {scale} mm")
+        print(f"curvature, scale {scale} mm, weights {ws}: RMSE [um] {[round(v * 1000, 1) for v in rm]}")
     lam = [0.1, 0.3, 1, 3, 10, 30]
     rn = []
     for l in lam:
@@ -173,11 +178,13 @@ def fig_curvature():
                                       reg_neighbours=64, reg_sigma=1.0)
         rn.append(np.sqrt(((r.thickness - ph.true_thickness(r.points)) ** 2).mean()))
     ax.plot(lam, np.array(rn) * 1000, "k--", marker="s", label="Neeteson λ (k=64)")
+    print(f"smoothing, lambda {lam}: RMSE [um] {[round(v * 1000, 1) for v in rn]}")
     rv = []
     for wgt in ws:
         r = cbm.cortical_bone_mapping(img, mask, ph.spacing, **CYL, **{**METHODS["volumetric"], "vol_curvature_weight": wgt})
         rv.append(np.sqrt(((r.thickness - ph.true_thickness(r.points)) ** 2).mean()))
-    ax.plot(ws, np.array(rv) * 1000, "k:", marker="^", label="volumetric μ (scale 0.25 mm)")
+    ax.plot(ws, np.array(rv) * 1000, "k:", marker="^", label="volumetric μ (with its λ = 1)")
+    print(f"volumetric curvature weight {ws}: RMSE [um] {[round(v * 1000, 1) for v in rv]}; local {e0 * 1000:.1f}")
     ax.axhline(e0 * 1000, color="gray", lw=1, label="local")
     ax.set_xscale("log")
     ax.set_yscale("log")
@@ -197,15 +204,15 @@ def fig_refine():
     truth = ph.true_mask()
     rr = cbm.refine_segmentation(img, bad, ph.spacing, **CYL, method="regularized", reg_neighbours=64,
                                  reg_sigma=1.0, keep_history=True, tolerance=0.002, refine_iterations=12)
-    faces = rr.result.surface_faces
     h = 0.1
     k = img.shape[0] // 2
-    masks = [cbm.voxelize(v, faces, img.shape, ph.spacing) for v in rr.surfaces]
+    # with the level set every surface has its own mesh
+    masks = [cbm.voxelize(v, f, img.shape, ph.spacing) for v, f in zip(rr.surfaces, rr.surfaces_faces)]
     dices = [2 * (m & (truth > 0)).sum() / (m.sum() + truth.sum()) for m in masks]
     # faces away from the caps, coloured by signed radial error
     zlim = (0, (img.shape[0] - 1) * h)
 
-    def face_data(v):
+    def face_data(v, faces):
         tri = v[faces]
         keep = (tri[:, :, 0] > zlim[0]).all(1) & (tri[:, :, 0] < zlim[1]).all(1)
         err = ph.radial_offset(tri[keep].mean(1))
@@ -230,7 +237,7 @@ def fig_refine():
         a.set_xticks([])
         a.set_yticks([])
         a.text(1.3, ext[2] - 1.4, "red: segmentation   green: true periosteum", color="w", fontsize=7)
-        tri, err = face_data(rr.surfaces[it])
+        tri, err = face_data(rr.surfaces[it], rr.surfaces_faces[it])
         cols = plt.cm.RdBu_r(norm(err))
         pc = Poly3DCollection(tri[:, :, ::-1], facecolors=cols, edgecolor="none")
         b.add_collection3d(pc)
@@ -256,7 +263,7 @@ def fig_refine():
     rv = cbm.refine_segmentation(img, bad, ph.spacing, **CYL, **METHODS["volumetric"], keep_history=True,
                                  tolerance=0.002, refine_iterations=12)
     dices_v = [2 * (m & (truth > 0)).sum() / (m.sum() + truth.sum())
-               for m in (cbm.voxelize(v, faces, img.shape, ph.spacing) for v in rv.surfaces)]
+               for m in (cbm.voxelize(v, f, img.shape, ph.spacing) for v, f in zip(rv.surfaces, rv.surfaces_faces))]
     fig, (c1, c2) = plt.subplots(1, 2, figsize=(8, 3))
     for hist, dc, lab in ((rr.history, dices, "regularized"), (rv.history, dices_v, "volumetric")):
         rms = [hh["rms_displacement"] for hh in hist]
@@ -271,6 +278,9 @@ def fig_refine():
     save(fig, "refinement_convergence.png")
     print("refinement: regularized Dice %.4f, volumetric Dice %.4f, iterations %d / %d"
           % (dices[-1], dices_v[-1], len(rr.history), len(rv.history)))
+    for lab, hist, dc in (("regularized", rr.history, dices), ("volumetric", rv.history, dices_v)):
+        print(f"{lab}: RMS displacement {[round(hh['rms_displacement'], 4) for hh in hist]}; "
+              f"Dice {[round(float(d), 4) for d in dc]}; converged {(rr if lab == 'regularized' else rv).converged}")
 
 
 # --------------------------------------------------------------------------

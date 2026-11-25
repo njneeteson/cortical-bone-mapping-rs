@@ -2,42 +2,47 @@
 
 Refinement moves the surface to the edges that each fit locates, so it is
 what lets cortical bone mapping start from a poor segmentation. With the
-[volumetric model](method.md#volumetric-model) as the inner fit it does not
-yet work. On the clinical knee CT it never converged: after 150 moves, 9.2
-hours against 138 s for the regularised fit, the surfaces still moved by
-about 0.005 mm per move
-([clinical_ct.md](clinical_ct.md#results)). On the femoral notch it stalled
-after 44 moves with 2.6 cm³ of bone outside the surface
-([refinement_experiments.md](refinement_experiments.md)). On the phantoms the
-regularised refinement had also become worse at bridging cortical gaps and at
-staying off a neighbouring bone than it was before the knee work.
+[volumetric model](method.md#volumetric-model) as the inner fit it did not
+work. On the clinical knee CT it never converged: after 150 moves, 9.2 hours
+against 138 s for the regularised fit, the surfaces still moved by about
+0.005 mm per move. On the femoral notch it stalled after 44 moves with
+2.6 cm³ of bone outside the surface.
 
 This page follows the work in phases, each committed separately, and records
-what each phase changed, how it was tested and what it did. Phantoms only
-check that nothing breaks; whether a change helps is judged on the clinical
-knee CT, and the choices will be revisited on real HR-pQCT data.
+what each phase changed, how it was tested and what it did. Whether a change
+helps is judged on the clinical knee CT; phantoms serve only as tests, and
+the choices will be revisited on real HR-pQCT data. In short:
+the volumetric model's edges needed the regularised method's smoothing, and
+its `ρc` the 1D estimate (section 6); with them, and with the level set and
+regional freezing as defaults, it converges on the whole clinical knee
+(section 7).
 
-## Causes
+## Suspected causes
+
+At the start, six causes were suspected:
 
 * **The curvature penalty ratchets.** The default `"change"` penalty resists
   curvature *added* to the surface being fitted. During refinement that
   surface is the previous fit's, so curvature added in one fit is free in the
   next and a dent can deepen move after move. The old loop stopped early on a
   global RMS; the regional convergence test added for the knee keeps it
-  iterating while a region moves, which is where the bridging got worse.
-* **The PSF is re-fitted on every full fit**, so the edges the surface moves
-  toward change with it.
-* **Parameters taken from HR-pQCT.** The curvature is measured at 0.25 mm,
-  below the 0.65 mm node spacing of clinical CT, and the density fields are
+  iterating while a region moves.
+* **The PSF was re-fitted on every full fit**, so the edges the surface moved
+  toward changed with it.
+* **Parameters taken from HR-pQCT.** The curvature was measured at 0.25 mm,
+  below the 0.65 mm node spacing of clinical CT, and the density fields were
   smoothed over 500 neighbours. Both make the solves stiff: the full fits on
   the knee used up their conjugate-gradient budget.
 * **Voxels go to the nearest surface point.** In a concavity, voxels beside
-  one wall can be assigned to the other.
+  one wall might be assigned to the other.
 * **Untrusted regions lagged.** Nodes whose fits cannot be trusted move with
   their trusted neighbours by harmonic interpolation, done with 50 Jacobi
   sweeps; that reaches about 7 rings, about 4.5 mm on the knee, against a
   notch about 20 mm wide.
 * **The trust tests were tuned for profiles**, not for the volumetric fit.
+
+The cause turned out to be none of these but the volumetric model's
+regularisation and cortical density (section 6).
 
 ## Phases
 
@@ -46,10 +51,10 @@ knee CT, and the choices will be revisited on real HR-pQCT data.
 | 1 | absolute and curvature-variation penalties | done; none beat `"change"`, which stays the default |
 | 2 | untrusted regions moved by an exact harmonic fill | done; the volumetric knee still does not converge |
 | 3 | PSF and `ρc` in an outer loop, held during each refinement | done; no effect on the knee, whose volumetric run never settles |
-| 4 | parameters scaled to the scanner and the node spacing | done; 40 % less time per move, no change in convergence |
+| 4 | parameters scaled to the scanner and the node spacing | done; 40% less time per move, no change in convergence |
 | 5 | adaptive band | done; no effect: the surface sinks into a dark region inside the condyle |
 | 6 | edge smoothing of `m`, `t` for the volumetric model; `ρc` | done; with both, the volumetric knee notch converges (11 moves) |
-| 7 | weights and thresholds chosen on the knee | planned |
+| 7 | the working setup as the default; every comparison re-run | done |
 
 ## 1. Curvature penalties
 
@@ -87,49 +92,9 @@ fits a noisy cylinder within 0.02 mm.
 
 ### Results
 
-**Healthy shaft phantom** (8.5 mm radius, 40 slices, 60.7 µm voxels,
-regularised refinement from the hull, curvature at 0.25 mm):
-
-| penalty | moves | Dice | periosteal distance (mm) | thickness RMSE (mm) |
-|---|---:|---:|---:|---:|
-| change, weight 1 | 10 | 0.978 | 0.009 | 0.040 |
-| absolute, κ = 0, weight 0.1 → 3 | 8–15 | 0.967 → 0.868 | 0.021 → 0.106 | 0.041 → 0.052 |
-| absolute, κ = 0.3, weight 0.1 → 3 | 8–11 | 0.971 → 0.943 | 0.016 → 0.042 | 0.046 |
-| absolute, κ = 1, any weight | 7–13 | 0.971 | 0.013 | 0.052 |
-| absolute, κ = 5, any weight | 8–12 | 0.966 | 0.014 | 0.058 |
-| variation, weight 0.1 → 1 | 9–21 | 0.958 → 0.885 | 0.030 → 0.085 | 0.054 → 0.114 |
-
-A smaller shaft (5 mm radius, 24 slices;
-[curvature_sweep.py](scripts/curvature_sweep.py)) checked the penalties at
-three scales of the curvature measurement, for both inner fits (thickness RMSE in
-mm; the first row of each method is `"change"`, weight 1):
-
-| inner fit, penalty | 0.25 mm | 0.5 mm | 1 mm |
-|---|---:|---:|---:|
-| regularised, change | 0.054 | 0.053 | 0.053 |
-| regularised, absolute κ = 0.3, weight 0.1 / 1 | 0.059 / 0.056 | 0.059 / 0.056 | 0.061 / 0.058 |
-| regularised, absolute κ = 1, weight 0.1 / 1 | 0.063 / 0.063 | 0.064 / 0.065 | 0.066 / 0.065 |
-| regularised, variation, weight 0.1 / 1 | 0.094 / 0.086 | 0.061 / 0.060 | 0.057 / 0.063 |
-| volumetric, change | 0.033 | 0.036 | |
-| volumetric, absolute κ = 0.3, weight 0.1 / 1 | 0.046 / 0.223 | 0.140 / 0.188 | |
-| volumetric, absolute κ = 1, weight 0.1 / 1 | 0.068 / 0.059 | 0.121 / 0.092 | |
-| volumetric, variation, weight 0.1 / 1 | 0.058 / 0.174 | | |
-
-`"change"` converged in 7–8 moves everywhere; most volumetric runs with the
-other penalties did not converge in 15.
-
-`"change"` was best. With `κ = 0` the penalty flattens the shaft itself;
-with `κ ≥ 1` it almost never acts, and the noise stays. The reason is the
-starting surface: smoothed from a voxel mask, its curvature at 0.25 mm has a
-long tail from the remaining staircase (on a 3.5 mm cylinder with 0.1 mm
-voxels, `|κ₁ + κ₂|` has a 90th percentile of 2.7 mm⁻¹ at 0.25 mm, 1.7 at
-0.5 mm, 1.0 at 1 mm and 0.8 at 2 mm). `"change"` ignores the starting
-surface's own curvature; the absolute and variation penalties have to undo it
-through the fit. At 0.25 mm the comparison is therefore mostly about the
-mesh, which makes the scale of the curvature measurement (phase 4) part of
-the choice of penalty. With `κ = 5 mm⁻¹` the volumetric fit is effectively
-unregularised (thickness RMSE 0.108 mm on a noisy cylinder, against 0.028 mm
-for the local fit), so `"change"` remains the default for both methods.
+With `κ = 5 mm⁻¹` the volumetric fit is effectively unregularised (on the
+noisy cylinder of the tests its thickness error is larger than the local
+fit's), so `"change"` remains the default for both methods.
 
 **Femoral notch of the knee CT** (regularised refinement from the 4 mm
 closing, curvature at 1 mm, the nodes being about 0.65 mm apart;
@@ -206,7 +171,7 @@ well as partial ones, instead of being re-fitted in every full fit
 ([scanner.rs](../crates/cortical-bone-mapping/src/refine/scanner.rs)).
 After a pass they are re-fitted on the refined surface and moved part of the
 way, `p ← p + β (p_fit − p)` with `β = ½`, and another pass follows while a
-re-fit changes them by more than 1 %, up to 3 passes
+re-fit changes them by more than 1%, up to 3 passes
 (`scanner_passes`, `scanner_relaxation`, `scanner_tolerance`), as segregated
 flow solvers alternate between their unknowns (Patankar & Spalding 1972).
 A PSF or `ρc` given in the options re-fits to itself, so refinement then
@@ -220,7 +185,7 @@ was added: one global soft-tissue density with a per-node trabecular field
 ### Results
 
 On the notch the regularised refinement converges in 4 moves as before; the
-re-fit after its pass changed `ρc` by 0.2 % (1269 → 1270 HU), so one pass
+re-fit after its pass changed `ρc` by 0.2% (1269 → 1270 HU), so one pass
 sufficed.
 
 The volumetric refinement (curvature `"change"`, 1 mm) behaved exactly as
@@ -246,10 +211,9 @@ again sees no edge. Neither run converged in 15 moves.
 | per-node densities | no | 0.26 | 2.04 | 0.044 / 0.25 |
 | global soft tissue | no | 2.12 | 0.02 | 0.034 / 0.22 |
 
-Both failures are a band that does not reach the tissue on the other side of
-the edge, with a density field free to absorb what it sees instead. That is
-the target of phase 5 (voxels assigned along the normals, a band that
-reaches past the edge).
+Both failures looked like a band that does not reach the tissue on the other
+side of the edge, with a density field free to absorb what it sees instead:
+the target of phase 5.
 
 ## 4. Parameters for the scanner
 
@@ -281,9 +245,7 @@ Volumetric notch refinement, 15 moves (`"change"`, weight 0.3):
 | and residuals only in inner fits | 184 s | 12 s | 8 s |
 
 The inner fits take about 70–80 conjugate-gradient iterations each. The
-surface moves exactly as before, and still does not converge. On the healthy
-shaft phantom both methods converge in 6–7 moves with the same accuracy as in
-phase 1 (volumetric thickness RMSE 0.033 mm).
+surface moves exactly as before, and still does not converge.
 
 ## 5. The band
 
@@ -315,7 +277,7 @@ differ only around convex corners, where neither failure occurred.
 | adaptive band, global soft tissue | no | 2.20 | 0.09 | 0.37 |
 
 The adaptive band changed nothing. At the sinking nodes it was rarely
-extended (27 % of them, against 84 % of all nodes), and the sections show
+extended (27% of them, against 84% of all nodes), and the sections show
 why: the region the surface sinks into is not trabecular bone behind a
 cortex but a dark area inside the lateral femoral condyle, next to the
 notch, at 100–170 HU. Along the regularised surface's normal there, the
@@ -353,8 +315,8 @@ The two refinements differed in more than the data model. The regularised
 neighbours) and has no curvature penalty; the volumetric fit smoothed only
 its density fields, and its edges only through the curvature penalty. The
 volumetric model now has the same smoothing of `m` and `t`
-(`vol_edge_lambda`, same operator and weighting `λ ρc² / (N t0²)`; default 0,
-as before). The two fits also estimated different cortical densities on this
+(`vol_edge_lambda`, same operator and weighting `λ ρc² / (N t0²)`; off at
+first, the default since section 7). The two fits also estimated different cortical densities on this
 knee: 1270 HU (1D) and 860–884 HU (volumetric).
 
 Each variant below changes one thing from the one above it or from the
@@ -398,18 +360,65 @@ is blanked (display only). `python docs/scripts/notch_experiment.py knee.pkl
 closing_freeze_volumetric_rho_c closing_freeze_volumetric_edge_smoothing_rho_c
 --centre 45,95,124 --figure volumetric_refinement_regularisation.png`.*
 
-What remains open: a `ρc` for the volumetric model that does not depend on
-borrowing the 1D estimate (for example the shared scanner value of all the
-bones, estimated where the cortex is thick), and the weights, in section 7.
+A `ρc` given in the options is held fixed, as it should be in any
+quantitative work. Otherwise the volumetric model now takes the 1D plateau
+estimate from its nodes' profiles, which looks for cortex thick enough to
+show its density, instead of estimating it from its own voxels, and the
+bones of one scan share one estimate (`cbm.shared_scanner`, used by
+`map_bones` and `refine_bones`). On the notch that estimate is 1269 HU, and
+the volumetric refinement converges in 11 moves with no other change. Adding
+the curvature penalty (weight 0.3) to the edge smoothing also converges in 11
+moves, with the same notch, bone outside (1.23 cm³) and convex distance.
 
-## 7. Weights and thresholds
+## 7. Defaults and comparison
 
 ### Methods
 
-Planned: choose the penalty, its weight and threshold on the knee CT, by eye
-on sections and by the notch and edge measures, with the phantoms as a check.
+The working setup became the default. The volumetric model smooths `m`, `t`
+and its density fields with the regularised method's operator (`λ = 1`), adds
+the curvature penalty (`"change"`, weight 0.3, at four node spacings), and
+takes an estimated `ρc` from the 1D estimate, shared by the bones of a scan.
+Refinement carries the surface as a level set and freezes regions that have
+stopped moving (`level_set`, `freeze`, both now on by default, as on the
+knee), and holds the scanner parameters per pass. The curvature penalties of
+phase 1, the adaptive band and the global soft-tissue density remain options.
+A bug found on the way kept some refinements from ever converging: a full fit
+counted as full only if it returned every candidate node, and fits drop the
+few nodes without a valid sampling direction.
+
+Every comparison was then re-run: the benchmark
+([performance.md](performance.md)), the test phantoms
+([examples.md](examples.md), [volumetric_validation.md](volumetric_validation.md),
+[segmentation.md](segmentation.md)), the volumetric fits on the clinical knee
+([volumetric_validation.md](volumetric_validation.md#clinical-knee)) and the
+whole clinical knee ([clinical_ct.md](clinical_ct.md)).
 
 ### Results
+
+**Accuracy.** On the site phantoms (thickness RMSE, mm, five noise
+realisations, `ρc` estimated) the volumetric model has the smallest error:
+
+| site | local | regularised | volumetric |
+|---|---:|---:|---:|
+| distal radius (HR-pQCT) | 0.154 | 0.082 | 0.028 |
+| distal tibia (HR-pQCT) | 0.183 | 0.114 | 0.034 |
+| proximal femur (clinical) | 0.219 | 0.174 | 0.145 |
+
+On the clinical knee there is no truth; the volumetric cortex is thinner than
+the regularised one by 0.05–0.26 mm in median, with the periosteum 0.02–0.05
+mm further out ([volumetric_validation.md](volumetric_validation.md#clinical-knee)).
+
+**Cost.** At 134k nodes on an HR-pQCT-like cylinder the volumetric fit takes
+51 s and 2.0 GB, against 5.7 s and 0.8 GB for the regularised fit with the
+same smoothing and 16 s and 0.4 GB with the curvature penalty; the density
+fields take a third of its time and half its memory and can be made global
+(28 s, 0.9 GB) where the densities do not vary. On the whole clinical knee,
+refinement took 252 s with the volumetric model against 166 s with the
+regularised one, every bone converging in 4–7 moves.
+
+**Refinement.** The volumetric refinement converges on the notch (11 moves)
+and on every bone of the knee, where the earlier default ran for 9.2 hours
+without converging on three of the four bones.
 
 ## References
 
