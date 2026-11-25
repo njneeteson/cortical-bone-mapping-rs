@@ -88,16 +88,6 @@ pub(crate) fn bone_phantom_from(spec: &Bound<'_, PyDict>) -> PyResult<cbm::phant
                 angle,
             }
         }),
-        breaks: opt::<Vec<(f64, f64, f64, f64)>>(spec, "breaks")?
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(angle, width, z_center, length)| cbm::phantoms::bone::CorticalBreak {
-                angle,
-                width,
-                z_center,
-                length,
-            })
-            .collect(),
     };
     let (d0, d1, d2) = ph.dims;
     if d0 < 2 || d1 < 2 || d2 < 2 || ph.spacing.iter().any(|s| s.is_nan() || *s <= 0.0) {
@@ -147,7 +137,7 @@ pub(crate) fn bone_phantom_edges<'py>(
     Ok(Array2::from_shape_vec((e.len(), 2), flat).unwrap().into_pyarray(py))
 }
 
-/// Feature labels of a bone phantom: 1 = neighbouring bone, 2 = cortical break.
+/// Feature labels of a bone phantom: 1 = neighbouring bone.
 #[pyfunction]
 #[pyo3(signature = (spec))]
 pub(crate) fn bone_phantom_labels<'py>(
@@ -158,51 +148,6 @@ pub(crate) fn bone_phantom_labels<'py>(
     Ok(py.detach(|| ph.labels()).into_pyarray(py))
 }
 
-pub(crate) fn joint_phantom_from(spec: &Bound<'_, PyDict>) -> PyResult<cbm::phantoms::joint::JointPhantom> {
-    let ph = cbm::phantoms::joint::JointPhantom {
-        dims: req(spec, "dims")?,
-        spacing: req(spec, "spacing")?,
-        radius: req(spec, "radius")?,
-        femur_scale: req(spec, "femur_scale")?,
-        shape_harmonics: req(spec, "shape_harmonics")?,
-        shape_amplitude: req(spec, "shape_amplitude")?,
-        joint_level: req(spec, "joint_level")?,
-        joint_space: req(spec, "joint_space")?,
-        contact_offset: req(spec, "contact_offset")?,
-        tibia_curvature: req(spec, "tibia_curvature")?,
-        femur_curvature: req(spec, "femur_curvature")?,
-        bump_amplitude: req(spec, "bump_amplitude")?,
-        bump_wavelength: req(spec, "bump_wavelength")?,
-        plate_thickness: req(spec, "plate_thickness")?,
-        plate_variation: req(spec, "plate_variation")?,
-        plate_min: req(spec, "plate_min")?,
-        shell_thickness: req(spec, "shell_thickness")?,
-        rim_rounding: req(spec, "rim_rounding")?,
-        bvtv: req(spec, "bvtv")?,
-        endo_bvtv: req(spec, "endo_bvtv")?,
-        transition_width: req(spec, "transition_width")?,
-        trabecular_wavelength: req(spec, "trabecular_wavelength")?,
-        porosity: req(spec, "porosity")?,
-        pore_wavelength: req(spec, "pore_wavelength")?,
-        rho_soft: req(spec, "rho_soft")?,
-        rho_cartilage: req(spec, "rho_cartilage")?,
-        rho_bone: req(spec, "rho_bone")?,
-        rho_marrow: req(spec, "rho_marrow")?,
-        blur: req(spec, "blur")?,
-        noise: req(spec, "noise")?,
-        seed: req(spec, "seed")?,
-        supersample: req(spec, "supersample")?,
-        femur_plate_thickness: opt(spec, "femur_plate_thickness")?,
-        notch: opt::<(f64, f64, f64)>(spec, "notch")?.map(|(width, height, anterior)| cbm::phantoms::joint::Notch {
-            width,
-            height,
-            anterior,
-        }),
-    };
-    check_grid(ph.dims, ph.spacing)?;
-    Ok(ph)
-}
-
 /// Dims of at least 2 and positive spacing.
 fn check_grid(dims: (usize, usize, usize), spacing: V3) -> PyResult<()> {
     let (d0, d1, d2) = dims;
@@ -210,47 +155,6 @@ fn check_grid(dims: (usize, usize, usize), spacing: V3) -> PyResult<()> {
         return Err(PyValueError::new_err("phantom dims must be >= 2 and spacing positive"));
     }
     Ok(())
-}
-
-/// Generate a knee-joint phantom: (image, periosteal labels, endosteal labels).
-#[pyfunction]
-#[pyo3(signature = (spec))]
-#[allow(clippy::type_complexity)]
-pub(crate) fn joint_phantom<'py>(
-    py: Python<'py>,
-    spec: &Bound<'py, PyDict>,
-) -> PyResult<(
-    Bound<'py, numpy::PyArray3<f32>>,
-    Bound<'py, numpy::PyArray3<u8>>,
-    Bound<'py, numpy::PyArray3<u8>>,
-)> {
-    let ph = joint_phantom_from(spec)?;
-    let (img, p, e) = py.detach(|| ph.generate());
-    Ok((img.into_pyarray(py), p.into_pyarray(py), e.into_pyarray(py)))
-}
-
-/// True (periosteal, endosteal, bone) crossings along lines p + x n.
-#[pyfunction]
-#[pyo3(signature = (spec, points, normals, x0, x1))]
-pub(crate) fn joint_phantom_edges<'py>(
-    py: Python<'py>,
-    spec: &Bound<'py, PyDict>,
-    points: PyReadonlyArray2<'py, f64>,
-    normals: PyReadonlyArray2<'py, f64>,
-    x0: f64,
-    x1: f64,
-) -> PyResult<Bound<'py, PyArray2<f64>>> {
-    let ph = joint_phantom_from(spec)?;
-    let p = points.as_array();
-    let n = normals.as_array();
-    if p.ncols() != 3 || n.dim() != p.dim() {
-        return Err(PyValueError::new_err("points and normals must both be (N, 3)"));
-    }
-    let pv: Vec<V3> = p.rows().into_iter().map(|r| [r[0], r[1], r[2]]).collect();
-    let nv: Vec<V3> = n.rows().into_iter().map(|r| [r[0], r[1], r[2]]).collect();
-    let e = py.detach(|| ph.edges_along(&pv, &nv, x0, x1));
-    let flat: Vec<f64> = e.iter().flat_map(|(a, b, c)| [*a, *b, *c as f64]).collect();
-    Ok(Array2::from_shape_vec((e.len(), 3), flat).unwrap().into_pyarray(py))
 }
 
 pub(crate) fn femur_phantom_from(spec: &Bound<'_, PyDict>) -> PyResult<cbm::phantoms::femur::FemurPhantom> {
@@ -347,7 +251,7 @@ fn lines(points: &PyReadonlyArray2<'_, f64>, normals: &PyReadonlyArray2<'_, f64>
 }
 
 /// The phantom of an anatomical site (`phantoms::sites`): `(kind, spec)`,
-/// kind "bone", "femur" or "joint", spec the fields of that phantom.
+/// kind "bone" or "femur", spec the fields of that phantom.
 #[pyfunction]
 #[pyo3(signature = (site, seed))]
 pub(crate) fn site_phantom<'py>(
@@ -369,10 +273,6 @@ pub(crate) fn site_phantom<'py>(
         SitePhantom::Femur(f) => {
             femur_spec(&d, &f)?;
             "femur"
-        }
-        SitePhantom::Joint(j) => {
-            joint_spec(&d, &j)?;
-            "joint"
         }
     };
     Ok((kind, d))
@@ -397,28 +297,6 @@ fn bone_spec(d: &Bound<'_, PyDict>, b: &cbm::phantoms::bone::BonePhantom) -> PyR
         "rho_bone" => b.rho_bone, "rho_marrow" => b.rho_marrow, "blur" => b.blur,
         "noise" => b.noise, "seed" => b.seed, "supersample" => b.supersample,
         "neighbour" => b.neighbour.as_ref().map(|n| (n.radius, n.thickness, n.gap, n.angle)),
-        "breaks" => b.breaks.iter().map(|k| (k.angle, k.width, k.z_center, k.length)).collect::<Vec<_>>(),
-    );
-    Ok(())
-}
-
-fn joint_spec(d: &Bound<'_, PyDict>, j: &cbm::phantoms::joint::JointPhantom) -> PyResult<()> {
-    set_items!(d,
-        "dims" => j.dims, "spacing" => j.spacing, "radius" => j.radius,
-        "femur_scale" => j.femur_scale, "shape_harmonics" => j.shape_harmonics,
-        "shape_amplitude" => j.shape_amplitude, "joint_level" => j.joint_level,
-        "joint_space" => j.joint_space, "contact_offset" => j.contact_offset,
-        "tibia_curvature" => j.tibia_curvature, "femur_curvature" => j.femur_curvature,
-        "bump_amplitude" => j.bump_amplitude, "bump_wavelength" => j.bump_wavelength,
-        "plate_thickness" => j.plate_thickness, "femur_plate_thickness" => j.femur_plate_thickness,
-        "plate_variation" => j.plate_variation, "plate_min" => j.plate_min,
-        "shell_thickness" => j.shell_thickness, "rim_rounding" => j.rim_rounding,
-        "bvtv" => j.bvtv, "endo_bvtv" => j.endo_bvtv, "transition_width" => j.transition_width,
-        "trabecular_wavelength" => j.trabecular_wavelength, "porosity" => j.porosity,
-        "pore_wavelength" => j.pore_wavelength, "rho_soft" => j.rho_soft,
-        "rho_cartilage" => j.rho_cartilage, "rho_bone" => j.rho_bone, "rho_marrow" => j.rho_marrow,
-        "blur" => j.blur, "noise" => j.noise, "seed" => j.seed, "supersample" => j.supersample,
-        "notch" => j.notch.as_ref().map(|n| (n.width, n.height, n.anterior)),
     );
     Ok(())
 }

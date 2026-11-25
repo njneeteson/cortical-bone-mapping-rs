@@ -45,7 +45,8 @@ class CbmResult:
         node ``std_error_t`` (local standard error of ``t``, from the node's
         own voxels with their noise correlation), ``data_share``
         (N, 4: the data's share of the curvature of ``m, t, rho_s, rho_b``)
-        and ``misfit`` (RMS residual relative to the noise).
+        ``misfit`` (RMS residual relative to the noise) and ``reach`` (N, 2:
+        how far the node's band reaches outside and inside the surface).
     """
 
     points: np.ndarray
@@ -197,6 +198,10 @@ class RefineResult:
         Why refinement stopped (with a diagnosis if it stalled).
     timings
         Wall time per stage, summed over all fits, as (name, seconds).
+    scanner
+        The scanner parameters held in each refinement pass: dicts with
+        ``psf`` (volumetric model), ``sigma`` (a global sigma) and ``rho_c``
+        (``None`` where not held).
     """
 
     result: CbmResult
@@ -211,6 +216,7 @@ class RefineResult:
     stalled: bool = False
     message: str = ""
     timings: list = field(default_factory=list)
+    scanner: list = field(default_factory=list)
 
     @property
     def periosteal_vertices(self) -> np.ndarray:

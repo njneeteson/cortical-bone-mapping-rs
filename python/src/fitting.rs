@@ -56,6 +56,13 @@ pub(crate) fn result_dict<'py>(py: Python<'py>, r: &cbm::CbmResult) -> PyResult<
         let share = Array2::from_shape_fn((v.data_share.len(), 4), |(i, j)| v.data_share[i][j]);
         vd.set_item("data_share", share.into_pyarray(py))?;
         vd.set_item("misfit", v.misfit.clone().into_pyarray(py))?;
+        let reach: Vec<f64> = v.reach.iter().flat_map(|r| r.iter().copied()).collect();
+        vd.set_item(
+            "reach",
+            Array2::from_shape_vec((v.reach.len(), 2), reach)
+                .unwrap()
+                .into_pyarray(py),
+        )?;
         d.set_item("volumetric", vd)?;
     }
     if let Some((x, prof)) = &r.profiles {
@@ -81,6 +88,24 @@ pub(crate) fn run<'py>(
     let s: Option<ArrayView3<'_, u8>> = sub_mask.as_ref().map(|s| s.as_array());
     let res = with_image!(image, |img| py.detach(|| cbm::run(img, m, s, &opts)).map_err(to_pyerr))?;
     result_dict(py, &res)
+}
+
+/// Vertices, faces and cap flags of a surface.
+type SurfaceArrays<'py> = (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<u32>>, Vec<bool>);
+
+/// The smoothed surface of a mask, as the pipeline extracts it: vertices,
+/// faces, and whether each vertex lies on a cap cut by the image edge.
+#[pyfunction]
+#[pyo3(signature = (mask, options))]
+pub(crate) fn mask_surface<'py>(
+    py: Python<'py>,
+    mask: PyReadonlyArray3<'py, u8>,
+    options: &Bound<'py, PyDict>,
+) -> PyResult<SurfaceArrays<'py>> {
+    let opts = parse_options(options)?;
+    let m = mask.as_array();
+    let (mesh, border) = py.detach(|| cbm::pipeline::prepare_surface(&m, &opts));
+    Ok((v3_array(py, &mesh.vertices), faces_array(py, &mesh.faces), border))
 }
 
 /// Refine a segmentation; returns a dict of arrays.
@@ -122,6 +147,15 @@ pub(crate) fn refine<'py>(
     d.set_item("stalled", r.stalled)?;
     d.set_item("message", &r.message)?;
     d.set_item("timings", r.timings.clone())?;
+    let scanner = PyList::empty(py);
+    for s in &r.scanner {
+        let e = PyDict::new(py);
+        e.set_item("psf", s.psf.map(|p| p.to_vec()))?;
+        e.set_item("sigma", s.sigma)?;
+        e.set_item("rho_c", s.rho_c)?;
+        scanner.append(e)?;
+    }
+    d.set_item("scanner", scanner)?;
     Ok(d)
 }
 

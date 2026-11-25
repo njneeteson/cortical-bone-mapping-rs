@@ -12,7 +12,7 @@ Bonelab is not a dependency; point the script at a checkout:
 
     git clone https://github.com/Bonelab/Bonelab /path/to/Bonelab
     pip install tqdm
-    python docs/scripts/compare_bonelab.py /path/to/Bonelab   # writes docs/bonelab_comparison.json
+    python docs/scripts/compare_bonelab.py /path/to/Bonelab   # writes docs/results/bonelab_comparison.json
 
 Memory: for Bonelab, the peak of Python-heap allocations during the fit
 (tracemalloc, which includes NumPy/SciPy buffers). Rust allocations are
@@ -33,7 +33,7 @@ import numpy as np
 
 import cortical_bone_mapping_rs as cbm
 
-OUT = Path(__file__).resolve().parents[1] / "bonelab_comparison.json"
+OUT = Path(__file__).resolve().parents[1] / "results" / "bonelab_comparison.json"
 
 # Table 1 (radius & tibia) of Neeteson & Boyd (2025), except the trabecular initial
 # guess: Bonelab's CLI default of 200 (with 0, its L-BFGS-B initial global fit

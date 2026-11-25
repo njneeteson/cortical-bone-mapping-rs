@@ -18,9 +18,8 @@
 //! * the greater trochanter, an ellipsoid (the same first-order distance)
 //!   lateral to the top of the shaft.
 //!
-//! The union is the smooth minimum `φ = −k ln Σ_i exp(−φ_i/k)` (the
-//! log-sum-exp of [`joint`](crate::phantoms::joint)), which fillets the
-//! junctions over a width of about `k`. The endosteal surface is the zero
+//! The union is the smooth minimum `φ = −k ln Σ_i exp(−φ_i/k)` (a
+//! log-sum-exp), which fillets the junctions over a width of about `k`. The endosteal surface is the zero
 //! level of `φ/|∇φ| + t(p)`, the first-order distance offset by a thickness
 //! field `t` blended from the parts with the partition of unity
 //! `w_i ∝ exp(−φ_i/k)` (the part a point is nearest to dominates). In the neck, `t` varies around the neck axis from
@@ -71,7 +70,7 @@
 use ndarray::Array3;
 use rayon::prelude::*;
 
-use super::joint::smax;
+use super::render::smax;
 use super::render::{erfinv, field, first_entry, render, waves};
 use crate::util::{add, cross, dot, norm, scale, sub, Rng, V3};
 use crate::volume::Geometry;

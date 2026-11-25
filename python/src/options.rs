@@ -163,6 +163,9 @@ fn parse_volumetric(d: &Bound<'_, PyDict>) -> PyResult<cbm::VolumetricOptions> {
         neighbours: req(d, "reg_neighbours")?,
         cutoff: req(d, "reg_cutoff")?,
         global_densities: req(d, "vol_global_densities")?,
+        edge_lambda: req(d, "vol_edge_lambda")?,
+        global_soft_tissue: req(d, "vol_global_soft_tissue")?,
+        adaptive_band: opt(d, "vol_adaptive_band")?,
         curvature: parse_curvature(d, "vol_curvature", "vol_curvature_weight")?,
         voxel_stride: req(d, "vol_voxel_stride")?,
     })
@@ -174,7 +177,8 @@ fn parse_curvature(d: &Bound<'_, PyDict>, mode_key: &str, weight_key: &str) -> P
     let mode = match opt::<String>(d, mode_key)?.as_deref() {
         None | Some("none") => return Ok(None),
         Some("change") => cbm::CurvatureMode::Change,
-        Some("excess") => cbm::CurvatureMode::Excess {
+        Some("variation") => cbm::CurvatureMode::Variation,
+        Some("absolute") => cbm::CurvatureMode::Absolute {
             kappa: req(d, "curvature_kappa")?,
         },
         Some(o) => return Err(unknown("curvature mode", o)),
@@ -185,13 +189,28 @@ fn parse_curvature(d: &Bound<'_, PyDict>, mode_key: &str, weight_key: &str) -> P
         "endosteal" => (false, true),
         o => return Err(unknown("curvature_surfaces", o)),
     };
+    let measure = match req::<String>(d, "curvature_measure")?.as_str() {
+        "mean" => cbm::CurvatureMeasure::Mean,
+        "total" => cbm::CurvatureMeasure::Total,
+        o => return Err(unknown("curvature_measure", o)),
+    };
     Ok(Some(cbm::CurvatureOptions {
         mode,
+        measure,
         weight: req(d, weight_key)?,
+        endosteal_weight: opt(d, "curvature_endosteal_weight")?,
         length: opt(d, "curvature_length")?,
         periosteal,
         endosteal,
-        scale: opt(d, "curvature_scale")?,
+        scale: match (
+            opt::<f64>(d, "curvature_scale")?,
+            req::<String>(d, "curvature_scale_mode")?.as_str(),
+        ) {
+            (_, "cotangent") => cbm::LaplacianScale::Cotangent,
+            (Some(s), "physical") => cbm::LaplacianScale::Physical(s),
+            (_, "spacing") => cbm::LaplacianScale::NodeSpacing(req(d, "curvature_scale_spacings")?),
+            (_, o) => return Err(unknown("curvature_scale", o)),
+        },
         neighbours: req(d, "curvature_neighbours")?,
     }))
 }
@@ -231,5 +250,8 @@ pub(crate) fn parse_refine(refine: &Bound<'_, PyDict>) -> PyResult<cbm::RefineOp
         } else {
             None
         },
+        scanner_passes: req(refine, "scanner_passes")?,
+        scanner_relaxation: req(refine, "scanner_relaxation")?,
+        scanner_tolerance: req(refine, "scanner_tolerance")?,
     })
 }

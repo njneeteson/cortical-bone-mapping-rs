@@ -44,6 +44,34 @@ pub(super) struct Reliability {
     pub info: VolumetricInfo,
 }
 
+/// Only the per-node residuals, for the inexact inner fits of a refinement,
+/// which use nothing else: the reliability outputs are NaN (the noise,
+/// standard errors and data shares cost about a tenth of a fit).
+pub(super) fn residuals_only(prep: &Prepared, x: &[f64], psf: [f64; 2], axis: usize) -> Reliability {
+    let n = prep.lay.nodes;
+    let white = Correlation { rho: [0.0; 3], step: 1 };
+    let moments = prep.node_moments(x, &white);
+    let residual = (0..n)
+        .map(|v| (moments.wr2[v] / moments.w[v].max(1e-300)).sqrt())
+        .collect();
+    Reliability {
+        residual,
+        info: VolumetricInfo {
+            sigma_xy: psf[0],
+            sigma_z: psf[1],
+            scanner_axis: axis,
+            voxels: prep.problem.band.len(),
+            noise_sd: f64::NAN,
+            noise_correlation: [f64::NAN; 3],
+            noise_factor: f64::NAN,
+            std_error_t: vec![f64::NAN; n],
+            data_share: vec![[f64::NAN; 4]; n],
+            misfit: vec![f64::NAN; n],
+            reach: Vec::new(),
+        },
+    }
+}
+
 /// Assess the fit `x` of `prep` (PSF `psf` along `axis`).
 pub(super) fn assess(prep: &Prepared, x: &[f64], psf: [f64; 2], axis: usize) -> Reliability {
     let band = prep.problem.band;
@@ -95,6 +123,7 @@ pub(super) fn assess(prep: &Prepared, x: &[f64], psf: [f64; 2], axis: usize) -> 
             std_error_t,
             data_share,
             misfit,
+            reach: Vec::new(),
         },
     }
 }

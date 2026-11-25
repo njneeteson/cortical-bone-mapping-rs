@@ -23,7 +23,6 @@ TITLES = {
     "distal_radius": "distal radius (HR-pQCT), axial",
     "distal_tibia": "distal tibia (HR-pQCT), axial",
     "proximal_femur": "proximal femur (clinical CT), coronal",
-    "knee": "knee (clinical CT), coronal",
 }
 
 
@@ -42,7 +41,7 @@ def section(name):
 
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else "docs/images/site_phantoms.png"
-    fig, axes = plt.subplots(1, 4, figsize=(18, 5))
+    fig, axes = plt.subplots(1, len(cbm.SITES), figsize=(4.5 * len(cbm.SITES), 5))
     for ax, name in zip(axes, cbm.SITES):
         img, peri, endo, aspect, (lo, hi) = section(name)
         ax.imshow(img, cmap="gray", vmin=lo, vmax=hi, origin="lower", aspect=aspect)

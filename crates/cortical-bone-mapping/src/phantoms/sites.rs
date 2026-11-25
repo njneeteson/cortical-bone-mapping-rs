@@ -6,7 +6,6 @@
 //! | distal radius | HR-pQCT (XtremeCT II) | 0.0607 | 0.08 | 40 |
 //! | distal tibia | HR-pQCT (XtremeCT II) | 0.0607 | 0.08 | 40 |
 //! | proximal femur | clinical CT (hip) | 1.0 × 0.75 × 0.75 | 0.6 / 0.5 | 30 HU |
-//! | knee | clinical CT | 0.625 × 0.65 × 0.65 | 0.45 / 0.4 | 22 HU |
 //!
 //! * **HR-pQCT** ([`BonePhantom`]): densities in mg HA/cm³. The distal
 //!   radius has Tt.Ar 220–360 mm², Ct.Th 0.77–0.93 mm and Ct.Po 1.5–2.5%;
@@ -18,14 +17,6 @@
 //! * **Proximal femur** ([`FemurPhantom`], see its module): a hip CT with
 //!   0.75 mm pixels and 1 mm slices (the AGES-Reykjavik hip scans had
 //!   0.98 mm pixels and 1 mm slices; Johannesdottir et al. 2011).
-//! * **Knee** ([`JointPhantom`]): the voxel size and the soft-tissue level
-//!   and noise (57 and 22 HU) of our clinical knee CT
-//!   (`docs/clinical_ct.md`); a tibial plateau 74 mm across; subchondral
-//!   plates 0.78 mm (tibia) and 0.32 mm (femur) and a joint space of 5–6 mm,
-//!   as measured in healthy young adults by weight-bearing CT with 0.3 mm
-//!   voxels (Waungana et al. 2025); an intercondylar notch 20 mm wide;
-//!   trabecular densities of about 330 HU, rising to about 540 HU under the
-//!   plates (70–500 HU on the clinical knee).
 //! * **Clinical PSF.** A Gaussian with a 10% modulation transfer at
 //!   frequency `f` has `σ = √(ln 10 / 2)/(π f)`. With standard kernels the
 //!   10% MTF of clinical scanners is 6.98 ± 0.40 lp/cm (five scanners; Li et
@@ -35,8 +26,7 @@
 //!   integration adds `h²/12` to each variance.
 //!
 //! The values not given a source (neck and shaft radii, the trochanter and
-//! acetabulum, notch, side-shell thickness, curvatures) are typical, not
-//! measured.
+//! acetabulum) are typical, not measured.
 //!
 //! # References
 //!
@@ -48,12 +38,6 @@
 //!   neck and hip fracture: a prospective case-control analysis of 143
 //!   incident hip fractures; the AGES-REYKJAVIK Study*, Bone
 //!   48(6):1268–1276, 2011.
-//! * T. H. Waungana, R. Mangat, C. Chen, A. C. J. Smith, Y. Al-Khoury, M. T.
-//!   Kuczynski, T. Turmezei, D. D. Anderson, W. B. Edwards, S. L. Manske,
-//!   *Repeatability of objective bone and joint measures in the knee using
-//!   weight-bearing computed tomography: three-dimensional quantification of
-//!   bone mineral density, joint space width, and subchondral bone plate
-//!   thickness*, JBMR Plus 10(2):ziaf194, 2026, doi:10.1093/jbmrpl/ziaf194.
 //! * Y. Li, Y. Jiang, H. Liu, X. Yu, S. Chen, D. Ma, J. Gao, Y. Wu, *A
 //!   phantom study comparing low-dose CT physical image quality from five
 //!   different CT scanners*, Quantitative Imaging in Medicine and Surgery
@@ -61,7 +45,6 @@
 
 use super::bone::{BonePhantom, NeighbourBone};
 use super::femur::FemurPhantom;
-use super::joint::{JointPhantom, Notch};
 
 /// An anatomical site.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,7 +52,6 @@ pub enum Site {
     DistalRadius,
     DistalTibia,
     ProximalFemur,
-    Knee,
 }
 
 /// A site's phantom.
@@ -77,18 +59,16 @@ pub enum Site {
 pub enum SitePhantom {
     Bone(BonePhantom),
     Femur(FemurPhantom),
-    Joint(JointPhantom),
 }
 
 impl Site {
-    pub const ALL: [Site; 4] = [Site::DistalRadius, Site::DistalTibia, Site::ProximalFemur, Site::Knee];
+    pub const ALL: [Site; 3] = [Site::DistalRadius, Site::DistalTibia, Site::ProximalFemur];
 
     pub fn name(self) -> &'static str {
         match self {
             Site::DistalRadius => "distal_radius",
             Site::DistalTibia => "distal_tibia",
             Site::ProximalFemur => "proximal_femur",
-            Site::Knee => "knee",
         }
     }
 
@@ -105,7 +85,6 @@ impl Site {
                 seed,
                 ..FemurPhantom::default()
             }),
-            Site::Knee => SitePhantom::Joint(knee(seed)),
         }
     }
 }
@@ -160,47 +139,6 @@ fn distal_tibia(seed: u64) -> BonePhantom {
     hrpqct_shaft(15.0, 1.3, 0.05, 0.25, fibula, seed)
 }
 
-fn knee(seed: u64) -> JointPhantom {
-    JointPhantom {
-        dims: (113, 144, 144),
-        spacing: [0.625, 0.65, 0.65],
-        radius: 37.0,
-        femur_scale: 1.05,
-        joint_level: 0.43,
-        joint_space: 5.0,
-        contact_offset: [2.0, 0.0],
-        tibia_curvature: 120.0,
-        femur_curvature: 60.0,
-        bump_amplitude: 0.4,
-        bump_wavelength: 20.0,
-        plate_thickness: 0.78,
-        femur_plate_thickness: Some(0.32),
-        plate_variation: 0.3,
-        plate_min: 0.15,
-        shell_thickness: 0.8,
-        rim_rounding: 3.0,
-        bvtv: 0.22,
-        endo_bvtv: 0.35,
-        transition_width: 3.0,
-        trabecular_wavelength: 1.6,
-        porosity: 0.03,
-        rho_soft: 57.0,
-        rho_cartilage: 80.0,
-        rho_bone: 1600.0,
-        rho_marrow: -30.0,
-        blur: [0.45, 0.4, 0.4],
-        noise: 22.0,
-        seed,
-        supersample: 3,
-        notch: Some(Notch {
-            width: 20.0,
-            height: 22.0,
-            anterior: -5.0,
-        }),
-        ..JointPhantom::default()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,19 +160,6 @@ mod tests {
             let nb = b.neighbour.as_ref().unwrap();
             assert!(0.5 * w > b.radius + nb.gap + nb.radius);
         }
-        assert_eq!(Site::from_name("knee"), Some(Site::Knee));
-    }
-
-    #[test]
-    fn knee_joint_space_is_healthy() {
-        let SitePhantom::Joint(k) = Site::Knee.phantom(1) else {
-            panic!()
-        };
-        // at the notch edges and at the condyle centres (±19 mm): 5–6.5 mm
-        for x in [10.0, 19.0] {
-            let q2 = x * x + k.contact_offset[0].powi(2);
-            let gap = k.joint_space + q2 * (1.0 / (2.0 * k.femur_curvature) - 1.0 / (2.0 * k.tibia_curvature));
-            assert!(gap > 5.0 && gap < 6.6, "gap {gap} at {x}");
-        }
+        assert_eq!(Site::from_name("proximal_femur"), Some(Site::ProximalFemur));
     }
 }

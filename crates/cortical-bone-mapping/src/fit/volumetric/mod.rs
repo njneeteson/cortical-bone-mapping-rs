@@ -20,13 +20,15 @@
 //! 2. one model for all band voxels, every parameter global (as the 1D
 //!    methods' initialisation; skipped when refinement passes a PSF to start
 //!    from);
-//! 3. the fields released: `m`, `t` per node with the curvature penalty on
-//!    the fitted surfaces (they define the periosteal and endosteal
-//!    surfaces), `ρs`, `ρb` per node with the spatial smoothing `ω`, and the
-//!    PSF global (`problem`, on the shared Gauss–Newton/PCG solver);
-//! 4. with `ρc` estimated, the cortical plateau from the voxels well inside
-//!    the fitted cortex, and one refit;
-//! 5. the reliability outputs (`reliability`).
+//! 3. the fields released: `m`, `t` per node with the spatial smoothing `ω`
+//!    of the regularised method and optionally a curvature penalty on the
+//!    fitted surfaces (they define the periosteal and endosteal surfaces),
+//!    `ρs`, `ρb` per node with the same smoothing, and the PSF global
+//!    (`problem`, on the shared Gauss–Newton/PCG solver);
+//! 4. the reliability outputs (`reliability`).
+//!
+//! `ρc` is given, or, to be estimated, estimated beforehand from the nodes'
+//! profiles by the 1D estimate (`fit::profile_rho_c`).
 //!
 //! The surface is fixed during a fit; refinement moves it by the fitted
 //! `m − t/2`, as for the 1D methods. Neighbourhoods default to distance along
@@ -40,6 +42,7 @@
 
 pub(crate) mod band;
 pub(crate) mod problem;
+mod reach;
 mod reliability;
 #[cfg(test)]
 mod tests;
@@ -50,6 +53,7 @@ use ndarray::ArrayView3;
 
 use self::band::{Band, BandSpec};
 use self::problem::{Prepared, VolumetricProblem, M, NV, RHO_B, RHO_S, SXY, SZ, T};
+use self::reach::{node_reach, uniform_reach, Reach, ReachSpec};
 use super::global::{minimise, Role};
 use super::profiles::{sampling_normals, NormalConstraint};
 use super::regularized::curvature_operator;
@@ -57,10 +61,10 @@ use super::{global_settings, held_subset, FitConstraints, Nodes};
 use crate::error::Error;
 use crate::model::{Params, M as PM, RHO_B as PRB, RHO_S as PRS, SIGMA as PS, T as PT};
 use crate::operators::{CurvatureOperator, Neighbours, SmoothingOperator};
-use crate::options::{AxialBlur, Options, RhoCMode, VolumetricOptions};
+use crate::options::{AxialBlur, Options, VolumetricOptions};
 use crate::result::{CbmResult, FitInfo, VolumetricInfo};
 use crate::surface::mesh::Mesh;
-use crate::util::{dot, quantile, scale, V3};
+use crate::util::{dot, scale, V3};
 use crate::volume::{Geometry, Voxel};
 
 /// Fit the volumetric model on the nodes `keep` of an (already smoothed)
@@ -80,13 +84,12 @@ pub(crate) fn fit_surface<T: Voxel>(
     let (d0, d1, d2) = image.dim();
     let cut = ImageEdge::new([d0, d1, d2], &options.geometry);
     let nodes = FitNodes::new(&surface, keep, options.sampling.normal_constraint, &cut)?;
-    let band = Band::build(
-        image,
-        &surface,
-        &nodes.fitted,
-        nodes.mesh.faces.len(),
-        &band_spec(options, v, c.exclude),
-    );
+    let reach = band_reach(image, &nodes, options, v);
+    let mut spec = band_spec(options, v, c.exclude);
+    if v.adaptive_band.is_some() {
+        spec.face_reach = Some(face_reach(&nodes.mesh, &reach));
+    }
+    let band = Band::build(image, &surface, &nodes.fitted, nodes.mesh.faces.len(), &spec);
     if band.is_empty() {
         return Err(Error::NoNodes);
     }
@@ -97,20 +100,13 @@ pub(crate) fn fit_surface<T: Voxel>(
         method: "volumetric".to_string(),
         ..Default::default()
     };
-    let mut rho_c = fit.initial_rho_c();
+    let rho_c = fit.rho_c();
     let tg = Instant::now();
     let global = fit.global_stage(rho_c, &mut info);
     timings.push(("global fit".to_string(), tg.elapsed().as_secs_f64()));
     let tf = Instant::now();
     let starts = fit.node_starts(&global, warm_start);
-    let mut x = fit.field_stage(rho_c, &global, &starts, &mut info);
-    if c.rho_c.is_none() && options.model.rho_c_mode == RhoCMode::Estimate {
-        if let Some(rc) = fit.plateau(rho_c, &global, &x) {
-            let refit = fit.field_starts_from(rho_c, &global, &x);
-            rho_c = rc;
-            x = fit.field_stage(rho_c, &global, &refit, &mut info);
-        }
-    }
+    let x = fit.field_stage(rho_c, &global, &starts, &mut info);
     timings.push(("volumetric fit".to_string(), tf.elapsed().as_secs_f64()));
     let tr = Instant::now();
     let out = fit.outputs(rho_c, &global, &x);
@@ -130,7 +126,10 @@ pub(crate) fn fit_surface<T: Voxel>(
         psf: Some(psf_per_axis(global_psf(&out.scalars), v.scanner_axis)),
         info,
         profiles: None,
-        volumetric: Some(out.info),
+        volumetric: Some(VolumetricInfo {
+            reach: reach.outside.iter().zip(&reach.inside).map(|(&o, &i)| [o, i]).collect(),
+            ..out.info
+        }),
         surface,
     })
 }
@@ -233,6 +232,36 @@ impl FitNodes {
     }
 }
 
+/// Each node's reach: adaptive ([`reach`]) with
+/// [`VolumetricOptions::adaptive_band`], else the sampling range.
+fn band_reach<T: Voxel>(image: &ArrayView3<T>, nodes: &FitNodes, o: &Options, v: &VolumetricOptions) -> Reach {
+    let s = &o.sampling;
+    match v.adaptive_band {
+        Some(cap) => {
+            let points: Vec<V3> = nodes.mesh.vertices.clone();
+            let spec = ReachSpec {
+                geom: &o.geometry,
+                outside: s.outside,
+                inside: s.inside,
+                cap,
+            };
+            node_reach(image, &points, &nodes.normals, &spec)
+        }
+        None => uniform_reach(nodes.ids.len(), s.outside, s.inside),
+    }
+}
+
+/// The reach of every fitted face: the largest of its nodes'.
+fn face_reach(mesh: &Mesh, reach: &Reach) -> Vec<[f64; 2]> {
+    mesh.faces
+        .iter()
+        .map(|f| {
+            let pick = |r: &[f64]| f.iter().map(|&v| r[v as usize]).fold(0.0, f64::max);
+            [pick(&reach.outside), pick(&reach.inside)]
+        })
+        .collect()
+}
+
 /// The band's settings from the options.
 fn band_spec<'a>(o: &'a Options, v: &VolumetricOptions, exclude: Option<ArrayView3<'a, bool>>) -> BandSpec<'a> {
     BandSpec {
@@ -243,6 +272,7 @@ fn band_spec<'a>(o: &'a Options, v: &VolumetricOptions, exclude: Option<ArrayVie
         axis: v.scanner_axis,
         exclude,
         stride: v.voxel_stride,
+        face_reach: None,
     }
 }
 
@@ -255,7 +285,8 @@ struct Fit<'a, 'c> {
     c: FitConstraints<'c>,
     held: Option<&'a [bool]>,
     neighbours: Neighbours,
-    /// The smoothing operator of the density fields (if they are fields).
+    /// The smoothing operator of the density fields (if they are fields) and
+    /// of the edge fields (with `edge_lambda`).
     smoothing: Option<SmoothingOperator>,
     lower: [f64; NV],
     upper: [f64; NV],
@@ -280,7 +311,7 @@ impl<'a, 'c> Fit<'a, 'c> {
     ) -> Self {
         let neighbours = Neighbours::new(&nodes.mesh, o.distance());
         let density_fields = !v.global_densities && c.densities.is_none();
-        let smoothing = (density_fields && v.lambda > 0.0)
+        let smoothing = (density_fields && v.lambda > 0.0 || v.edge_lambda > 0.0)
             .then(|| SmoothingOperator::new(&neighbours, v.neighbours, v.sigma, v.cutoff));
         let (lo, hi) = (o.model.lower, o.model.upper);
         Fit {
@@ -297,22 +328,10 @@ impl<'a, 'c> Fit<'a, 'c> {
         }
     }
 
-    /// The cortical density to start from: given, fixed, or (to be
-    /// estimated) the 90th percentile of the band voxels inside the surface.
-    fn initial_rho_c(&self) -> f64 {
-        if let Some(rc) = self.c.rho_c {
-            return rc;
-        }
-        match self.o.model.rho_c_mode {
-            RhoCMode::Estimate => {
-                let inside: Vec<f64> = (0..self.band.len())
-                    .filter(|&e| self.band.depth[e] >= 0.0)
-                    .map(|e| self.band.value[e] as f64)
-                    .collect();
-                quantile(inside, 0.9)
-            }
-            _ => self.o.model.rho_c,
-        }
+    /// The cortical density: given (held, or estimated from the profiles by
+    /// the caller, `fit::profile_rho_c`), else the options' fixed value.
+    fn rho_c(&self) -> f64 {
+        self.c.rho_c.unwrap_or(self.o.model.rho_c)
     }
 
     /// Roles of the parameters: `fields` for the field stage, all global
@@ -320,13 +339,17 @@ impl<'a, 'c> Fit<'a, 'c> {
     /// whether `σ_z` is tied to `σ_xy`.
     fn roles(&self, fields: bool) -> ([Role; NV], bool) {
         let node = if fields { Role::Field } else { Role::Global };
-        let densities = if self.c.densities.is_some() {
-            Role::Fixed
-        } else if self.v.global_densities {
-            Role::Global
-        } else {
-            node
+        let density = |global: bool| {
+            if self.c.densities.is_some() {
+                Role::Fixed
+            } else if global {
+                Role::Global
+            } else {
+                node
+            }
         };
+        let rho_s = density(self.v.global_densities || self.v.global_soft_tissue);
+        let rho_b = density(self.v.global_densities);
         let held_psf = self.c.psf.is_some();
         let sxy = if held_psf || self.v.sigma_xy.is_some() {
             Role::Fixed
@@ -338,7 +361,7 @@ impl<'a, 'c> Fit<'a, 'c> {
             (false, AxialBlur::Tied) => (Role::Global, true),
             (false, AxialBlur::Fit) => (Role::Global, false),
         };
-        ([node, node, densities, densities, sxy, sz], tied)
+        ([node, node, rho_s, rho_b, sxy, sz], tied)
     }
 
     /// `scalars` with the fixed parameters (held densities and PSF, given
@@ -371,7 +394,12 @@ impl<'a, 'c> Fit<'a, 'c> {
         curvature: Option<&'p CurvatureOperator>,
     ) -> VolumetricProblem<'p> {
         let (roles, tied) = self.roles(fields);
-        let kappa = self.v.lambda / self.nodes.ids.len() as f64;
+        // the regularised method's weights: λ/N on the densities (relative to
+        // ρc), λ ρc² / (N t0²) on m and t (relative to the global thickness)
+        let nn = self.nodes.ids.len() as f64;
+        let kappa = self.v.lambda / nn;
+        let t0 = scalars[T].max(1e-6);
+        let kappa_edges = self.v.edge_lambda * rho_c * rho_c / (nn * t0 * t0);
         VolumetricProblem {
             band: self.band,
             faces: &self.nodes.mesh.faces,
@@ -382,7 +410,9 @@ impl<'a, 'c> Fit<'a, 'c> {
             fixed: self.fixed_values(scalars),
             frozen: if fields { self.held } else { None },
             smoothing: if fields {
-                self.smoothing.as_ref().map(|op| (op, [kappa, kappa]))
+                self.smoothing
+                    .as_ref()
+                    .map(|op| (op, [kappa_edges, kappa_edges, kappa, kappa]))
             } else {
                 None
             },
@@ -445,15 +475,6 @@ impl<'a, 'c> Fit<'a, 'c> {
             .collect()
     }
 
-    /// Node starts from a previous field fit `x`.
-    fn field_starts_from(&self, rho_c: f64, global: &[f64; NV], x: &[f64]) -> Vec<[f64; 4]> {
-        let pr = self.problem(true, rho_c, global, None);
-        let values = Prepared::new(&pr).node_values(x);
-        (0..self.nodes.ids.len())
-            .map(|v| [values[M][v], values[T][v], values[RHO_S][v], values[RHO_B][v]])
-            .collect()
-    }
-
     /// The curvature penalty on the fitted surfaces (lengths default to the
     /// global thickness).
     fn curvature(&self, rho_c: f64, global: &[f64; NV]) -> Option<CurvatureOperator> {
@@ -486,22 +507,8 @@ impl<'a, 'c> Fit<'a, 'c> {
         x
     }
 
-    /// Stage 4: the cortical plateau (`ρc` estimate) from the field fit `x`:
-    /// per node the median of its voxels well inside the fitted cortex (at
-    /// least 3), and the median over nodes (at least 10).
-    fn plateau(&self, rho_c: f64, global: &[f64; NV], x: &[f64]) -> Option<f64> {
-        let pr = self.problem(true, rho_c, global, None);
-        let mut samples = Prepared::new(&pr).cortical_samples(x);
-        samples.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
-        let medians: Vec<f64> = samples
-            .chunk_by(|a, b| a.0 == b.0)
-            .filter(|g| g.len() >= 3)
-            .map(|g| g[g.len() / 2].1 as f64)
-            .collect();
-        (medians.len() >= 10).then(|| quantile(medians, 0.5))
-    }
-
-    /// Stage 5: node parameters, residuals and reliability at `x`.
+    /// Stage 5: node parameters, residuals and reliability at `x` (only the
+    /// residuals for an inexact inner fit, `edge_tol > 0`).
     fn outputs(&self, rho_c: f64, global: &[f64; NV], x: &[f64]) -> Outputs {
         let curv = self.curvature(rho_c, global);
         let pr = self.problem(true, rho_c, global, curv.as_ref());
@@ -524,7 +531,12 @@ impl<'a, 'c> Fit<'a, 'c> {
                 ]
             })
             .collect();
-        let rel = reliability::assess(&prep, x, global_psf(&scalars), axis);
+        // inexact inner fits of a refinement only need the residuals
+        let rel = if self.c.edge_tol > 0.0 {
+            reliability::residuals_only(&prep, x, global_psf(&scalars), axis)
+        } else {
+            reliability::assess(&prep, x, global_psf(&scalars), axis)
+        };
         Outputs {
             params,
             residual: rel.residual,

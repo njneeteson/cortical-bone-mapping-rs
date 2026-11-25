@@ -89,8 +89,8 @@ fn change_mode_ignores_uniform_offsets_but_not_bumps() {
         &mesh.vertices,
         &normals,
         CurvatureMode::Change,
-        1.0,
-        [true, false],
+        CurvatureMeasure::Mean,
+        [1.0, 0.0],
     );
     let n = mesh.vertices.len();
     let mut st = op.new_state();
@@ -100,27 +100,31 @@ fn change_mode_ignores_uniform_offsets_but_not_bumps() {
     let bumpy: Vec<f64> = mesh.vertices.iter().map(|v| 0.7 + 0.1 * (4.0 * v[0]).sin()).collect();
     let c = op.eval(&bumpy, &vec![0.0; n], &mut st, &mut gm, &mut gt);
     assert!(c > 1e-3);
-    // the excess mode sees the curvature 1/R of the sphere itself
-    for lap in [
-        SurfaceLaplacian::cotangent(&mesh),
-        SurfaceLaplacian::gaussian(&Neighbours::euclidean(&mesh.vertices), 40, 0.4, 3.0),
+    // the absolute mode sees the curvature of the sphere itself:
+    // |k1 + k2| = 2/R, sqrt(k1^2 + k2^2) = sqrt(2)/R
+    let sqrt2 = std::f64::consts::SQRT_2;
+    for (lap, measure, expected) in [
+        (SurfaceLaplacian::cotangent(&mesh), CurvatureMeasure::Mean, 2.0),
+        (sphere_gaussian(&mesh), CurvatureMeasure::Mean, 2.0),
+        (SurfaceLaplacian::cotangent(&mesh), CurvatureMeasure::Total, sqrt2),
+        (sphere_gaussian(&mesh), CurvatureMeasure::Total, sqrt2),
     ] {
         let ex = CurvatureOperator::new(
             lap,
             &mesh.vertices,
             &normals,
-            CurvatureMode::Excess { kappa: 0.2 },
-            1.0,
-            [true, false],
+            CurvatureMode::Absolute { kappa: 0.2 },
+            measure,
+            [1.0, 0.0],
         );
-        let h = ex.mean_curvature(&vec![0.0; n]);
+        let h = ex.curvature(&vec![0.0; n]);
         let mid = h
             .iter()
             .zip(&mesh.vertices)
             .filter(|(_, v)| v[2].abs() < 2.0)
             .map(|(h, _)| *h);
         for hv in mid {
-            assert!((hv * 3.0 - 1.0).abs() < 0.08, "H*R = {}", hv * 3.0);
+            assert!((hv * 3.0 / expected - 1.0).abs() < 0.08, "K*R = {}", hv * 3.0);
         }
     }
     // the Gaussian change operator also ignores uniform offsets
@@ -129,10 +133,72 @@ fn change_mode_ignores_uniform_offsets_but_not_bumps() {
         &mesh.vertices,
         &normals,
         CurvatureMode::Change,
-        1.0,
-        [true, false],
+        CurvatureMeasure::Mean,
+        [1.0, 0.0],
     );
     assert!(g.eval(&vec![0.7; n], &vec![0.0; n], &mut st, &mut gm, &mut gt) < 1e-20);
+}
+
+fn sphere_gaussian(mesh: &Mesh) -> SurfaceLaplacian {
+    SurfaceLaplacian::gaussian(&Neighbours::euclidean(&mesh.vertices), 40, 0.4, 3.0)
+}
+
+/// Points of the saddle `z = a (x² − y²)` on a grid, with unit normals.
+fn saddle(a: f64, n: usize, h: f64) -> (Vec<V3>, Vec<V3>) {
+    let c = (n / 2) as f64;
+    let mut pts = Vec::new();
+    let mut nrm = Vec::new();
+    for i in 0..n {
+        for j in 0..n {
+            let (x, y) = ((i as f64 - c) * h, (j as f64 - c) * h);
+            pts.push([x, y, a * (x * x - y * y)]);
+            let g = [-2.0 * a * x, 2.0 * a * y, 1.0];
+            nrm.push(scale(g, 1.0 / crate::util::norm(g)));
+        }
+    }
+    (pts, nrm)
+}
+
+#[test]
+fn total_curvature_sees_a_saddle_that_mean_curvature_misses() {
+    // principal curvatures ±2a at the centre: H = 0, sqrt(k1^2 + k2^2) = 2√2 a
+    let a = 0.25;
+    let (pts, nrm) = saddle(a, 41, 0.05);
+    let centre = pts.len() / 2;
+    let near = Neighbours::euclidean(&pts);
+    let measure = |m| {
+        // every neighbour within the cut-off (no sampling noise)
+        let lap = SurfaceLaplacian::gaussian(&near, 1000, 0.15, 3.0);
+        let op = CurvatureOperator::new(lap, &pts, &nrm, CurvatureMode::Absolute { kappa: 0.0 }, m, [1.0, 0.0]);
+        op.curvature(&vec![0.0; pts.len()])[centre]
+    };
+    let (mean, total) = (measure(CurvatureMeasure::Mean), measure(CurvatureMeasure::Total));
+    assert!(mean < 0.04, "2|H| = {mean}");
+    let expected = 2.0 * std::f64::consts::SQRT_2 * a;
+    assert!((total - expected).abs() < 0.02 * expected, "total curvature {total}");
+}
+
+#[test]
+fn variation_mode_ignores_spheres_and_parallel_surfaces_but_not_bumps() {
+    let mesh = Mesh::uv_sphere(3.0, 48, 32);
+    let normals: Vec<V3> = mesh.vertex_normals().iter().map(|v| scale(*v, -1.0)).collect();
+    let n = mesh.vertices.len();
+    let op = CurvatureOperator::new(
+        SurfaceLaplacian::cotangent(&mesh),
+        &mesh.vertices,
+        &normals,
+        CurvatureMode::Variation,
+        CurvatureMeasure::Mean,
+        [1.0, 0.0],
+    );
+    let mut st = op.new_state();
+    let (mut gm, mut gt) = (vec![0.0; n], vec![0.0; n]);
+    let bumpy: Vec<f64> = mesh.vertices.iter().map(|v| 0.5 + 0.1 * (4.0 * v[0]).sin()).collect();
+    let bump = op.eval(&bumpy, &vec![0.0; n], &mut st, &mut gm, &mut gt);
+    for d in [0.0, 0.5] {
+        let c = op.eval(&vec![d; n], &vec![0.0; n], &mut st, &mut gm, &mut gt);
+        assert!(c < 1e-3 * bump, "offset {d}: cost {c} vs bump {bump}");
+    }
 }
 
 #[test]

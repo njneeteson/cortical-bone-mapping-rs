@@ -106,13 +106,12 @@ cbm.cortical_bone_mapping(image, mask, spacing, method="volumetric", vol_scanner
 
 Images may be `float32/64`, `int8/16/32` or `uint8/16/32` and are not copied.
 Also available: `cbm.buie_segmentation` (Buie et al. 2007, implemented from
-the paper), and phantoms with exact ground truth: `cbm.Phantom` (smooth
-shells), `cbm.BonePhantom` (realistic long bones, optionally with a
-neighbouring fibula/ulna and cortical breaks), `cbm.JointPhantom` (the
-contact region of a knee, optionally with the intercondylar notch),
-`cbm.FemurPhantom` (a proximal femur with the acetabulum), and
-`cbm.site_phantom(site)` for the distal radius and tibia (HR-pQCT) and the
-proximal femur and knee (clinical CT) with parameters from the literature.
+the paper), and phantoms with exact ground truth for testing:
+`cbm.Phantom` (smooth shells), `cbm.BonePhantom` (realistic long bones,
+optionally with a neighbouring fibula/ulna), `cbm.FemurPhantom` (a proximal
+femur with the acetabulum), and `cbm.site_phantom(site)` for the distal
+radius and tibia (HR-pQCT) and the proximal femur (clinical CT) with
+parameters from the literature.
 
 From Rust:
 
@@ -154,29 +153,31 @@ See [method](docs/method.md#cortical-density).
   ([examples](docs/examples.md)).
 * **Volumetric model.** On phantoms of the distal radius and tibia at HR-pQCT
   resolution, the volumetric model is nearly unbiased, with a third of the
-  regularised fit's thickness error and 5–11 times its precision; at
-  clinical resolution it is as good as the best 1D fit, and its PSF is
-  recovered to within about 10%. Refinement with it is not yet reliable
-  ([volumetric validation](docs/volumetric_validation.md)).
+  regularised fit's thickness error and 6–13 times its precision; at
+  clinical resolution it is slightly more accurate than the best 1D fit, and
+  its PSF is recovered to within about 10%, at 3–9 times the run time
+  ([volumetric validation](docs/volumetric_validation.md)). Refinement with
+  it converges on the whole clinical knee
+  ([volumetric refinement](docs/volumetric_refinement.md)).
 * **Automatic segmentation.** On phantoms built from published HR-pQCT
-  values, starting from a convex hull, CBM matches or beats Buie's
-  dual-threshold method on every shaft: thickness RMSE 28–45 µm for the
-  volumetric model on the healthy, osteoporotic and neighbour shafts, and
-  40–85 µm for refinement with the curvature penalty where Buie is
-  unbiased. It corrects Buie's −0.13 mm bias on a thin porous cortex (cortex
-  Dice 0.81 → 0.93–0.96), and the curvature penalty bridges a 1.2 mm
-  cortical break that makes Buie's marrow leak into the cortex. The knee's
-  subchondral plate is still hard ([segmentation](docs/segmentation.md)).
+  values, starting from a convex hull, refinement converges on every shaft
+  and matches or beats Buie's dual-threshold method: thickness RMSE 34–47 µm
+  with the volumetric model on the healthy, osteoporotic and neighbour
+  shafts, against 70–147 µm for Buie, and it corrects Buie's −0.13 mm bias
+  on a thin porous cortex (cortex Dice 0.81 → 0.93–0.96). These are checks
+  that the pipeline works; accuracy on real HR-pQCT remains to be measured
+  ([segmentation](docs/segmentation.md)).
 * **Real data.** On a clinical knee CT, all four bones (femur, tibia,
-  patella, fibula) are segmented and mapped from the image alone in 138 s,
-  each converging in 5–7 moves with the femoral notch followed
+  patella, fibula) are segmented and mapped from the image alone, each
+  converging in 5–6 moves (166 s of refinement) with the femoral notch
+  followed, and with the volumetric model in 4–7 moves (252 s)
   ([clinical CT](docs/clinical_ct.md),
   [refinement experiments](docs/refinement_experiments.md)).
 * **Speed and memory.** Against the original Python implementation (Bonelab)
   on the same profiles, the local fit is about 420 times faster, multigrid
   45 times and the regularised fit 10–20 times (against a converged solve),
   with equal or better accuracy. At 134k nodes the 1D methods take 2–15 s
-  and 0.1–0.8 GB, the volumetric model 41 s and 2 GB
+  and 0.1–0.8 GB, the volumetric model 51 s and 2 GB
   ([performance](docs/performance.md)).
 
 ![Methods on a noisy phantom](docs/images/methods_comparison.png)
@@ -205,6 +206,9 @@ See [method](docs/method.md#cortical-density).
   volumetric model against the 1D methods on phantoms of the distal radius
   and tibia (HR-pQCT) and the proximal femur and knee (clinical CT), and on
   the clinical knee.
+* **[docs/volumetric_refinement.md](docs/volumetric_refinement.md)**: how
+  refinement with the volumetric model was made to converge, one change at a
+  time, and how the methods then compare.
 * **[docs/performance.md](docs/performance.md)**: run time and memory, and
   comparisons with the original Python implementation and with SciPy.
 
@@ -212,18 +216,21 @@ See [method](docs/method.md#cortical-density).
 
 * **Methods**: `local` (Treece et al.), `multigrid` and `regularized`
   (Neeteson & Boyd), the latter optionally with the curvature penalty
-  (`"change"`: curvature added by the fit; `"excess"`: curvature above a
-  threshold), or with the curvature penalty alone; `volumetric` (extension),
-  with a global PSF, the curvature penalty on the edges, smoothed density
-  fields, and per-node reliability (local standard error, data share,
-  misfit).
+  (`"change"`: curvature added by the fit; `"absolute"`: curvature above a
+  threshold; `"variation"`: how fast the curvature changes), or with the
+  curvature penalty alone; `volumetric` (extension),
+  with a global PSF, the regularised method's smoothing of the edge and
+  density fields plus the curvature penalty on the edges, and per-node
+  reliability (local standard error, data share, misfit).
+* **Several bones in one scan** (`map_bones`, `refine_bones`) share the
+  scanner's parameters (`ρc`, the volumetric PSF), estimated once on all of
+  them (`shared_scanner`).
 * **Neighbourhoods** by Euclidean distance or by distance along the surface
   (truncated Dijkstra), for every method.
-* **Phantoms** with exact ground truth: smooth shells, realistic long bones
-  (porous cortex, trabeculae, neighbouring bones, cortical breaks), a knee
-  joint, a proximal femur with the acetabulum, and the four sites at their
-  scanners' resolution with parameters from the literature
-  (`cbm.site_phantom`).
+* **Phantoms** with exact ground truth, for testing: smooth shells,
+  realistic long bones (porous cortex, trabeculae, neighbouring bones), a
+  proximal femur with the acetabulum, and three sites at their scanners'
+  resolution with parameters from the literature (`cbm.site_phantom`).
 * **Blur**: free, fixed, from a Gaussian PSF (direction-dependent), or a PSF
   estimated from the data (isotropic, axial or anisotropic).
 * **Fast and frugal**: bounded Levenberg–Marquardt with analytic Jacobians
@@ -267,7 +274,7 @@ python docs/scripts/make_figures.py                 # docs/images
 python docs/scripts/segmentation_experiment.py      # docs/segmentation.md results (~70 min)
 python docs/scripts/ct_example.py DICOM_DIR ...     # docs/clinical_ct.md (image not included)
 python docs/scripts/notch_experiment.py knee.pkl --out results run  # docs/refinement_experiments.md
-cargo run --release --example benchmark -p cortical-bone-mapping -- --json docs/benchmark_results.json
+cargo run --release --example benchmark -p cortical-bone-mapping -- --json docs/results/benchmark_results.json
 python docs/scripts/compare_scipy.py
 python docs/scripts/compare_bonelab.py /path/to/Bonelab
 ```

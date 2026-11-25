@@ -31,6 +31,10 @@
 //! `stall_iterations` iterations, refinement stops as *stalled*, with a
 //! diagnosis of the profiles that miss the cortex (`diagnosis`).
 //!
+//! **Scanner parameters.** The blur and the cortical density are held
+//! through a refinement pass and re-fitted between passes, with
+//! under-relaxation, until they settle (`scanner`).
+//!
 //! Two options change how the surface is carried between iterations:
 //!
 //! * **Level set** ([`RefineOptions::level_set`]): the surface is the zero
@@ -58,13 +62,16 @@
 //!   Computational Physics 79(1):12–49, 1988.
 
 mod diagnosis;
+mod fill;
 mod motion;
 mod options;
+mod scanner;
 mod state;
 
 pub use crate::result::cortical_masks;
 pub use diagnosis::trusted_fits;
 pub use options::{FreezeOptions, IterationStats, RefineOptions, RefineResult};
+pub use scanner::ScannerState;
 
 use std::time::Instant;
 
@@ -72,8 +79,8 @@ use ndarray::{Array3, ArrayView3};
 
 use crate::error::Error;
 use crate::fit::{fit_surface_constrained, FitConstraints};
-use crate::model::{RHO_B, RHO_S, SIGMA, T};
-use crate::options::{Method, Options, RhoCMode};
+use crate::model::T;
+use crate::options::Options;
 use crate::pipeline::{candidate_nodes, prepare_surface, with_threads};
 use crate::result::{add_timing, region_masks, CbmResult};
 use crate::surface::levelset::LevelSet;
@@ -81,7 +88,9 @@ use crate::surface::mesh::{Adjacency, Mesh};
 use crate::util::{dot, norm, V3};
 use crate::volume::Voxel;
 use diagnosis::{max_regional_rms, stall_diagnosis};
-use motion::{displacements, harmonic_fill, locked_axes, move_level_set, move_vertices, Step};
+use fill::harmonic_fill;
+use motion::{displacements, locked_axes, move_level_set, move_vertices, Step};
+use scanner::Shared;
 use state::{Freeze, NodeState};
 
 /// Refine the outer-surface segmentation `mask` of `image`.
@@ -129,6 +138,11 @@ pub fn refine_segmentation_excluding<T: Voxel, U: Voxel, V: Voxel, W: Voxel>(
     if !(refine.relaxation > 0.0 && refine.relaxation <= 1.0) {
         return Err(Error::InvalidOption("relaxation must be in (0, 1]".into()));
     }
+    if !(refine.scanner_relaxation > 0.0 && refine.scanner_relaxation <= 1.0) || refine.scanner_passes == 0 {
+        return Err(Error::InvalidOption(
+            "scanner_relaxation must be in (0, 1] and scanner_passes at least 1".into(),
+        ));
+    }
     let inputs = Inputs {
         image,
         sub_mask,
@@ -142,6 +156,9 @@ pub fn refine_segmentation_excluding<T: Voxel, U: Voxel, V: Voxel, W: Voxel>(
             let (step, trusted) = r.displacements();
             let measured = r.measure(&step, &trusted);
             if let Some(end) = r.should_stop(&measured, &trusted) {
+                if r.rescan()? {
+                    continue;
+                }
                 break end;
             }
             r.move_surface(&step, &measured)?;
@@ -188,86 +205,6 @@ impl Limits {
                 .max_step
                 .unwrap_or(f64::INFINITY)
                 .min(refine.relaxation * options.sampling.outside.max(options.sampling.inside)),
-        }
-    }
-}
-
-/// The densities and blur shared by the fits of one refinement. With
-/// regional convergence, partial fits must use the whole surface's `ρc` and
-/// global densities. A global blur is a property of the scanner: held during
-/// partial fits, carried over as a warm start otherwise.
-struct Shared {
-    rho_c: Option<f64>,
-    densities: Option<[f64; 2]>,
-    density_start: [f64; 2],
-    global_sigma: bool,
-    sigma_held: Option<f64>,
-    sigma_start: f64,
-    /// The volumetric model's PSF `(σ_xy, σ_z)`, held or as a warm start.
-    psf_held: Option<[f64; 2]>,
-    psf_start: Option<[f64; 2]>,
-}
-
-impl Shared {
-    /// From the first, full fit: with freezing (and a cortical density that is
-    /// one value), hold `ρc` and, for the regularised method, global densities and
-    /// a global `σ` at the whole surface's values, so that partial fits measure on
-    /// the same scale; otherwise only warm-start them.
-    fn new(first: &CbmResult, options: &Options, freezing: bool) -> Self {
-        let fixed_rho = freezing && options.model.rho_c_mode != RhoCMode::ProfileMax;
-        let global_method = matches!(options.method, Method::Regularized { .. });
-        let global_densities = options.model.global[RHO_S] || options.model.global[RHO_B];
-        let global_sigma = options.model.global[SIGMA] && global_method;
-        let volumetric_global = matches!(&options.method, Method::Volumetric(v) if v.global_densities);
-        let held_densities = fixed_rho && (global_method && global_densities || volumetric_global);
-        let psf = first.volumetric.as_ref().map(|v| [v.sigma_xy, v.sigma_z]);
-        Shared {
-            rho_c: fixed_rho.then_some(first.rho_c),
-            densities: held_densities.then(|| first.mean_densities()),
-            density_start: first.mean_densities(),
-            global_sigma,
-            sigma_held: (global_sigma && freezing).then(|| first.mean_sigma()),
-            sigma_start: first.mean_sigma(),
-            psf_held: psf.filter(|_| freezing),
-            psf_start: psf,
-        }
-    }
-
-    /// Carry the warm starts over from a fit.
-    fn update(&mut self, r: &CbmResult) {
-        if self.densities.is_none() {
-            self.density_start = r.mean_densities();
-        }
-        if self.global_sigma && self.sigma_held.is_none() {
-            self.sigma_start = r.mean_sigma();
-        }
-        if self.psf_held.is_none() {
-            if let Some(v) = &r.volumetric {
-                self.psf_start = Some([v.sigma_xy, v.sigma_z]);
-            }
-        }
-    }
-
-    /// Constraints of a fit: `full` (verifying, whole surface) or partial,
-    /// with nodes `held` fixed and inner solves stopped at `edge_tol`.
-    fn constraints<'a>(
-        &self,
-        exclude: Option<ArrayView3<'a, bool>>,
-        full: bool,
-        held: Option<&'a [bool]>,
-        edge_tol: f64,
-    ) -> FitConstraints<'a> {
-        FitConstraints {
-            exclude,
-            fixed: held,
-            rho_c: self.rho_c,
-            densities: self.densities,
-            density_start: Some(self.density_start),
-            edge_tol: if full { 0.0 } else { edge_tol },
-            sigma: if full { None } else { self.sigma_held },
-            sigma_start: self.global_sigma.then_some(self.sigma_start),
-            psf: if full { None } else { self.psf_held },
-            psf_start: self.psf_start,
         }
     }
 }
@@ -320,6 +257,8 @@ struct Refinement<'a, T: Voxel, V: Voxel> {
     last_full: bool,
     fit_kind: String,
     shared: Shared,
+    /// The scanner parameters held in each pass so far.
+    passes: Vec<ScannerState>,
     // progress
     moves: usize,
     progress: Progress,
@@ -395,6 +334,7 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
             result,
             last_full: true,
             fit_kind: "initial fit".to_string(),
+            passes: vec![shared.scanner],
             shared,
             moves: 0,
             progress: Progress {
@@ -430,7 +370,7 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
                 step.known[v] = true;
             }
         }
-        harmonic_fill(&self.adj, &step.known, &mut step.disp, 50);
+        harmonic_fill(&self.adj, &step.known, &mut step.disp);
         if let Some(fz) = &self.freeze {
             fz.update(&mut self.state, &self.mesh, &step);
         }
@@ -613,7 +553,6 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
         let refine = self.inp.refine;
         let nv = self.mesh.vertices.len();
         let keep = &self.keep;
-        let n_keep = keep.iter().filter(|&&k| k).count();
         let any_moving = (0..nv).any(|v| keep[v] && !self.state.frozen[v]);
         let full = m.settled || !any_moving || refine.edge_ratio <= 0.0 && self.freeze.is_none();
         let fit_mask: Vec<bool> = match (full, &self.freeze) {
@@ -644,7 +583,10 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
         self.clock.since("fits", tf);
         self.clock.add_fit(&self.result);
         self.shared.update(&self.result);
-        self.last_full = full && self.result.n() >= n_keep.min(fit_mask.iter().filter(|&&k| k).count());
+        // a full fit covers every candidate node with nothing held; the fit
+        // may still drop a few (no valid sampling direction), which must not
+        // keep it from counting as full
+        self.last_full = full;
         self.fit_kind = format!(
             "iteration {}/{}{}",
             self.moves,
@@ -654,18 +596,70 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
         Ok(())
     }
 
+    /// Between passes: re-fit the scanner parameters on the refined surface
+    /// and relax the held ones toward them (`scanner`). Returns whether
+    /// another pass follows (they changed by more than the tolerance, and
+    /// passes and moves remain), after a full fit with the new values.
+    fn rescan(&mut self) -> Result<bool, Error> {
+        let refine = self.inp.refine;
+        if self.passes.len() >= refine.scanner_passes || self.moves >= refine.max_iterations {
+            return Ok(false);
+        }
+        let tf = Instant::now();
+        let constraints = self.shared.rescan_constraints(self.inp.exclude);
+        let warm = Some(self.state.warm.as_slice());
+        let (image, options) = (&self.inp.image, self.inp.options);
+        let fit = fit_surface_constrained(image, self.mesh.clone(), &self.keep, options, warm, &constraints)?;
+        self.clock.since("fits", tf);
+        self.clock.add_fit(&fit);
+        let before = self.shared.scanner;
+        let change = self.shared.relax(&fit, refine.scanner_relaxation);
+        if refine.verbose {
+            eprintln!(
+                "{}: scanner re-fit after pass {}: {:?} -> {:?} (re-fit changed by {:.1}%, tolerance {:.1}%)",
+                self.tag,
+                self.passes.len(),
+                before,
+                self.shared.scanner,
+                100.0 * change,
+                100.0 * refine.scanner_tolerance
+            );
+        }
+        if change <= refine.scanner_tolerance {
+            self.shared.scanner = before;
+            return Ok(false);
+        }
+        self.passes.push(self.shared.scanner);
+        self.full_fit()?;
+        self.progress = Progress {
+            best_rms: f64::INFINITY,
+            best_moving: usize::MAX,
+            since_best: 0,
+        };
+        Ok(true)
+    }
+
+    /// A full fit of the whole surface with the held scanner parameters.
+    fn full_fit(&mut self) -> Result<(), Error> {
+        let tf = Instant::now();
+        self.state.held = vec![false; self.mesh.vertices.len()];
+        let constraints = self.shared.constraints(self.inp.exclude, true, None, 0.0);
+        let warm = Some(self.state.warm.as_slice());
+        let (image, options) = (&self.inp.image, self.inp.options);
+        self.result = fit_surface_constrained(image, self.mesh.clone(), &self.keep, options, warm, &constraints)?;
+        self.clock.since("fits", tf);
+        self.clock.add_fit(&self.result);
+        self.shared.update(&self.result);
+        self.last_full = true;
+        self.fit_kind = format!("pass {}: full fit", self.passes.len());
+        Ok(())
+    }
+
     /// A fit of the whole surface with nothing held, for the outputs (after
     /// a last fit that covered only part of it).
     fn output_fit(&mut self) -> Result<(), Error> {
         let tf = Instant::now();
-        let shared = &self.shared;
-        let constraints = FitConstraints {
-            exclude: self.inp.exclude,
-            rho_c: shared.rho_c,
-            density_start: Some(shared.density_start),
-            sigma_start: shared.global_sigma.then_some(shared.sigma_start),
-            ..FitConstraints::default()
-        };
+        let constraints = self.shared.constraints(self.inp.exclude, true, None, 0.0);
         let warm = Some(self.state.warm.as_slice());
         let (image, options) = (&self.inp.image, self.inp.options);
         self.result = fit_surface_constrained(image, self.mesh.clone(), &self.keep, options, warm, &constraints)?;
@@ -713,6 +707,7 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
             converged: end.converged,
             stalled: end.stalled,
             message: end.message,
+            scanner: self.passes,
             timings: self.clock.0,
         })
     }

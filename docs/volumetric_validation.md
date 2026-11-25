@@ -22,7 +22,6 @@ than measured.
 | distal radius | shaft + ulna, 32 slices | 0.0607 | 0.08 | 40 mg HA/cm³ | 0.85 mm, Tt.Ar ≈ 254 mm² |
 | distal tibia | shaft + fibula, 32 slices | 0.0607 | 0.08 | 40 mg HA/cm³ | 1.3 mm, Tt.Ar ≈ 707 mm² |
 | proximal femur | head, neck, trochanter, shaft + acetabulum | 1.0 × 0.75 × 0.75 | 0.6 axial, 0.5 in-plane | 30 HU | neck 0.86 superior to 2.79 inferior, head and trochanter 0.8, shaft 3.5 mm |
-| knee | tibia + femur with notch, 5–6.5 mm joint space | 0.625 × 0.65 × 0.65 | 0.45 axial, 0.4 in-plane | 22 HU | plates 0.78 (tibia) and 0.32 (femur), side shell 0.8 mm |
 
 ![Mid-sections of the site phantoms](images/site_phantoms.png)
 
@@ -51,18 +50,19 @@ the mean CBM thickness.
 without noise and makes five scans by adding independent noise (exactly how
 the phantoms add noise), so that all fits share the surface and the nodes.
 Every method fits from the true periosteal mask with the same sampling range
-(HR-pQCT 1 mm outside and 2.5 mm inside, femur 2.5 and 7 mm, knee 3 and
-6 mm) and `rho_c="estimate"`. The regularised method uses the smoothing of
+(HR-pQCT 1 mm outside and 2.5 mm inside, femur 2.5 and 7 mm) and
+`rho_c="estimate"`. The regularised method uses the smoothing of
 our 2025 paper (σ 1.94 mm; 500 neighbours at HR-pQCT, 128 at clinical
 resolution, where the nodes are about ten times sparser), and the volumetric
-model the same operator for its density fields and its default curvature
-weight (0.3). On the HR-pQCT shafts, all methods report along in-plane
-normals. For each node, thickness and periosteal position are compared with
+model its defaults: the same operator on `m`, `t` and its density fields
+(`λ = 1`) plus the curvature penalty (weight 0.3). With `rho_c="estimate"`
+both take `ρc` from the 1D estimate on their own profiles. On the HR-pQCT
+shafts, all methods report along in-plane normals. For each node, thickness and periosteal position are compared with
 the truth along the reported direction. Bias and RMSE are over nodes and
 scans; SD, the precision, is the RMS over nodes of the standard deviation
-over the five scans. At the clinical sites every method is also run with
-`ρc` fixed at the phantom's true cortical density, to separate the error of
-the estimated `ρc` from that of the method.
+over the five scans. On the femur every method is also run with `ρc` fixed
+at the phantom's true cortical density, to separate the error of the
+estimated `ρc` from that of the method.
 
 ### Clinical knee
 
@@ -75,7 +75,7 @@ its own estimated `ρc`; the volumetric model on all four bones together, so
 that they share one PSF (they share the scanner) and one estimated `ρc`; and
 the volumetric model on each bone with the PSF held at the joint fit's and
 `ρc` at the regularised fit's ("matched"), so that the difference is that of
-the methods alone.
+the methods alone. The surfaces are those of the regularised refinement.
 
 ## Results
 
@@ -104,7 +104,7 @@ phantoms' fine structure, not the cortex that CBM measures.
 | true thickness along the in-plane normals (CBM's definition) | 0.827 | 1.264 |
 | CBM, local (RMSE) | 0.874 (0.147) | 1.307 (0.176) |
 | CBM, regularised, 64 neighbours (RMSE) | 0.876 (0.131) | 1.311 (0.158) |
-| CBM, volumetric (RMSE) | 0.835 (0.038) | 1.260 (0.058) |
+| CBM, volumetric (RMSE) | 0.835 (0.037) | 1.261 (0.057) |
 
 The two definitions differ. Local thickness is the diameter of the largest
 sphere in the cortex, averaged over its volume; CBM's thickness is the
@@ -114,7 +114,7 @@ surface. Volume weighting counts thick regions more (by about
 local thickness 2–5% above the true mean along the normals. The 1D fits land
 close to local thickness only because they overestimate thickness by about
 0.05 mm here (the endocortical transition reads as cortex). The volumetric
-model's mean agrees with the truth (+0.008 and −0.004 mm), and its per-node
+model's mean agrees with the truth (+0.008 and −0.003 mm), and its per-node
 error is about a third of theirs.
 
 ### HR-pQCT
@@ -124,20 +124,21 @@ error is about a third of theirs.
 | radius: local | +0.048 | 0.154 | 0.0206 | 0.010 | 0.0039 |
 | radius: local, estimated PSF | +0.042 | 0.145 | 0.0203 | 0.010 | 0.0038 |
 | radius: regularised | +0.030 | 0.082 | 0.0044 | 0.010 | 0.0031 |
-| radius: volumetric | +0.002 | 0.030 | 0.0009 | 0.006 | 0.0007 |
+| radius: volumetric | +0.002 | 0.028 | 0.0007 | 0.006 | 0.0005 |
 | tibia: local | +0.046 | 0.183 | 0.0272 | 0.015 | 0.0041 |
 | tibia: local, estimated PSF | +0.041 | 0.177 | 0.0272 | 0.014 | 0.0040 |
 | tibia: regularised | +0.031 | 0.114 | 0.0076 | 0.013 | 0.0036 |
-| tibia: volumetric | −0.012 | 0.034 | 0.0007 | 0.006 | 0.0004 |
+| tibia: volumetric | −0.011 | 0.034 | 0.0006 | 0.006 | 0.0004 |
 
 (mm.) The volumetric model is nearly unbiased, its thickness error is a
 third of the regularised fit's and a fifth of the local fit's, its precision
-is 5–11 times better, and its periosteal position is about twice as
+is 6–13 times better, and its periosteal position is about twice as
 accurate. The 1D error is almost all structural, the same in every scan (SD
 0.02 against RMSE 0.15 for the local fit), and sits at the endosteum, where
 the porous, trabecularised transition makes a single profile ambiguous. The
-volumetric model fits all voxels around a node, with the endosteal surface
-regularised by its curvature. Its fitted PSF, 0.089 mm, is close to the
+volumetric model fits all voxels around a node, with its edges smoothed as
+the regularised fit's are and the endosteal surface also regularised by its
+curvature. Its fitted PSF, 0.089 mm, is close to the
 effective blur (PSF and voxel integration, `√(0.08² + 0.0607²/12)` =
 0.082 mm).
 
@@ -150,39 +151,22 @@ With `ρc` estimated / fixed at the truth (mm):
 | femur: local | +0.166 / +0.155 | 0.219 / 0.211 | 0.035 | 0.060 / 0.062 | 0.024 |
 | femur: local, estimated PSF | +0.138 / +0.132 | 0.173 / 0.169 | 0.028 | 0.066 / 0.067 | 0.023 |
 | femur: regularised | +0.157 / +0.147 | 0.174 / 0.165 | 0.010 | 0.048 / 0.050 | 0.010 |
-| femur: volumetric | +0.129 / +0.117 | 0.155 / 0.146 | 0.015 | 0.048 / 0.049 | 0.011 |
-| knee tibia: local | +0.532 / +0.157 | 0.585 / 0.244 | 0.029 / 0.021 | 0.142 / 0.047 | 0.013 |
-| knee tibia: local, estimated PSF | +0.480 / +0.110 | 0.523 / 0.167 | 0.024 / 0.018 | 0.134 / 0.053 | 0.012 |
-| knee tibia: regularised | +0.486 / +0.118 | 0.505 / 0.177 | 0.007 / 0.004 | 0.141 / 0.055 | 0.007 / 0.004 |
-| knee tibia: volumetric | +0.658 / +0.103 | 0.679 / 0.162 | 0.009 / 0.007 | 0.208 / 0.045 | 0.005 |
-| knee femur: local | +0.591 / +0.199 | 0.676 / 0.308 | 0.053 / 0.037 | 0.159 / 0.128 | 0.024 / 0.027 |
-| knee femur: local, estimated PSF | +0.483 / +0.109 | 0.549 / 0.162 | 0.028 / 0.016 | 0.144 / 0.086 | 0.016 / 0.017 |
-| knee femur: regularised | +0.510 / +0.138 | 0.524 / 0.159 | 0.006 / 0.003 | 0.141 / 0.070 | 0.007 / 0.003 |
-| knee femur: volumetric | +0.422 / +0.125 | 0.444 / 0.154 | 0.009 / 0.007 | 0.121 / 0.066 | 0.005 / 0.006 |
+| femur: volumetric | +0.128 / +0.119 | 0.145 / 0.137 | 0.016 | 0.047 / 0.048 | 0.020 |
 
-With the right `ρc` the volumetric model is the most accurate method at
-every clinical site, by a small margin (thickness RMSE 0.146–0.162 mm
-against 0.159–0.177 mm for the regularised fit), with a precision between
-the local and regularised fits'. Its fitted PSF is close to the effective
-blur: 0.566 / 0.686 mm (in-plane / axial) on the femur against
-0.545 / 0.666 mm, and 0.461 / 0.536–0.566 mm on the knee against
-0.442 / 0.485 mm.
+The volumetric model is the most accurate method on the femur, with `ρc`
+estimated (thickness RMSE 0.145 mm against 0.174 mm for the regularised fit)
+and with the true `ρc` (0.137 against 0.165 mm), with a precision between the
+regularised and local fits' (thickness SD 0.016 against 0.010 and 0.035 mm).
+Its fitted PSF, 0.565 / 0.688 mm (in-plane / axial) with the true `ρc`, is
+close to the effective blur, 0.545 / 0.666 mm. The femur's shaft cortex is
+thick, so the estimated `ρc` is close to the truth (about 1540 HU) and fixing
+it changes little. Where no cortex in view is thicker than about four times
+the blur, the estimate is low and every method makes the cortex thicker:
+since the data fix the blurred mass `(ρc − ρb) t`, thickness scales roughly
+as `1/ρc`.
 
-Two effects shared by all methods dominate. The first is the estimated
-`ρc`. The estimate takes the density plateau inside cortices that are thick
-relative to the blur, and the knee phantom has none: its plates (0.32 and
-0.78 mm) and side shell (0.8 mm) are all within `4σ`. The only nodes that
-qualify are those fitted too thick, whose plateau is diluted, so the
-estimate is low (1140–1190 HU against 1551 HU); since the data fix the
-blurred mass `(ρc − ρb) t`, every method then makes the cortex thicker, by
-+0.42 to +0.66 mm. With the true `ρc` the bias falls to about +0.1 mm. The
-volumetric model is the most sensitive, because the few thick nodes that set
-the plateau also pull its PSF down (0.30 / 0.36 mm against 0.46 / 0.54 mm).
-On the femur, whose shaft cortex is thick, the estimate is close (about
-1540 HU) and fixing `ρc` changes little.
-
-The second is the endocortical transition. With the true `ρc` a bias of
-about +0.1 mm remains for every method: the dense trabecular bone the
+A bias of about +0.1 mm remains for every method, from the endocortical
+transition: the dense trabecular bone the
 phantoms put against the endosteum (BV/TV rising to 0.35 within 2–3 mm) is
 indistinguishable from cortex at clinical resolution. Without the transition
 (the femur with `endo_bvtv = bvtv`, noise-free, true `ρc`), the regularised
@@ -193,60 +177,50 @@ curvature penalty resists the real variation of the endosteal surface
 (±0.5 mm over 25 mm), and in the bottom 2 mm of the image, where the band is
 cut off.
 
-### Curvature weight
+### Regularisation weights
 
-The curvature penalty is the only regulariser of the volumetric model's edge
-positions, so its weight sets the trade-off between noise and smoothing.
-Thickness RMSE (mm) on the cylindrical shell of the tests (one scan) and on
-the site phantoms (two scans each, `ρc` fixed at the truth):
-
-| weight | shell, noise 30 | shell, noise 120 | distal radius | femur | femur, no transition | knee tibia |
-|---|---|---|---|---|---|---|
-| 0.01 | 0.0095 | 0.0280 | | | | |
-| 0.03 | 0.0074 | 0.0161 | 0.058 | 0.156 | 0.065 | 0.160 |
-| 0.1 | 0.0069 | 0.0099 | 0.041 | 0.150 | 0.063 | 0.158 |
-| 0.3 | 0.0077 | 0.0087 | 0.029 | 0.145 | 0.063 | 0.162 |
-| 1.0 | 0.0106 | 0.0104 | 0.021 | 0.143 | 0.065 | 0.166 |
-
-The default, 0.3, is the best single compromise. HR-pQCT benefits from
-heavier weights; at clinical resolution the choice matters little.
+The volumetric model's edges are smoothed with the regularised method's
+penalty (`λ = 1`) and penalised for curvature (weight 0.3). On the clinical
+CT of the knee the smoothing was what made refinement converge
+([volumetric_refinement.md](volumetric_refinement.md#6-edge-smoothing-and-cortical-density)).
+The weights have not been tuned at the anatomical sites; that waits for real
+HR-pQCT data.
 
 ### Clinical knee
 
-Fitted bone by bone, the PSF came out at 0.53–0.80 mm in-plane and
-0.57–0.88 mm axially, the patella's with its anisotropy reversed: a single
-bone constrains it poorly, and it absorbs whatever the model misses locally.
-Fitted to all four bones together it is 0.58 mm in-plane and 0.85 mm along
-the scanner axis. The joint `ρc` is 1364 HU, against 1383–1535 HU for the
-bones' own 1D estimates.
+Fitted to all four bones together, the PSF is 0.65 mm in-plane and 0.81 mm
+along the scanner axis, and the joint `ρc` 1504 HU, against 1384–1534 HU for
+the bones' own 1D estimates. Fitted bone by bone, the PSF scattered
+(0.53–0.80 mm in-plane, 0.57–0.88 mm axially, the patella's anisotropy
+reversed): a single bone constrains it poorly.
 
-Volumetric minus regularised, mean ± SD over nodes (mm); the regularised
-median thicknesses are 0.54 (femur), 0.91 (tibia), 1.17 (patella) and
-0.87 mm (fibula), and a negative periosteum difference puts the volumetric
-periosteum further out:
+Volumetric minus regularised, mean ± SD over nodes (mm); a negative
+periosteum difference puts the volumetric periosteum further out:
 
-| | nodes | joint: thickness | joint: periosteum | matched: thickness | matched: periosteum |
-|---|---|---|---|---|---|
-| femur | 82323 | +0.06 ± 0.17 | −0.10 ± 0.11 | −0.07 ± 0.16 | −0.06 ± 0.16 |
-| tibia | 65263 | −0.04 ± 0.42 | −0.13 ± 0.17 | −0.14 ± 0.37 | −0.09 ± 0.21 |
-| patella | 13384 | −0.21 ± 0.37 | −0.18 ± 0.28 | −0.25 ± 0.43 | −0.20 ± 0.33 |
-| fibula | 16679 | +0.02 ± 0.18 | −0.11 ± 0.07 | −0.09 ± 0.17 | −0.07 ± 0.12 |
+| | nodes | regularised `ρc` (HU) | regularised median thickness | joint: thickness | joint: periosteum | matched: thickness | matched: periosteum |
+|---|---|---|---|---|---|---|---|
+| femur | 82339 | 1534 | 0.54 | −0.02 ± 0.11 | −0.04 ± 0.05 | −0.05 ± 0.11 | −0.02 ± 0.04 |
+| tibia | 65346 | 1494 | 0.90 | −0.15 ± 0.34 | −0.05 ± 0.09 | −0.14 ± 0.34 | −0.05 ± 0.08 |
+| patella | 13266 | 1384 | 1.17 | −0.42 ± 0.31 | −0.02 ± 0.13 | −0.26 ± 0.24 | −0.05 ± 0.08 |
+| fibula | 16638 | 1486 | 0.87 | −0.09 ± 0.11 | −0.05 ± 0.05 | −0.07 ± 0.11 | −0.05 ± 0.04 |
 
-With the same PSF and `ρc`, the volumetric cortex is thinner on every bone
-by 0.07–0.25 mm and its periosteum lies 0.06–0.20 mm further out, so its
-endosteum lies 0.12–0.44 mm further out: the 1D fit counts more of the
+With the same PSF and `ρc`, the volumetric cortex is thinner on every bone,
+by 0.05–0.26 mm, and its periosteum lies 0.02–0.05 mm further out, so its
+endosteum lies 0.07–0.31 mm further out: the 1D fit counts more of the
 endocortical bone as cortex, which is the direction of its error on the
-phantoms. The joint fit, with its lower `ρc`, reads thicker than the matched
-one.
+phantoms. The differences are smaller than with the earlier volumetric
+default (0.07–0.25 mm in thickness, 0.06–0.20 mm at the periosteum), whose
+edges were regularised by the curvature penalty alone.
 
-The soft-tissue noise has a standard deviation of 28–40 HU and a lag-one
-correlation of 0.63–0.88 along the axes, because the pixels (0.65 mm) are
+The soft-tissue noise has a standard deviation of 34 HU and a lag-one
+correlation of 0.71–0.86 along the axes, because the pixels (0.65 mm) are
 smaller than the blur. The median local standard error of the thickness is
-0.09–0.17 mm (95th percentile 0.2–0.8 mm, more on the fibula's thinnest
-nodes), and the median misfit is 1.0–1.4, so the model accounts for the
-noise level at most nodes; the 95th percentile, 2.3–3.4, marks where it does
-not. The data share of `t` is small (median 0.02–0.03): at clinical
-resolution the curvature penalty carries much of each node's value.
+0.12–0.16 mm (95th percentile 0.2–0.6 mm, more on the fibula's thinnest
+nodes), and the median misfit is 1.1–1.8, so the model accounts for the
+noise level at most nodes; the 95th percentile, 2.1–3.8, marks where it does
+not. The data's share of the curvature of the cost in `t` is small (median
+0.13–0.16): at clinical resolution the regularisation carries much of each
+node's value.
 
 ## Discussion
 
@@ -257,28 +231,29 @@ because it reads the porous, trabecularised endosteum that single profiles
 cannot. The same holds on the realistic shafts of
 [segmentation.md](segmentation.md).
 
-At clinical resolution it is as good as the best 1D fit, and slightly better
-with the right `ρc`. Both are limited by `ρc`, which cannot be estimated
+At clinical resolution it is slightly more accurate than the best 1D fit,
+with `ρc` estimated or right. Both are limited by `ρc`, which cannot be estimated
 without some cortex thicker than about `4σ` in view, and by the dense
 endocortical bone, which reads as cortex at that resolution. This is the
 identifiability problem that led Treece et al. (2010) to constrain the
 cortical density. In a field of view without thick cortex, `ρc` should be
 fixed (from a calibration, or from a scan that includes a shaft); on the
 clinical knee, whose field of view includes the shafts, the estimate was
-1380–1530 HU.
+1504 HU for the four bones together.
 
 The PSF is recovered globally with its anisotropy, within 3–17% of the
 effective blur (mostly under 10%) when `ρc` is right. It is a property of
 the scan, so it should be fitted to all bones at once and held for per-bone
 fits; bone by bone it scatters and takes thickness with it.
 
+Refinement with the volumetric model now converges, on the whole clinical
+knee ([clinical_ct.md](clinical_ct.md),
+[volumetric_refinement.md](volumetric_refinement.md)).
+
 Open questions: an estimate of `ρc` that is robust when all of the cortex is
 thin (or a flag when it is not identifiable); a regulariser that lets the
-endosteum of thick cortices vary more freely; and refinement with the
-volumetric model, which plateaus at about a tenth of a voxel on phantoms
-([examples.md](examples.md#segmentation-refinement)) and does not finish on
-real data ([refinement_experiments.md](refinement_experiments.md),
-[clinical_ct.md](clinical_ct.md)).
+endosteum of thick cortices vary more freely; and the regularisation weights
+at each site, to be chosen on real data.
 
 ## References
 

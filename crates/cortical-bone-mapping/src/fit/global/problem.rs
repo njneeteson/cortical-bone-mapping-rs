@@ -361,7 +361,7 @@ impl<'a> Problem<'a> {
         lay: &Layout,
         ev: &Evaluation,
         smooth_diag: &Option<Vec<f64>>,
-        curv_diag: &Option<Vec<f64>>,
+        curv_diag: &Option<(Vec<f64>, Vec<f64>)>,
     ) -> (Vec<f64>, Vec<f64>) {
         let node_block = |i: usize| self.node_block(lay, &ev.blocks[i], i, smooth_diag, curv_diag);
         let bs = lay.fields.len() * lay.fields.len();
@@ -398,7 +398,7 @@ impl<'a> Problem<'a> {
         b: &[f64; 15],
         i: usize,
         smooth_diag: &Option<Vec<f64>>,
-        curv_diag: &Option<Vec<f64>>,
+        curv_diag: &Option<(Vec<f64>, Vec<f64>)>,
     ) -> Vec<f64> {
         let nfc = lay.fields.len();
         let mut out = vec![0.0; nfc * nfc];
@@ -409,12 +409,11 @@ impl<'a> Problem<'a> {
             if let (Some(sm), Some(sd)) = (&self.smoothing, smooth_diag) {
                 out[a * nfc + a] += sm.coef[ca] * sd[i];
             }
-            if let Some(cd) = curv_diag {
-                // two surfaces: m gets 2D, t gets 2D/4 (cross terms cancel)
+            if let Some((cm, ct)) = curv_diag {
                 if ca == M {
-                    out[a * nfc + a] += 2.0 * cd[i];
+                    out[a * nfc + a] += cm[i];
                 } else if ca == T {
-                    out[a * nfc + a] += 0.5 * cd[i];
+                    out[a * nfc + a] += ct[i];
                 }
             }
         }

@@ -46,7 +46,7 @@ use ndarray::ArrayView3;
 
 use crate::error::Error;
 use crate::model::{eval, residual_weights, Params, NPARAM, RHO_B, RHO_S, SIGMA};
-use crate::options::{Method, Options, SigmaMode};
+use crate::options::{Method, Options, RhoCMode, SigmaMode};
 use crate::result::{CbmResult, FitInfo};
 use crate::surface::mesh::Mesh;
 use crate::util::V3;
@@ -157,6 +157,24 @@ pub(crate) fn global_settings(o: &Options) -> global::Settings {
     }
 }
 
+/// The estimated cortical density ([`RhoCMode::Estimate`]) from the profiles
+/// of the nodes `keep`, for the volumetric model: the 1D estimate looks for
+/// cortex thick enough to show its density along every profile, where the
+/// volumetric fit's own voxels were dominated by thin cortex on clinical CT
+/// and its estimates were low (`docs/volumetric_refinement.md`, section 6).
+fn profile_rho_c<T: Voxel>(
+    image: &ArrayView3<T>,
+    surface: &Mesh,
+    keep: &[bool],
+    o: &Options,
+    exclude: Option<ArrayView3<bool>>,
+) -> Result<f64, Error> {
+    let (sub, _, normals) = select_nodes(surface, keep, o)?;
+    let (mut profiles, x) = sample_profiles(image, surface, &sub.vertices, &normals, exclude, o);
+    let weights = residual_weights(&x, o.model.residual_boost);
+    Ok(density::cortical_density(&mut profiles, &x, &weights, None, o)?.0)
+}
+
 /// Fit the model on the nodes `keep` of an (already smoothed) `surface`.
 /// `warm_start`, if given, holds initial parameters per surface vertex
 /// (`None` entries fall back to the global fit).
@@ -180,7 +198,11 @@ pub fn fit_surface_constrained<T: Voxel>(
     constraints: &FitConstraints,
 ) -> Result<CbmResult, Error> {
     if let Method::Volumetric(v) = &options.method {
-        return volumetric::fit_surface(image, surface, keep, options, v, warm_start, constraints);
+        let mut c = *constraints;
+        if c.rho_c.is_none() && options.model.rho_c_mode == RhoCMode::Estimate {
+            c.rho_c = Some(profile_rho_c(image, &surface, keep, options, constraints.exclude)?);
+        }
+        return volumetric::fit_surface(image, surface, keep, options, v, warm_start, &c);
     }
     let o = options;
     let mut timings = Vec::new();

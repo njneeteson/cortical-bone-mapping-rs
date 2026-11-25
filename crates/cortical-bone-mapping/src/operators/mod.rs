@@ -26,16 +26,22 @@
 use rayon::prelude::*;
 
 mod curvature;
+mod hessian;
 mod multigrid;
 mod neighbours;
 mod smoothing;
 #[cfg(test)]
 mod tests;
+mod variation;
 
-pub use curvature::{CurvatureMode, CurvatureOperator, CurvatureState, SurfaceLaplacian};
+pub use curvature::{
+    mesh_curvature, CurvatureMeasure, CurvatureMode, CurvatureOperator, CurvatureState, SurfaceLaplacian,
+};
+pub use hessian::HeightHessian;
 pub use multigrid::{interpolation_matrix, select_control_points};
 pub use neighbours::{Distance, Neighbours, QueryScratch};
 pub use smoothing::SmoothingOperator;
+pub use variation::CurvatureGradient;
 
 /// Row-compressed sparse matrix with `u32` column indices.
 #[derive(Clone, Debug)]

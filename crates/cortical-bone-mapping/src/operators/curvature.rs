@@ -30,10 +30,25 @@
 //!   periosteal one.) With `q_i = ½ Σ_k L_ik (d_k − d_i) n_k`, the residual is
 //!   `r_i = c · n_i · q_i` (`c` the residual scale of
 //!   [`crate::fit::regularized`]), linear in `(m, t)`.
-//! * **excess**: absolute mean curvature above a threshold,
-//!   `r_i = c · max(0, |H_i(S)| − κ)`, leaving curvature below `κ` free; the
-//!   active set and the sign are re-evaluated at every Gauss–Newton
-//!   linearisation.
+//!   Kept for comparison: its reference is the surface being fitted, so over
+//!   a refinement, where that surface is the previous fit's, curvature added
+//!   in one fit is free in the next and dents can deepen without bound.
+//! * **absolute**: the curvature of the fitted surface itself above a
+//!   threshold, `r_i = c · max(0, K_i(S) − κ)`, leaving curvature below `κ`
+//!   free (`κ = 0`: a bending energy, which prefers a flat surface). The
+//!   measure `K` ([`CurvatureMeasure`]) is `|κ₁ + κ₂| = 2|H|` (mean) or
+//!   `√(κ₁² + κ₂²)` (total, [`super::hessian`]), which unlike `H` is not zero
+//!   at a saddle. Both equal the curvature `1/R` of the contour of a surface
+//!   that is straight in one direction (a shaft), so `κ` is the curvature of
+//!   the sharpest bend left free, as in a slice: our HR-pQCT segmentation
+//!   network penalised contour curvature above 5 mm⁻¹ (0.005 µm⁻¹, from the
+//!   surfaces of real radius and tibia segmentations; Neeteson et al. 2023),
+//!   the default. The
+//!   squared hinge is continuous with a continuous slope at `κ`, so the
+//!   Gauss–Newton solver sees no jump as nodes cross the threshold; the
+//!   active set and the direction are re-evaluated at every linearisation.
+//!   This penalty does not depend on the surface the fit starts from, so a
+//!   refinement converges to one balance of data and smoothness.
 //!
 //! Laplacians ([`SurfaceLaplacian`]):
 //!
@@ -57,6 +72,10 @@
 //!
 //! # References
 //!
+//! * N. J. Neeteson, B. A. Besler, D. E. Whittier, S. K. Boyd, *Automatic
+//!   segmentation of trabecular and cortical compartments in HR-pQCT images
+//!   using an embedding-predicting U-Net and morphological post-processing*,
+//!   Scientific Reports 13:252, 2023, doi:10.1038/s41598-022-27350-0.
 //! * U. Pinkall, K. Polthier, *Computing discrete minimal surfaces and their
 //!   conjugates*, Experimental Mathematics 2(1):15–36, 1993.
 //! * M. Meyer, M. Desbrun, P. Schröder, A. H. Barr, *Discrete
@@ -69,11 +88,13 @@
 
 use rayon::prelude::*;
 
+use super::hessian::HeightHessian;
 use super::neighbours::Neighbours;
+use super::variation::CurvatureGradient;
 use super::SparseRows;
 use crate::surface::cotan::CotanLaplacian;
 use crate::surface::mesh::Mesh;
-use crate::util::{add, dot, scale, Rng, V3};
+use crate::util::{add, dot, norm, scale, Rng, V3};
 
 /// How fitted-surface curvature is penalised.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -85,10 +106,24 @@ pub enum CurvatureMode {
     /// costs nothing, so the natural shape of the bone and a uniform cortex
     /// are free and only bumps are resisted. Quadratic in `(m, t)`.
     Change,
-    /// Penalise absolute mean curvature above a threshold:
-    /// `max(0, |H(S)| − κ)²` with `H(S) ≈ n · ½ L S`, leaving curvature below
-    /// `κ` (1/length) free.
-    Excess { kappa: f64 },
+    /// Penalise the curvature of the fitted surface above a threshold:
+    /// `max(0, K(S) − κ)²`, `K` the [`CurvatureMeasure`], leaving curvature
+    /// below `κ` (1/length) free.
+    Absolute { kappa: f64 },
+    /// Penalise how fast the curvature `κ₁ + κ₂` changes along the fitted
+    /// surface, `½ ∫ |∇K|²` ([`CurvatureGradient`]): smoothly curved bone is
+    /// free, bumps and dents are not. Mean curvature only.
+    Variation,
+}
+
+/// Which curvature the absolute penalty measures.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CurvatureMeasure {
+    /// `|κ₁ + κ₂| = 2|H|` (from the surface Laplacian).
+    Mean,
+    /// `√(κ₁² + κ₂²)` (from a local quadric fit, [`HeightHessian`]): not
+    /// zero at a saddle, where `H` is.
+    Total,
 }
 
 /// A discrete surface Laplace–Beltrami operator in the form
@@ -99,6 +134,10 @@ pub struct SurfaceLaplacian {
     pub diag: Vec<f64>,
     /// Rows that are valid (e.g. not on the boundary of an open mesh).
     pub interior: Vec<bool>,
+    /// The off-diagonal entries are proportional to neighbourhood weights
+    /// (Gaussian), not geometric coefficients that may vanish or be negative
+    /// (cotangent).
+    pub weighted: bool,
 }
 
 impl SurfaceLaplacian {
@@ -116,6 +155,7 @@ impl SurfaceLaplacian {
             },
             diag: c.diag,
             interior: c.interior,
+            weighted: false,
         }
     }
 
@@ -157,6 +197,7 @@ impl SurfaceLaplacian {
             rows,
             diag,
             interior: vec![true; points.len()],
+            weighted: true,
         }
     }
 
@@ -170,6 +211,38 @@ impl SurfaceLaplacian {
             out.par_iter_mut().zip(tmp_out.par_iter()).for_each(|(o, &v)| o[c] = v);
         }
     }
+}
+
+/// The curvature measure at every vertex of `mesh` (`2|H|` or `√(κ₁² +
+/// κ₂²)`, 1/length), with the Laplacian of a curvature penalty: Gaussian
+/// at `sigma` over `neighbours` points with `distance`, or cotangent (`None`).
+/// For choosing the threshold `κ` from reference surfaces.
+pub fn mesh_curvature(
+    mesh: &Mesh,
+    measure: CurvatureMeasure,
+    sigma: Option<f64>,
+    neighbours: usize,
+    distance: super::Distance,
+) -> Vec<f64> {
+    let lap = match sigma {
+        Some(s) => SurfaceLaplacian::gaussian(&Neighbours::new(mesh, distance), neighbours, s, 3.0),
+        None => SurfaceLaplacian::cotangent(mesh),
+    };
+    let normals: Vec<V3> = mesh.vertex_normals().iter().map(|v| scale(*v, -1.0)).collect();
+    let mode = CurvatureMode::Absolute { kappa: 0.0 };
+    let op = CurvatureOperator::new(lap, &mesh.vertices, &normals, mode, measure, [1.0, 0.0]);
+    op.curvature(&vec![0.0; mesh.vertices.len()])
+}
+
+/// `gm += g`, `gt += sign · g` (`d = m + sign · t`).
+fn add_to(gm: &mut [f64], gt: &mut [f64], g: &[f64], sign: f64) {
+    gm.par_iter_mut()
+        .zip(gt.par_iter_mut())
+        .zip(g.par_iter())
+        .for_each(|((a, b), &gi)| {
+            *a += gi;
+            *b += sign * gi;
+        });
 }
 
 /// Row `i` of the Gaussian average from `k` neighbours drawn with
@@ -220,42 +293,51 @@ fn normalise_by_second_moment(rows: &mut SparseRows<f64>, points: &[V3]) -> Vec<
 }
 
 /// Curvature penalty on the fitted periosteal (`S = V + (m − t/2) n`) and/or
-/// endosteal (`S = V + (m + t/2) n`) surfaces, using a fixed Laplacian of the
-/// input surface `V`: `H(S) ≈ n · ½ L S` (the normal component, which is
-/// robust to the tangential drift of a point-cloud Laplacian on irregular
-/// sampling). Each node contributes one scalar residual per surface.
+/// endosteal (`S = V + (m + t/2) n`) surfaces, using fixed operators of the
+/// input surface `V`. Each node contributes one scalar residual per surface,
+/// `r_i = c · (measure)`, through a per-node curvature vector that is linear
+/// in the offsets `d`: `½ L S` (the mean-curvature normal; its normal
+/// component, `H`, is robust to the tangential drift of a point-cloud
+/// Laplacian on irregular sampling) or the second fundamental form `w`
+/// ([`HeightHessian`]).
 pub struct CurvatureOperator {
     pub lap: SurfaceLaplacian,
     pub normals: Vec<V3>,
-    /// `½ L V` of the input surface.
+    /// The curvature vector of the input surface: `½ L V`, or `B` (total).
     pub base: Vec<V3>,
-    /// `u_i = Σ_{k≠i} L_ik n_k`.
+    /// `u_i = Σ_{k≠i} L_ik n_k` (change mode).
     pub u: Vec<V3>,
+    /// The second fundamental form operator (total curvature only).
+    hessian: Option<HeightHessian>,
+    /// The gradient operator of the curvature (variation mode only).
+    variation: Option<CurvatureGradient>,
     pub mode: CurvatureMode,
-    /// Residual scale `c`: each residual is `c · (curvature measure)`.
-    pub coef: f64,
-    /// Penalise the periosteal / endosteal surface.
-    pub surfaces: [bool; 2],
+    pub measure: CurvatureMeasure,
+    /// Residual scales `c` of the periosteal and endosteal surfaces: each
+    /// residual is `c · (curvature measure)`; 0 = that surface is not
+    /// penalised.
+    pub coef: [f64; 2],
 }
 
-/// Per-row Gauss–Newton state from the last evaluation (unit curvature
-/// directions for the excess mode, zero where inactive).
+/// Per-row Gauss–Newton state from the last evaluation: the derivative of
+/// each residual's measure with respect to the node's curvature vector (zero
+/// where inactive).
 pub struct CurvatureState {
     pub dir: [Vec<V3>; 2],
 }
 
 impl CurvatureOperator {
-    /// Precompute, for the input surface `V` with normals `n`, the base term
-    /// `½ (L V)_i` (the curvature normal of `V`) and `u_i = Σ_{k≠i} L_ik n_k`, so
-    /// that `q_i` for any offsets `d` is one pass over the rows:
-    /// `½ (L (V + d n))_i = base_i + ½ (Σ_k L_ik d_k n_k + L_ii d_i n_i)`.
+    /// Precompute, for the input surface `V` with normals `n`, the curvature
+    /// vector of `V` and the operators that give its change for any offsets
+    /// `d` in one pass over the rows. The change mode always measures mean
+    /// curvature.
     pub fn new(
         lap: SurfaceLaplacian,
         points: &[V3],
         normals: &[V3],
         mode: CurvatureMode,
-        coef: f64,
-        surfaces: [bool; 2],
+        measure: CurvatureMeasure,
+        coef: [f64; 2],
     ) -> Self {
         let n = points.len();
         let r = &lap.rows;
@@ -266,19 +348,33 @@ impl CurvatureOperator {
             }
             acc
         };
-        let base = (0..n)
-            .into_par_iter()
-            .map(|i| scale(gather(points, i, lap.diag[i]), 0.5))
-            .collect();
-        let u = (0..n).into_par_iter().map(|i| gather(normals, i, 0.0)).collect();
+        let measure = match mode {
+            CurvatureMode::Absolute { .. } => measure,
+            CurvatureMode::Change | CurvatureMode::Variation => CurvatureMeasure::Mean,
+        };
+        let variation = (mode == CurvatureMode::Variation).then(|| CurvatureGradient::new(&lap));
+        let hessian = (measure == CurvatureMeasure::Total).then(|| HeightHessian::new(&lap, points, normals));
+        let base = match &hessian {
+            Some(h) => h.base.clone(),
+            None => (0..n)
+                .into_par_iter()
+                .map(|i| scale(gather(points, i, lap.diag[i]), 0.5))
+                .collect(),
+        };
+        let u = match mode {
+            CurvatureMode::Change => (0..n).into_par_iter().map(|i| gather(normals, i, 0.0)).collect(),
+            CurvatureMode::Absolute { .. } | CurvatureMode::Variation => Vec::new(),
+        };
         CurvatureOperator {
             lap,
             normals: normals.to_vec(),
             base,
             u,
+            hessian,
+            variation,
             mode,
+            measure,
             coef,
-            surfaces,
         }
     }
 
@@ -292,9 +388,20 @@ impl CurvatureOperator {
         matches!(self.mode, CurvatureMode::Change)
     }
 
-    /// `q_i = ½ (L (d n))_i` (excess mode) or `q_i = ½ Σ_k L_ik (d_k − d_i) n_k`
-    /// (change mode).
+    /// Whether node `i` has a residual: an interior Laplacian row and, for
+    /// the total curvature, a well-posed quadric fit.
+    fn active_row(&self, i: usize) -> bool {
+        self.lap.interior[i] && self.hessian.as_ref().is_none_or(|h| h.valid[i])
+    }
+
+    /// The change of the curvature vector for offsets `d`: `q_i = ½ (L (d
+    /// n))_i` (mean), `q_i = ½ Σ_k L_ik (d_k − d_i) n_k` (change mode) or the
+    /// linear part of `w_i` (total).
     fn q(&self, d: &[f64], out: &mut [V3]) {
+        if let Some(h) = &self.hessian {
+            h.apply(d, out);
+            return;
+        }
         let l = &self.lap;
         let r = &l.rows;
         let rel = self.relative();
@@ -313,9 +420,13 @@ impl CurvatureOperator {
     }
 
     /// Adjoint of `c · q`.
-    fn jt(&self, e: &[V3], out: &mut [f64]) {
+    fn jt(&self, c: f64, e: &[V3], out: &mut [f64]) {
+        if let Some(h) = &self.hessian {
+            h.apply_t(e, out);
+            out.par_iter_mut().for_each(|o| *o *= c);
+            return;
+        }
         let l = &self.lap;
-        let c = self.coef;
         let rel = self.relative();
         let mut lt = vec![[0.0; 3]; e.len()];
         l.apply_t3(e, &mut lt);
@@ -329,24 +440,115 @@ impl CurvatureOperator {
         });
     }
 
-    /// Node `i`'s residual `r` and its unit direction `u` (the residual
-    /// vector is `r u`), given `q_i`; zero at boundary nodes and, in the
-    /// excess mode, where the curvature is within `κ`.
-    fn residual(&self, i: usize, q: V3) -> (f64, V3) {
-        if !self.lap.interior[i] {
-            return (0.0, [0.0; 3]);
-        }
-        let (nrm, c) = (self.normals[i], self.coef);
-        match self.mode {
-            CurvatureMode::Change => (c * dot(nrm, q), nrm),
-            CurvatureMode::Excess { kappa } => {
-                let h = dot(nrm, add(self.base[i], q));
-                if h.abs() > kappa {
-                    (c * (h.abs() - kappa), scale(nrm, h.signum()))
+    /// The curvature measure of node `i` from its full curvature vector `w`,
+    /// and the derivative of the measure with respect to `w`.
+    fn measure_of(&self, i: usize, w: V3) -> (f64, V3) {
+        match self.measure {
+            CurvatureMeasure::Mean => {
+                // w = ½ L S = H n_S
+                let h = dot(self.normals[i], w);
+                (2.0 * h.abs(), scale(self.normals[i], 2.0 * h.signum()))
+            }
+            CurvatureMeasure::Total => {
+                // |w| = ‖II‖_F
+                let len = norm(w);
+                if len > 0.0 {
+                    (len, scale(w, 1.0 / len))
                 } else {
                     (0.0, [0.0; 3])
                 }
             }
+        }
+    }
+
+    /// Node `i`'s residual `r` and the derivative `u` of its measure with
+    /// respect to the curvature vector (the residual vector is `r u`), given
+    /// `q_i`; zero at inactive rows and, in the absolute mode, where the
+    /// curvature is within `κ`.
+    fn residual(&self, c: f64, i: usize, q: V3) -> (f64, V3) {
+        if !self.active_row(i) {
+            return (0.0, [0.0; 3]);
+        }
+        match self.mode {
+            CurvatureMode::Change => {
+                let nrm = self.normals[i];
+                (c * dot(nrm, q), nrm)
+            }
+            CurvatureMode::Absolute { kappa } => {
+                let (k, u) = self.measure_of(i, add(self.base[i], q));
+                if k > kappa {
+                    (c * (k - kappa), u)
+                } else {
+                    (0.0, [0.0; 3])
+                }
+            }
+            // not a per-node residual (`eval_variation`)
+            CurvatureMode::Variation => (0.0, [0.0; 3]),
+        }
+    }
+
+    /// The signed curvature `K_i = κ₁ + κ₂ = 2 n_i · ½ (L S)_i` from the
+    /// change `q` of the curvature vector, with the input surface's part
+    /// (`with_base`) or without it (for a change of the offsets).
+    fn signed(&self, q: &[V3], with_base: bool) -> Vec<f64> {
+        q.par_iter()
+            .enumerate()
+            .map(|(i, qi)| {
+                let w = if with_base { add(self.base[i], *qi) } else { *qi };
+                2.0 * dot(self.normals[i], w)
+            })
+            .collect()
+    }
+
+    /// `out = Jᵀ y` for a field `y` on the signed curvatures `K`.
+    fn signed_adjoint(&self, y: &[f64], out: &mut [f64]) {
+        let e: Vec<V3> = y
+            .par_iter()
+            .zip(&self.normals)
+            .map(|(&v, n)| scale(*n, 2.0 * v))
+            .collect();
+        self.jt(1.0, &e, out);
+    }
+
+    /// The variation penalty: the cost `½ c² Kᵀ G K` of each surface, its
+    /// gradient added to `gm`, `gt`.
+    fn eval_variation(&self, g_op: &CurvatureGradient, m: &[f64], t: &[f64], gm: &mut [f64], gt: &mut [f64]) -> f64 {
+        let n = self.n();
+        let mut cost = 0.0;
+        let (mut q, mut gk, mut g) = (vec![[0.0; 3]; n], vec![0.0; n], vec![0.0; n]);
+        for (s, sign) in [(0usize, -0.5f64), (1, 0.5)] {
+            let c2 = self.coef[s] * self.coef[s];
+            if c2 == 0.0 {
+                continue;
+            }
+            let d: Vec<f64> = (0..n).map(|i| m[i] + sign * t[i]).collect();
+            self.q(&d, &mut q);
+            let k = self.signed(&q, true);
+            g_op.apply(&k, &mut gk);
+            cost += 0.5 * c2 * crate::util::det_sum(n, |i| k[i] * gk[i]);
+            gk.par_iter_mut().for_each(|v| *v *= c2);
+            self.signed_adjoint(&gk, &mut g);
+            add_to(gm, gt, &g, sign);
+        }
+        cost
+    }
+
+    /// The variation penalty's Gauss–Newton product (exact: it is quadratic).
+    fn gn_variation(&self, g_op: &CurvatureGradient, dm: &[f64], dt: &[f64], ym: &mut [f64], yt: &mut [f64]) {
+        let n = self.n();
+        let (mut q, mut gk, mut g) = (vec![[0.0; 3]; n], vec![0.0; n], vec![0.0; n]);
+        for (s, sign) in [(0usize, -0.5f64), (1, 0.5)] {
+            let c2 = self.coef[s] * self.coef[s];
+            if c2 == 0.0 {
+                continue;
+            }
+            let d: Vec<f64> = (0..n).map(|i| dm[i] + sign * dt[i]).collect();
+            self.q(&d, &mut q);
+            let k = self.signed(&q, false);
+            g_op.apply(&k, &mut gk);
+            gk.par_iter_mut().for_each(|v| *v *= c2);
+            self.signed_adjoint(&gk, &mut g);
+            add_to(ym, yt, &g, sign);
         }
     }
 
@@ -355,6 +557,9 @@ impl CurvatureOperator {
     /// `q`; records each row's residual direction in `state` for the Gauss–Newton
     /// products. Gradients are *added* to `gm`, `gt`.
     pub fn eval(&self, m: &[f64], t: &[f64], state: &mut CurvatureState, gm: &mut [f64], gt: &mut [f64]) -> f64 {
+        if let Some(g_op) = &self.variation {
+            return self.eval_variation(g_op, m, t, gm, gt);
+        }
         let n = self.n();
         let mut cost = 0.0;
         let mut d = vec![0.0; n];
@@ -362,7 +567,8 @@ impl CurvatureOperator {
         let mut e = vec![[0.0; 3]; n];
         let mut g = vec![0.0; n];
         for (s, sign) in [(0usize, -0.5f64), (1, 0.5)] {
-            if !self.surfaces[s] {
+            let c = self.coef[s];
+            if c == 0.0 {
                 state.dir[s].iter_mut().for_each(|v| *v = [0.0; 3]);
                 continue;
             }
@@ -374,14 +580,14 @@ impl CurvatureOperator {
                 .zip(dir.par_iter_mut())
                 .enumerate()
                 .map(|(i, (ei, di))| {
-                    let (r, u) = self.residual(i, q[i]);
+                    let (r, u) = self.residual(c, i, q[i]);
                     *ei = scale(u, r);
                     *di = u;
                     0.5 * r * r
                 })
                 .collect();
             cost += partial.iter().sum::<f64>();
-            self.jt(&e, &mut g);
+            self.jt(c, &e, &mut g);
             gm.par_iter_mut()
                 .zip(gt.par_iter_mut())
                 .zip(g.par_iter())
@@ -402,30 +608,33 @@ impl CurvatureOperator {
 
     /// Gauss–Newton product: adds `Jᵀ J (δm, δt)` to `(ym, yt)`.
     pub fn gn_product(&self, state: &CurvatureState, dm: &[f64], dt: &[f64], ym: &mut [f64], yt: &mut [f64]) {
+        if let Some(g_op) = &self.variation {
+            return self.gn_variation(g_op, dm, dt, ym, yt);
+        }
         let n = self.n();
         let mut d = vec![0.0; n];
         let mut q = vec![[0.0; 3]; n];
         let mut e = vec![[0.0; 3]; n];
         let mut g = vec![0.0; n];
         for (s, sign) in [(0usize, -0.5f64), (1, 0.5)] {
-            if !self.surfaces[s] {
+            let c = self.coef[s];
+            if c == 0.0 {
                 continue;
             }
             d.par_iter_mut()
                 .enumerate()
                 .for_each(|(i, v)| *v = dm[i] + sign * dt[i]);
             self.q(&d, &mut q);
-            let c = self.coef;
             let dir = &state.dir[s];
             e.par_iter_mut().enumerate().for_each(|(i, ei)| {
-                *ei = if !self.lap.interior[i] {
+                *ei = if !self.active_row(i) {
                     [0.0; 3]
                 } else {
-                    // both modes: one scalar residual along dir (n or ±n)
+                    // one scalar residual per row, with derivative dir
                     scale(dir[i], c * dot(dir[i], q[i]))
                 };
             });
-            self.jt(&e, &mut g);
+            self.jt(c, &e, &mut g);
             ym.par_iter_mut()
                 .zip(yt.par_iter_mut())
                 .zip(g.par_iter())
@@ -436,11 +645,29 @@ impl CurvatureOperator {
         }
     }
 
+    /// Upper bounds of the diagonal of `JᵀJ` with respect to `m` and to `t`
+    /// (`d = m ∓ t/2`: each surface adds `c² D` to `m` and `c² D / 4` to `t`,
+    /// the cross terms cancelling when both are penalised alike).
+    pub fn gram_diag(&self) -> (Vec<f64>, Vec<f64>) {
+        let mut unit = self.unit_gram_diag();
+        if let Some(g_op) = &self.variation {
+            // an estimate: the curvature diagonal times that of G
+            unit.iter_mut().zip(g_op.diagonal()).for_each(|(u, g)| *u *= g);
+        }
+        let c2: f64 = self.coef.iter().map(|c| c * c).sum();
+        let m = unit.iter().map(|v| c2 * v).collect();
+        let t = unit.iter().map(|v| 0.25 * c2 * v).collect();
+        (m, t)
+    }
+
     /// Upper bound of the diagonal of `JᵀJ` with respect to `d` for one
-    /// surface.
-    pub fn gram_diag(&self) -> Vec<f64> {
+    /// surface with `c = 1`.
+    fn unit_gram_diag(&self) -> Vec<f64> {
+        if let Some(h) = &self.hessian {
+            // the derivative of ‖II‖_F has unit length
+            return h.col_sq();
+        }
         let l = &self.lap;
-        let c2 = self.coef * self.coef * 0.25;
         let w: Vec<f64> = l.interior.iter().map(|&b| b as u8 as f64).collect();
         let col = l.rows.col_sq_weighted(&w);
         let rel = self.relative();
@@ -453,24 +680,42 @@ impl CurvatureOperator {
                 } else {
                     l.diag[k].powi(2)
                 };
-                c2 * (own + col[k])
+                // q carries ½ and the mean measure 2: unit factor
+                let f = if rel { 0.25 } else { 1.0 };
+                f * (own + col[k])
             })
             .collect()
     }
 
-    /// Mean curvature magnitude `|n · ½ L S|` of the surface `V + d n`.
-    pub fn mean_curvature(&self, d: &[f64]) -> Vec<f64> {
-        let l = &self.lap;
-        let r = &l.rows;
-        (0..self.n())
-            .into_par_iter()
-            .map(|i| {
+    /// The curvature measure (`2|H|`, or `√(κ₁² + κ₂²)` for the total
+    /// curvature) of the surface `V + d n` at every node; 0 where inactive.
+    /// The change mode measures `2|H|` too.
+    pub fn curvature(&self, d: &[f64]) -> Vec<f64> {
+        let n = self.n();
+        let mut q = vec![[0.0; 3]; n];
+        if self.relative() {
+            // ½ L (d n), not the change mode's relative q
+            let l = &self.lap;
+            let r = &l.rows;
+            q.par_iter_mut().enumerate().for_each(|(i, o)| {
                 let mut acc = scale(self.normals[i], l.diag[i] * d[i]);
                 for e in r.offsets[i]..r.offsets[i + 1] {
                     let k = r.cols[e] as usize;
                     acc = add(acc, scale(self.normals[k], r.vals[e] * d[k]));
                 }
-                dot(self.normals[i], add(self.base[i], scale(acc, 0.5))).abs()
+                *o = scale(acc, 0.5);
+            });
+        } else {
+            self.q(d, &mut q);
+        }
+        (0..n)
+            .into_par_iter()
+            .map(|i| {
+                if self.active_row(i) {
+                    self.measure_of(i, add(self.base[i], q[i])).0
+                } else {
+                    0.0
+                }
             })
             .collect()
     }

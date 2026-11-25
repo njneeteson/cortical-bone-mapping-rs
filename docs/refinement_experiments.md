@@ -28,7 +28,7 @@ There is no ground truth, so each run is judged by five measures:
 
 - the outcome: converged, stalled or out of moves, with the number of moves
   and the time;
-- the notch: the convex hull bridges a region of 25.2 cm³ that a 4 mm
+- the notch: the convex hull bridges a region of 29.9 cm³ that a 4 mm
   closing leaves open, essentially the notch, and the measure is how much of
   it is still inside the refined surface (ideally 0);
 - bone left outside: the volume of the thresholded femur more than 2 mm from
@@ -52,18 +52,19 @@ model).
 
 | variant | start | result | moves | time | notch still inside (cm³) | bone outside (cm³) | node depth below 267 HU surface (mm) | edge − steepest rise (mm) | \|·\| > 0.5 mm | σ (mm) | t (mm) |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `same_nodes` | hull | not converged | 20 | 430 s | 8.6 of 25.2 | 0.21 | +0.50 | +0.50 | 52% | 1.39 | 0.94 |
-| `level_set` | hull | not converged | 20 | 376 s | 8.5 of 25.2 | 0.25 | +0.49 | +0.49 | 45% | 1.39 | 1.00 |
-| `level_set_adaptive` | hull | stalled | 13 | 97 s | 8.6 of 25.2 | 0.10 | +0.49 | +0.49 | 46% | 1.38 | 1.00 |
-| `density_fields` | hull | converged¹ | 13 | 184 s | 12.9 of 25.2 | 0.00 | +0.47 | +0.27 | 34% | 0.82 | 0.47 |
-| `hull_freeze` | hull | stalled | 35 | 169 s | 12.6 of 25.2 | 0.00 | +0.47 | +0.31 | 38% | 0.82 | 0.49 |
-| `closing` | closing 4 mm | converged | 4 | 48 s | 0.0 of 25.2 | 0.00 | +0.46 | +0.29 | 39% | 0.79 | 0.57 |
-| `closing_freeze` | closing 4 mm | converged | 4 | 44 s | 0.0 of 25.2 | 0.00 | +0.46 | +0.29 | 39% | 0.79 | 0.57 |
-| `closing_freeze_global_sigma` | closing 4 mm | converged | 5 | 30 s | 0.0 of 25.2 | 0.00 | +0.46 | +0.28 | 35% | 0.72 | 0.51 |
-| `closing_freeze_inside_15` | closing 4 mm | converged | 9 | 70 s | 0.0 of 25.2 | 0.00 | +0.51 | +0.47 | 35% | 0.83 | 0.63 |
-| `closing_freeze_neighbours_250` | closing 4 mm | converged | 5 | 38 s | 0.0 of 25.2 | 0.00 | +0.47 | +0.28 | 35% | 0.80 | 0.58 |
-| `closing_freeze_lambda_0.1` | closing 4 mm | stalled | 19 | 55 s | 0.0 of 25.2 | 0.20 | +0.47 | +0.27 | 24% | 0.80 | 0.57 |
-| `closing_freeze_volumetric` | closing 4 mm | stalled | 44 | 1158 s | 0.36 of 29.9 | 2.58 | +0.27 | +0.23 | 6.5% | 0.53² | 0.71 |
+| `same_nodes` | hull | not converged | 20 | 430 s | 8.8 of 29.9 | 1.70 | +0.47 | +0.50 | 52% | 1.39 | 0.94 |
+| `level_set` | hull | not converged | 20 | 376 s | 8.6 of 29.9 | 1.77 | +0.47 | +0.49 | 45% | 1.39 | 1.00 |
+| `level_set_adaptive` | hull | stalled | 13 | 97 s | 8.7 of 29.9 | 1.40 | +0.47 | +0.49 | 46% | 1.38 | 1.00 |
+| `density_fields` | hull | converged¹ | 13 | 184 s | 12.8 of 29.9 | 0.86 | +0.46 | +0.27 | 34% | 0.82 | 0.47 |
+| `hull_freeze` | hull | stalled | 35 | 169 s | 12.5 of 29.9 | 0.79 | +0.45 | +0.31 | 38% | 0.82 | 0.49 |
+| `closing` | closing 4 mm | converged | 4 | 48 s | 0.0 of 29.9 | 1.12 | +0.46 | +0.29 | 39% | 0.79 | 0.57 |
+| `closing_freeze` | closing 4 mm | converged | 4 | 44 s | 0.0 of 29.9 | 1.12 | +0.46 | +0.29 | 39% | 0.79 | 0.57 |
+| `closing_freeze_global_sigma` | closing 4 mm | converged | 5 | 30 s | 0.0 of 29.9 | 1.16 | +0.46 | +0.28 | 35% | 0.72 | 0.51 |
+| `closing_freeze_inside_15` | closing 4 mm | converged | 9 | 70 s | 0.0 of 29.9 | 1.67 | +0.51 | +0.47 | 35% | 0.83 | 0.63 |
+| `closing_freeze_neighbours_250` | closing 4 mm | converged | 5 | 38 s | 0.0 of 29.9 | 1.22 | +0.47 | +0.28 | 35% | 0.80 | 0.58 |
+| `closing_freeze_lambda_0.1` | closing 4 mm | stalled | 19 | 55 s | 0.0 of 29.9 | 3.11 | +0.47 | +0.27 | 24% | 0.80 | 0.57 |
+| `closing_freeze_volumetric`, earlier default | closing 4 mm | stalled | 44 | 1158 s | 0.4 of 29.9 | 2.58 | +0.27 | +0.23 | 6% | 0.53² | 0.71 |
+| `closing_freeze_volumetric` | closing 4 mm | converged | 11 | 165 s | 0.0 of 29.9 | 1.23 | +0.45 | +0.27 | 21% | 0.65² | 0.50 |
 
 ¹ Run without the regional convergence test (section 3); its "convergence"
 left a region still moving by 0.3 mm.
@@ -208,10 +209,10 @@ From the convex hull no variant opens the notch. The hull's bridge is about
 so the bridge nodes' profiles never reach bone, their fits fail, and they
 move only with their neighbours. Only the rim can zip the notch shut, as its
 normals turn into the notch and find the walls, and on this crop that
-zipping stalls with half the notch still bridged (`density_fields`,
-`hull_freeze`: 12.6–12.9 of 25.2 cm³). The global-density runs fill more of
-it (8.5 of 25.2 cm³) only because their inward bias (section 2) pulls the
-bridge in with everything else.
+zipping stalls with less than half the notch emptied (`density_fields`,
+`hull_freeze`: 12.5–12.8 of 29.9 cm³ still inside). The global-density runs
+fill more of it (8.6–8.8 of 29.9 cm³ left) only because their inward bias
+(section 2) pulls the bridge in with everything else.
 
 More iterations, less relaxation or other regularisation give the bridge no
 force. Longer inside profiles (`closing_freeze_inside_15`) reach deeper
@@ -337,19 +338,18 @@ through partial volume.
 
 `closing_freeze_volumetric` replaces the regularised fit with the
 [volumetric model](method.md#volumetric-model), otherwise as
-`closing_freeze`. Where it fits, its surface agrees far better with the
-image: its edges are within 0.5 mm of the steepest rise on all but 6.5% of
-the profiles (39% for `closing_freeze`), and the nodes sit 0.27 mm below the
-267 HU surface instead of 0.46 mm. But the refinement does not finish. It
-stalls after 44 moves and 19 minutes, with 13% of the moving nodes flagged
-as not locating an edge and 2.6 cm³ of thresholded bone left outside the
-surface, where the surface has moved into the bone. On phantoms,
-refinement with the volumetric model also stops shrinking its moves at about
-a tenth of a voxel ([examples.md](examples.md#segmentation-refinement)), and
-on the whole knee its full fits exhaust their CG budget, so the loop can
-never declare convergence ([clinical_ct.md](clinical_ct.md)). A single
-volumetric fit on a refined surface works
-([volumetric_validation.md](volumetric_validation.md#clinical-knee)).
+`closing_freeze`. With the model's earlier default, whose edges were
+regularised by the curvature penalty alone and whose `ρc` came from its own
+voxels, the refinement did not finish: it stalled after 44 moves and 19
+minutes with 2.6 cm³ of thresholded bone outside the surface, which had
+grown a pocket into low-density marrow inside the lateral condyle. With the
+regularised method's smoothing of `m` and `t` and `ρc` from the 1D estimate,
+the current default, it converges in 11 moves (165 s), empties the notch, and
+leaves as much bone outside as the regularised fit (1.23 against 1.12 cm³).
+Its edges agree better with the steepest rise of the profiles (21% more than
+0.5 mm away, against 39%), and its cortex is thinner (median 0.50 against
+0.57 mm). [volumetric_refinement.md](volumetric_refinement.md) follows the
+changes one at a time.
 
 ## Discussion
 
@@ -374,8 +374,8 @@ bias of Treece et al. (2010), and how far inside depends directly on `ρc`
 (from 0.3 mm at 1000 HU to 0.6 mm at 1500 HU). Which `ρc` is right cannot be
 settled from one image: it needs a density reference in the scan, or repeat
 scans of more subjects, against which the reproducibility of thickness can
-be compared across `ρc` modes. Refinement with the volumetric model, and a
-region force for the 1D methods, also remain open.
+be compared across `ρc` modes. A region force for the 1D methods also
+remains open.
 
 ## Reproducing
 

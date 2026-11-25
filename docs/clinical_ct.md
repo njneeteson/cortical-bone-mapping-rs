@@ -38,7 +38,7 @@ results = cbm.refine_bones(image, starts, spacing, options=OPTIONS, refine=REFIN
 OPTIONS = cbm.Options(outside=4, inside=8, resolution=0.25, method="regularized",
                       reg_sigma=3, reg_neighbours=500, global_params=(),  # per-node densities
                       rho_c="estimate", ...)                               # bounds in HU
-REFINE = cbm.RefineOptions(refine_iterations=150, level_set=True, freeze=True)
+REFINE = cbm.RefineOptions(refine_iterations=150)  # level set and freezing are the defaults
 ```
 
 The only cut made to the image is the crop, which keeps one knee with all its
@@ -81,8 +81,12 @@ intercondylar notch, which a per-slice convex hull would bridge. Where two
 bones' starts overlap, each voxel goes to the nearer bone and a gap is kept
 between them.
 
-**Refinement.** `refine_bones` refines one bone at a time, smallest first,
-each with its own initialisation and cortical density estimate. The
+**Refinement.** `refine_bones` first estimates the scanner's parameters once
+for all four bones together (`cbm.shared_scanner`): the cortical density
+`ρc` and, for the volumetric model, the PSF. The bones share the scanner, so
+they share both, and the joint estimate sees more thick cortex than any one
+bone. It then refines one bone at a time, smallest first, each with its own
+initialisation and with the shared values held. The
 soft-tissue and trabecular densities are regularised per-node fields: in a
 knee the trabecular density ranges from about 70 HU (fatty marrow) to about
 500 HU (epiphyses), and a single global value pulls the surface into the
@@ -95,9 +99,8 @@ inside them get zero weight, and the level set never moves a surface into
 them.
 
 **Volumetric model.** With `--method volumetric` the inner fit is the
-[volumetric model](method.md#volumetric-model). The bones share the scanner,
-so they share its PSF: it is fitted once, to all four starting surfaces
-together, and held in the per-bone refinements.
+[volumetric model](method.md#volumetric-model) with its defaults, its PSF
+and `ρc` shared by the bones as above.
 
 ## Results
 
@@ -116,18 +119,19 @@ in the figures (display only).*
 
 *Fitted cortical thickness on the refined periosteal surfaces.*
 
-| bone | nodes | moves | converged | `ρc` (HU) | thickness, median (5–95%) | time |
-|---|---:|---:|---|---:|---|---:|
-| patella | 13 384 | 5 | yes | 1380 | 1.18 mm (0.30–3.47) | 8 s |
-| fibula | 16 679 | 5 | yes | 1463 | 0.88 mm (0.32–2.79) | 9 s |
-| tibia | 65 263 | 7 | yes | 1492 | 0.91 mm (0.15–3.19) | 69 s |
-| femur | 82 323 | 5 | yes | 1535 | 0.53 mm (0.21–2.55) | 52 s |
+| bone | nodes | moves | converged | thickness, median (5–95%) | time |
+|---|---:|---:|---|---|---:|
+| patella | 13 266 | 5 | yes | 1.07 mm (0.29–3.10) | 15 s |
+| fibula | 16 638 | 5 | yes | 0.86 mm (0.31–2.73) | 14 s |
+| tibia | 65 346 | 6 | yes | 0.90 mm (0.15–3.17) | 78 s |
+| femur | 82 339 | 5 | yes | 0.55 mm (0.21–2.60) | 59 s |
 
-All four bones converge in 5–7 moves (138 s for the knee), and their
-surfaces follow the periosteum, including the femoral notch. The first
-version of this pipeline (per-slice convex hulls, global densities, the same
-mesh nodes moved every iteration) took about 19 minutes, never converged on
-the femur and folded over the notch.
+The shared `ρc` is 1500 HU. All four bones converge in 5–6 moves (166 s of
+refinement for the knee), and their surfaces follow the periosteum,
+including the femoral notch. The first version of this pipeline (per-slice
+convex hulls, global densities, the same mesh nodes moved every iteration)
+took about 19 minutes, never converged on the femur and folded over the
+notch.
 
 The thickness pattern is as expected: thin (≲ 0.5 mm) subchondral and
 metaphyseal shells over the epiphyses, a thick anterior patella (up to about
@@ -158,8 +162,9 @@ voxels. Stopping the inside profiles at half the bone's width
 far side, affects under 2% of the nodes (on the patella and fibula) and no
 result.
 
-**Cortical density.** `ρc` is estimated per bone from its thick diaphyseal
-cortex: 1380–1530 HU, an apparent density at this resolution. Thickness
+**Cortical density.** `ρc` is estimated once for the knee from the bones'
+thick diaphyseal cortex: 1500 HU, an apparent density at this resolution
+(each bone's own estimate was 1380–1535 HU). Thickness
 depends on it strongly: with `ρc` fixed at 1000 HU the median thicknesses
 are 50–70% larger and the periosteum lies 0.2–0.3 mm further out, on the
 steepest rise of the profiles (see the sweep in
@@ -167,17 +172,27 @@ steepest rise of the profiles (see the sweep in
 Which value is right needs a density reference.
 
 **Volumetric model.** The scan's PSF, fitted to all four bones together, is
-0.57 mm in-plane and 0.80 mm along the axis. One volumetric fit on each
-refined surface gives a cortex 0.07–0.25 mm thinner than the regularised
-fit's, with its endosteum further out
+0.64 mm in-plane and 0.78 mm along the axis. Refinement with the volumetric
+model converges on every bone:
+
+| bone | moves | converged | thickness, median (5–95%) | time |
+|---|---:|---|---|---:|
+| patella | 6 | yes | 0.82 mm (0.12–2.76) | 37 s |
+| fibula | 4 | yes | 0.77 mm (0.25–2.70) | 18 s |
+| tibia | 7 | yes | 0.73 mm (0.13–3.12) | 106 s |
+| femur | 5 | yes | 0.50 mm (0.18–2.57) | 91 s |
+
+That is 252 s of refinement, against 9.2 hours without convergence for the
+earlier volumetric default, whose edges were regularised by the curvature
+penalty alone and whose `ρc` came from its own voxels
+([volumetric_refinement.md](volumetric_refinement.md)). The cortex is
+thinner than the regularised fit's on every bone, by 0.05–0.25 mm in median,
+and the surfaces are otherwise the same
 ([volumetric_validation.md](volumetric_validation.md#clinical-knee)).
-Refinement with the volumetric model does not yet work on this knee: the
-fibula converged in 5 moves, but the femur, tibia and patella were still
-moving by 0.004–0.005 mm RMS per step after 150 moves, because every full
-fit used up its CG budget and the loop only declares convergence after a
-full fit that has converged. The run took 9.2 hours, against 138 s. Its
-median thicknesses (0.53, 0.72, 0.94 and 0.77 mm for femur, tibia, patella
-and fibula) are again thinner than the regularised ones.
+
+![Volumetric segmentation](images/knee_ct_volumetric_segmentation.png)
+
+*As above, with the volumetric model.*
 
 ## Limitations
 

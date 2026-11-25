@@ -20,7 +20,7 @@ volumetric fits on the same scan (from the true periosteal mask), and with
 the true thickness along CBM's normals.
 
 Run from the repository root with the package and ``localthickness_rs``
-installed; writes ``docs/site_microarchitecture.json``.
+installed; writes ``docs/results/site_microarchitecture.json``.
 """
 
 import json
@@ -105,7 +105,7 @@ def main():
         for k in ("truth", "image"):
             print(name, k, {q: round(float(np.mean([r[k][q] for r in results[name]])), 4)
                             for q in results[name][0][k]}, flush=True)
-    path = sys.argv[1] if len(sys.argv) > 1 else "docs/site_microarchitecture.json"
+    path = sys.argv[1] if len(sys.argv) > 1 else "docs/results/site_microarchitecture.json"
     with open(path, "w") as f:
         json.dump(results, f, indent=1)
 

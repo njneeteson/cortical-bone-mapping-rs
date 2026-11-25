@@ -5,15 +5,8 @@
 //! * **Displacement** of a trusted node: `d_i = α (m_i − t_i/2) n_i`, capped at
 //!   `max_step`. Its warm start for the next fit has `m` shifted by the move
 //!   (`m ← m − α (m − t/2)`), since the profile origin moves with the node.
-//! * **Extension** to untrusted, unfitted and excluded vertices: harmonic
-//!   interpolation, i.e. the solution of the discrete Laplace equation
-//!   `u_i = mean_{j ∈ N(i)} u_j` on the unknown vertices with the known
-//!   displacements as Dirichlet boundary values, by Jacobi iteration. The
-//!   harmonic extension is the smoothest one (it minimises the Dirichlet
-//!   energy `Σ_edges |u_i − u_j|²`), so regions without a usable fit follow
-//!   their neighbours instead of tearing away from them. A fixed number of
-//!   iterations is enough: the unknown regions are small, and the residual
-//!   error only delays their move to a later iteration (50 iterations are used).
+//! * **Extension** to untrusted, unfitted and excluded vertices: the
+//!   harmonic extension of the known displacements ([`super::fill`]).
 //! * **Caps** (vertices outside the image, where the mask is cut by the image
 //!   edge) may only slide within their cap: the displacement is zeroed along
 //!   the axes on which they lie outside.
@@ -33,7 +26,7 @@ use crate::kdtree::KdTree;
 use crate::model::{M, T};
 use crate::result::CbmResult;
 use crate::surface::levelset::LevelSet;
-use crate::surface::mesh::{Adjacency, Mesh};
+use crate::surface::mesh::Mesh;
 use crate::surface::nets::Extracted;
 use crate::util::{add, dot, scale, sub, V3};
 use crate::volume::{is_set_at, Geometry};
@@ -97,34 +90,6 @@ pub(super) fn displacements(
         st.warm[v] = Some(w);
     }
     step
-}
-
-/// Harmonic interpolation of the unknown displacements (module
-/// documentation): Jacobi iterations of `u_i ← mean_{j ∈ N(i)} u_j` over the
-/// vertices without a known value, the known ones fixed.
-pub(super) fn harmonic_fill(adj: &Adjacency, known: &[bool], vals: &mut [V3], iterations: usize) {
-    if known.iter().all(|&k| k) {
-        return;
-    }
-    let mut next = vals.to_vec();
-    for _ in 0..iterations {
-        next.par_iter_mut().enumerate().for_each(|(i, o)| {
-            if known[i] {
-                *o = vals[i];
-                return;
-            }
-            let ring = adj.of(i);
-            if ring.is_empty() {
-                return;
-            }
-            let mut acc = [0.0; 3];
-            for &j in ring {
-                acc = add(acc, vals[j as usize]);
-            }
-            *o = scale(acc, 1.0 / ring.len() as f64);
-        });
-        vals.copy_from_slice(&next);
-    }
 }
 
 /// Axes along which each vertex lies outside the image (cap vertices, where

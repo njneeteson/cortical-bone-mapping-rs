@@ -125,19 +125,36 @@ class Options:
     **Curvature penalty** (``method="regularized"`` only; extension)
 
     curvature
-        ``None``, ``"change"`` (penalise curvature added to the fitted
-        periosteal/endosteal surfaces relative to the parallel surface of the
-        input, ~ Laplacian of the offset; uniform offsets are free) or
-        ``"excess"`` (penalise mean curvature above ``curvature_kappa``,
-        1/length).
+        ``None``, ``"absolute"`` (penalise the curvature of the fitted
+        periosteal/endosteal surfaces above ``curvature_kappa``, 1/length;
+        ``curvature_kappa=0`` prefers a flat surface; the default, 5 / mm, is
+        the contour curvature threshold of Neeteson et al. 2023, from real
+        HR-pQCT radius and tibia segmentations), ``"variation"`` (penalise
+        how fast the curvature changes along the surface, ``|grad(k1 + k2)|^2``:
+        smoothly curved bone is free, bumps and dents are not; mean curvature
+        only) or ``"change"`` (penalise curvature added relative to the
+        parallel surface of the input, so uniform offsets are free; over a
+        refinement its reference moves with the surface).
+    curvature_measure
+        ``"mean"`` (``|k1 + k2| = 2|H|``) or ``"total"``
+        (``sqrt(k1^2 + k2^2)``, which unlike ``H`` is not zero at a saddle);
+        both equal the contour curvature ``1/R`` on a shaft. ``"absolute"``
+        only.
     curvature_weight
         Weight ``mu``. The residual is
-        ``sqrt(mu / N) * rho_c * curvature_length * curvature``.
+        ``sqrt(mu / N) * rho_c * curvature_length * max(0, curvature - kappa)``.
+    curvature_endosteal_weight
+        Weight of the endosteal surface (``None`` = the same as the
+        periosteal one).
     curvature_length
         Length scale (``None`` = globally fitted thickness).
-    curvature_scale, curvature_neighbours
-        Gaussian point-cloud Laplacian at this scale over this many neighbours;
-        ``curvature_scale=None`` uses the cotangent mesh Laplacian (mesh
+    curvature_scale, curvature_scale_spacings, curvature_neighbours
+        The scale at which curvature is measured: a Gaussian point-cloud
+        Laplacian over ``curvature_neighbours`` neighbours at
+        ``curvature_scale`` (physical units), or, with ``None`` (default),
+        at ``curvature_scale_spacings`` (4) times the mean node spacing
+        (about 0.25 mm at HR-pQCT resolution, 2.6 mm on 0.65 mm clinical
+        CT); ``"cotangent"`` uses the cotangent mesh Laplacian (mesh
         resolution; slower to solve).
     curvature_surfaces
         ``"both"``, ``"periosteal"`` or ``"endosteal"``.
@@ -159,13 +176,26 @@ class Options:
         0 = none.
     vol_global_densities
         One global ``rho_s`` and ``rho_b`` instead of fields.
+    vol_edge_lambda
+        Weight of the spatial smoothing of ``m`` and ``t`` (the regularised
+        method's ``reg_lambda`` penalty, same operator and weighting;
+        default 1).
+    vol_global_soft_tissue
+        One global ``rho_s``, with ``rho_b`` a field: a node whose band lies
+        inside the bone cannot explain bone outside its surface as soft
+        tissue.
     vol_curvature, vol_curvature_weight
         The curvature penalty on the fitted surfaces (the regulariser of
-        ``m, t``): ``"change"``, ``"excess"`` or ``None``, with its weight;
-        ``curvature_kappa``, ``curvature_length``, ``curvature_scale``,
+        ``m, t``): ``"absolute"``, ``"variation"``, ``"change"`` or ``None``, with its weight;
+        ``curvature_kappa``, ``curvature_measure``, ``curvature_length``, ``curvature_scale``,
         ``curvature_neighbours`` and ``curvature_surfaces`` apply.
     vol_voxel_stride
         Use every n-th voxel along each axis.
+    vol_adaptive_band
+        Extend each node's band along its normal until it has crossed a bone
+        edge (outward through bright bone into soft tissue, or inward through
+        soft tissue to bone), up to this multiple of ``outside`` / ``inside``;
+        ``None`` = the sampling range everywhere.
 
     **Neighbourhoods**
 
@@ -237,11 +267,14 @@ class Options:
     init_from_local: bool = False
     init_from_global: bool = True
     # curvature
-    curvature: Optional[Literal["change", "excess"]] = None
+    curvature: Optional[Literal["absolute", "variation", "change"]] = None
+    curvature_measure: Literal["mean", "total"] = "mean"
     curvature_weight: float = 1.0
-    curvature_kappa: float = 0.5
+    curvature_kappa: float = 5.0
+    curvature_endosteal_weight: Optional[float] = None
     curvature_length: Optional[float] = None
-    curvature_scale: Optional[float] = 0.25
+    curvature_scale: Union[float, Literal["cotangent"], None] = None
+    curvature_scale_spacings: float = 4.0
     curvature_neighbours: int = 64
     curvature_surfaces: Literal["both", "periosteal", "endosteal"] = "both"
     # volumetric
@@ -250,7 +283,10 @@ class Options:
     vol_sigma_z: Union[Literal["fit", "tied"], float] = "fit"
     vol_lambda: float = 1.0
     vol_global_densities: bool = False
-    vol_curvature: Optional[Literal["change", "excess"]] = "change"
+    vol_edge_lambda: float = 1.0
+    vol_global_soft_tissue: bool = False
+    vol_adaptive_band: Optional[float] = None
+    vol_curvature: Optional[Literal["absolute", "variation", "change"]] = "change"
     vol_curvature_weight: float = 0.3
     vol_voxel_stride: int = 1
     # neighbourhoods
@@ -289,6 +325,14 @@ class Options:
             d["vol_sigma_z_mode"], d["vol_sigma_z"] = self.vol_sigma_z, 0.0
         else:
             d["vol_sigma_z_mode"], d["vol_sigma_z"] = "fixed", float(self.vol_sigma_z)
+        if self.curvature_scale is None:
+            d["curvature_scale_mode"], d["curvature_scale"] = "spacing", None
+        elif self.curvature_scale == "cotangent":
+            d["curvature_scale_mode"], d["curvature_scale"] = "cotangent", None
+        elif isinstance(self.curvature_scale, str):
+            raise ValueError('curvature_scale must be a number, "cotangent" or None')
+        else:
+            d["curvature_scale_mode"], d["curvature_scale"] = "physical", float(self.curvature_scale)
         if self.neighbour_distance not in (None, "euclidean", "surface"):
             raise ValueError('neighbour_distance must be None, "euclidean" or "surface"')
         return d
@@ -379,6 +423,7 @@ class RefineOptions:
         and extract a new mesh every iteration, instead of moving the same
         vertices: the node spacing stays even and the surface cannot fold,
         however far it moves. ``smoothing_iterations`` is then unused.
+        Default on (with ``freeze``), as on the clinical knee CT.
     freeze
         Regional convergence: a node is *still* once, for
         ``freeze_patience`` consecutive iterations, it moved less than
@@ -395,6 +440,14 @@ class RefineOptions:
         default 1 voxel). ``rho_c`` and the
         densities are fixed after the initial fit, and the whole surface is
         fitted once more at the end.
+    scanner_passes, scanner_relaxation, scanner_tolerance
+        The scanner parameters (the volumetric model's PSF, a global
+        ``sigma``, an estimated ``rho_c``) are held through a refinement
+        pass, then re-fitted on the refined surface and moved
+        ``scanner_relaxation`` of the way toward the new values; another
+        pass follows while a re-fit changes them by more than
+        ``scanner_tolerance`` (relative), up to ``scanner_passes`` passes
+        (1 = hold the first fit's values throughout).
     """
 
     refine_iterations: int = 20
@@ -409,14 +462,17 @@ class RefineOptions:
     stall_iterations: int = 5
     region_radius: Optional[float] = None
     region_tolerance: Optional[float] = None
-    level_set: bool = False
-    freeze: bool = False
+    level_set: bool = True
+    freeze: bool = True
     freeze_patience: int = 3
     freeze_displacement: Optional[float] = None
     freeze_thickness: Optional[float] = None
     freeze_radius: Optional[float] = None
     freeze_halo: Optional[float] = None
     freeze_thaw: Optional[float] = None
+    scanner_passes: int = 3
+    scanner_relaxation: float = 0.5
+    scanner_tolerance: float = 0.01
 
     def _to_core(self) -> dict:
         d = asdict(self)

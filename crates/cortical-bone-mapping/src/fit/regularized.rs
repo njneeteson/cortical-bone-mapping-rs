@@ -44,7 +44,7 @@ use std::time::Instant;
 use super::global::{self, Problem, Role, Smoothing, State};
 use super::{base_roles, local, local_settings, Data, FitConstraints, Nodes, Start};
 use crate::model::{Params, M, NPARAM, RHO_B, RHO_S, SIGMA, T};
-use crate::operators::{CurvatureOperator, Neighbours, SmoothingOperator, SurfaceLaplacian};
+use crate::operators::{CurvatureMode, CurvatureOperator, Neighbours, SmoothingOperator, SurfaceLaplacian};
 use crate::options::{CurvatureOptions, Method};
 use crate::result::FitInfo;
 
@@ -183,12 +183,28 @@ pub(crate) fn curvature_operator(
 ) -> CurvatureOperator {
     let points = &nodes.mesh.vertices;
     let ell = c.length.unwrap_or(t0);
-    let cc = (c.weight / points.len() as f64).sqrt() * rho_c * ell;
-    let lap = match c.scale {
+    // the residual is dimensionless: curvature times ℓ, its gradient times ℓ²
+    let lengths = if c.mode == CurvatureMode::Variation {
+        ell * ell
+    } else {
+        ell
+    };
+    let scale = |w: f64, on: bool| {
+        if on {
+            (w / points.len() as f64).sqrt() * rho_c * lengths
+        } else {
+            0.0
+        }
+    };
+    let coef = [
+        scale(c.weight, c.periosteal),
+        scale(c.endosteal_weight.unwrap_or(c.weight), c.endosteal),
+    ];
+    let lap = match c.scale.sigma(nodes.mesh.mean_edge_length()) {
         Some(sc) => SurfaceLaplacian::gaussian(near, c.neighbours, sc, 3.0),
         None => SurfaceLaplacian::cotangent(nodes.mesh),
     };
-    CurvatureOperator::new(lap, points, nodes.normals, c.mode, cc, [c.periosteal, c.endosteal])
+    CurvatureOperator::new(lap, points, nodes.normals, c.mode, c.measure, coef)
 }
 
 /// Starting values of the global and fixed parameters: the global model,

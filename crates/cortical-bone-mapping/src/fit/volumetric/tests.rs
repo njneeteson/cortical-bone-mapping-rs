@@ -3,7 +3,9 @@ use ndarray::Array3;
 use super::band::{Band, BandSpec};
 use super::problem::{Prepared, VolumetricProblem, M, NV, RHO_B, RHO_S, SXY, SZ, T};
 use crate::fit::global::{LeastSquares, Role};
-use crate::operators::{CurvatureMode, CurvatureOperator, Distance, Neighbours, SmoothingOperator, SurfaceLaplacian};
+use crate::operators::{
+    CurvatureMeasure, CurvatureMode, CurvatureOperator, Distance, Neighbours, SmoothingOperator, SurfaceLaplacian,
+};
 use crate::surface::mesh::Mesh;
 use crate::util::{add, scale, Rng, V3};
 use crate::volume::Geometry;
@@ -33,13 +35,21 @@ fn setup() -> Setup {
         axis: 0,
         exclude: None,
         stride: 1,
+        face_reach: None,
     };
     let band = Band::build(&img.view(), &mesh, &fitted, mesh.faces.len(), &spec);
     let near = Neighbours::new(&mesh, Distance::Surface);
     let smoothing = SmoothingOperator::new(&near, 8, 1.0, 3.0);
     let normals: Vec<V3> = mesh.vertex_normals().iter().map(|n| scale(*n, -1.0)).collect();
     let lap = SurfaceLaplacian::gaussian(&near, 12, 1.0, 3.0);
-    let curvature = CurvatureOperator::new(lap, &mesh.vertices, &normals, CurvatureMode::Change, 3.0, [true, true]);
+    let curvature = CurvatureOperator::new(
+        lap,
+        &mesh.vertices,
+        &normals,
+        CurvatureMode::Change,
+        CurvatureMeasure::Mean,
+        [3.0, 3.0],
+    );
     Setup {
         mesh,
         band,
@@ -62,7 +72,7 @@ fn problem<'a>(s: &'a Setup, roles: [Role; NV], tied: bool) -> VolumetricProblem
         tied,
         fixed,
         frozen: None,
-        smoothing: Some((&s.smoothing, [2e-4, 3e-4])),
+        smoothing: Some((&s.smoothing, [1e-3, 5e-4, 2e-4, 3e-4])),
         curvature: Some(&s.curvature),
         lower: [-3.0, 0.05, -500.0, -500.0, 0.05, 0.05],
         upper: [3.0, 3.0, 1000.0, 1000.0, 2.0, 2.0],

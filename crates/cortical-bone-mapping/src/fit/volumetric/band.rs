@@ -52,6 +52,9 @@ pub(crate) struct BandSpec<'a> {
     pub exclude: Option<ArrayView3<'a, bool>>,
     /// Use every `stride`-th voxel along each axis (1 = all).
     pub stride: usize,
+    /// Per fitted face, its reach `[outside, inside]` (the largest of its
+    /// nodes'; [`super::reach`]); `None`: `outside` and `inside` everywhere.
+    pub face_reach: Option<Vec<[f64; 2]>>,
 }
 
 /// The band's voxels, grouped by fitted face.
@@ -120,7 +123,13 @@ impl Band {
 /// Every band voxel, in no particular order.
 fn samples<T: Voxel>(image: &ArrayView3<T>, mesh: &Mesh, fitted: &[Option<u32>], spec: &BandSpec) -> Vec<Sample> {
     let (d0, d1, d2) = image.dim();
-    let reach = spec.outside.max(spec.inside);
+    let reach = match &spec.face_reach {
+        Some(r) => r
+            .iter()
+            .map(|r| r[0].max(r[1]))
+            .fold(spec.outside.max(spec.inside), f64::max),
+        None => spec.outside.max(spec.inside),
+    };
     let (lo, hi) = index_box(mesh, [d0, d1, d2], spec.geom, reach);
     let shape = (hi[0] - lo[0] + 1, hi[1] - lo[1] + 1, hi[2] - lo[2] + 1);
     let box_geom = Geometry {
@@ -162,7 +171,11 @@ fn samples<T: Voxel>(image: &ArrayView3<T>, mesh: &Mesh, fitted: &[Option<u32>],
                     };
                     let is_in = inside[[i - lo[0], j - lo[1], k - lo[2]]];
                     let depth = if is_in { c.dist } else { -c.dist };
-                    if depth < -spec.outside || depth > spec.inside {
+                    let [reach_out, reach_in] = spec
+                        .face_reach
+                        .as_ref()
+                        .map_or([spec.outside, spec.inside], |r| r[face as usize]);
+                    if depth < -reach_out || depth > reach_in {
                         continue;
                     }
                     let n = inward_normal(q, &c, depth, &real.mesh);
@@ -173,7 +186,7 @@ fn samples<T: Voxel>(image: &ArrayView3<T>, mesh: &Mesh, fitted: &[Option<u32>],
                         depth: depth as f32,
                         bary: [c.bary[0] as f32, c.bary[1] as f32],
                         axial2: (n[spec.axis] * n[spec.axis]) as f32,
-                        weight: residual_weight(depth, spec.boost, reach) as f32,
+                        weight: residual_weight(depth, spec.boost, reach_out.max(reach_in)) as f32,
                     });
                 }
             }
@@ -392,6 +405,7 @@ mod tests {
             axis: 0,
             exclude: None,
             stride: 1,
+            face_reach: None,
         };
         let band = Band::build(&img.view(), &mesh, &fitted, mesh.faces.len(), &spec);
         assert!(band.len() > 1000);

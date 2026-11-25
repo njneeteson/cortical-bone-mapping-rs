@@ -45,10 +45,10 @@ fn main() {
         },
     );
     for (scale, weights) in [
-        (Some(0.25), vec![0.1, 1.0, 10.0]),
-        (Some(0.5), vec![1.0, 10.0, 100.0]),
-        (Some(1.0), vec![1.0, 10.0, 100.0, 1000.0]),
-        (None, vec![0.01, 0.1, 1.0]),
+        (LaplacianScale::Physical(0.25), vec![0.1, 1.0, 10.0]),
+        (LaplacianScale::Physical(0.5), vec![1.0, 10.0, 100.0]),
+        (LaplacianScale::Physical(1.0), vec![1.0, 10.0, 100.0, 1000.0]),
+        (LaplacianScale::Cotangent, vec![0.01, 0.1, 1.0]),
     ] {
         for w in weights {
             let o = Options {

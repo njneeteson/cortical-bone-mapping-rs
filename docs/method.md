@@ -204,7 +204,9 @@ surfaces `S_peri = V + (m − t/2) n` and `S_endo = V + (m + t/2) n`, using a
 fixed discrete Laplace–Beltrami operator `L` of the input surface `V`, with
 `½ L S ≈ H n` and the scalar mean curvature taken as the normal component
 `H_i = n_i · ½ (L S)_i`, which is robust to the tangential drift of
-point-cloud Laplacians on irregular sampling. There are two modes:
+point-cloud Laplacians on irregular sampling. There are three modes (see
+[volumetric_refinement.md](volumetric_refinement.md#1-curvature-penalties)
+for how they compare in refinement):
 
 - `"change"` penalises the curvature added by the fit, in excess of the
   parallel surface of `V` at the local offset. To first order
@@ -215,10 +217,22 @@ point-cloud Laplacians on irregular sampling. There are two modes:
   meant to be more curved than the periosteal one: −0.6 mm on the cylinder
   phantom.) The residual per node and surface is
   `r = √(μ/N) · ρc · ℓ · n_i · ½ Σ_k L_ik (d_k − d_i) n_k`, linear in `(m, t)`.
-- `"excess"` penalises absolute mean curvature above a threshold `κ`,
-  `r = √(μ/N) · ρc · ℓ · max(0, |H_i| − κ)`, leaving curvature below `κ`
-  free (Gauss–Newton with the active set and sign re-evaluated each
-  iteration).
+- `"absolute"` penalises the curvature of the fitted surface above a
+  threshold `κ`, `r = √(μ/N) · ρc · ℓ · max(0, K_i − κ)`, leaving curvature
+  below `κ` free (Gauss–Newton with the active set re-evaluated each
+  iteration). `K` is `|κ₁ + κ₂| = 2|H|` (`curvature_measure="mean"`) or
+  `√(κ₁² + κ₂²)` (`"total"`, from a weighted quadric fit to the neighbours
+  in each node's tangent plane), which is not zero at a saddle. Both equal
+  the contour curvature `1/R` on a shaft; the default `κ = 5 mm⁻¹` is the
+  contour-curvature threshold of our HR-pQCT segmentation network (Neeteson
+  et al. 2023).
+- `"variation"` penalises how fast the curvature changes along the surface,
+  `½ ∫ |∇(κ₁ + κ₂)|²` (after the minimum-variation surfaces of Moreton &
+  Séquin 1992), with the neighbours and weights of the Laplacian: smoothly
+  curved bone is free, bumps and dents are not. It is quadratic in `(m, t)`,
+  with `ℓ²` in place of `ℓ`.
+
+The endosteal surface can take its own weight (`curvature_endosteal_weight`).
 
 `ℓ` (by default the globally fitted thickness `t0`) makes curvature
 dimensionless, so that `μ` plays the same role as `λ`. Either or both
@@ -226,7 +240,9 @@ surfaces can be penalised, and the penalty can be combined with the
 smoothing term or used alone (`λ = 0`).
 
 The default Laplacian is a Gaussian point-cloud Laplacian at physical scale
-`σ_c` (0.25 mm, 64 neighbours): the Gaussian-weighted neighbourhood mean
+`σ_c`, by default four times the mean node spacing (about 0.25 mm at
+HR-pQCT resolution, 2.6 mm on 0.65 mm clinical CT; 64 neighbours): the
+Gaussian-weighted neighbourhood mean
 within `3σ_c` is estimated by importance-sampling `k` neighbours with
 probability ∝ `exp(−d²/2σ_c²)` (deterministic per node), and rows are
 normalised by the weighted second moment `M2_i = Σ w_ik |p_k − p_i|²`, so
@@ -256,7 +272,10 @@ cap's rim, or whose closest face belongs to unfitted or excluded nodes, is
 dropped, because the planar model does not hold there. Each voxel carries the
 1D residual weight of its depth. Voxels farther from the voxelised surface
 than the sampling range plus two voxels are skipped before the closest-point
-search.
+search. With `vol_adaptive_band` each node's band reaches further along its
+normal until it has crossed a bone edge (outward through bright bone into
+soft tissue, inward through soft tissue to bone), up to that multiple of the
+sampling range.
 
 **Model.** Each voxel's parameters are the barycentric interpolation of its
 face's vertex fields, `θ(x) = Σ_j β_j θ_j`, and its model value is the 1D
@@ -270,24 +289,33 @@ This is the in-plane / out-of-plane blur model of Treece & Gee (2015), who
 regress it on the blurs of 1D fits; here `σ_xy` and `σ_z` are fitted with the
 model. Either can be fixed, or `σ_z` tied to `σ_xy` (`vol_sigma_z="tied"`),
 which is needed on a shaft, where every normal is in-plane and `σ_z` is not
-identified. `ρc` is fixed or estimated by the plateau rule from the band. The
-PSF belongs to the scan, not to a bone, so several bones in one scan should
-be fitted together: the mask of all bones gives one mesh component per bone,
-the components share the PSF (and `ρc`), surface-distance neighbourhoods keep
-them apart, and each band voxel belongs to its nearest surface. For per-bone
-fits or refinements that PSF is then held (`vol_sigma_xy`, `vol_sigma_z`).
+identified. `ρc` is fixed, or estimated by the 1D plateau rule from the
+nodes' profiles (the volumetric fit's own voxels, mostly of thin cortex on
+clinical CT, gave estimates too low; see
+[volumetric_refinement.md](volumetric_refinement.md#6-edge-smoothing-and-cortical-density)).
+The PSF and `ρc` belong to the scan, not to a bone, so several bones in one
+scan should share them: `cbm.shared_scanner` fits all bones' surfaces
+together (one mesh component per bone, kept apart by surface-distance
+neighbourhoods, each band voxel belonging to its nearest surface), and
+`map_bones` and `refine_bones` do so by default and hold the values in the
+per-bone fits.
 
 **Cost.**
 
 ```text
-E = 1/(2V) Σ_x w(d) (I(x) − I_model(x))²  +  C(m, t)  +  ½ Σ_{c ∈ ρs, ρb} κ_c ‖ω x_c‖²
+E = 1/(2V) Σ_x w(d) (I(x) − I_model(x))²  +  C(m, t)  +  ½ Σ_{c ∈ m, t, ρs, ρb} κ_c ‖ω x_c‖²
 ```
 
-`V` is the number of band voxels and `C` the curvature penalty on the fitted
-surfaces, the only regulariser of the edge positions (default weight
-`vol_curvature_weight = 0.3`). The density fields are smoothed by the
-regularised method's operator with `κ = vol_lambda / N`, or are one value
-each with `vol_global_densities`.
+`V` is the number of band voxels. All four fields are smoothed by the
+regularised method's operator `ω`, with its weights: `κ = λ ρc² / (N t0²)`
+for `m` and `t` (`vol_edge_lambda`, default 1) and `κ = λ / N` for the
+densities (`vol_lambda`, default 1), or the densities are one value each
+(`vol_global_densities`), or `ρs` alone is (`vol_global_soft_tissue`). `C` is
+the curvature penalty on the fitted surfaces (default `"change"`, weight
+`vol_curvature_weight = 0.3`). Without the smoothing of `m` and `t`, the
+curvature penalty alone let refinement sink into low-density marrow on the
+clinical knee; with both, it converges
+([volumetric_refinement.md](volumetric_refinement.md)).
 
 **Solve.** The global engine solves it. Each voxel depends on the three
 vertices of its face, so the Gauss–Newton matrix couples the vertices along
@@ -327,8 +355,7 @@ clinical knee the block factor would have given median standard errors of
 1.1–2.9 mm instead of 0.09–0.17 mm.) `data_share` is `B / (B + P)` per field,
 the data's share of the curvature against the penalties' `P`, and `misfit`
 the node's RMS weighted residual relative to `s`, about 1 where the model
-holds. In refinement the PSF is held between partial steps, like the global
-densities, and refitted on full steps.
+holds. Inexact inner fits of a refinement compute only the residuals.
 
 ## Neighbourhoods
 
@@ -365,17 +392,24 @@ than both neighbouring tissues, and the residual at most three times the
 median. Without this gate, profiles along the steep flanks of a gross
 segmentation bump produced fits at the bounds that pushed the bump outwards.
 The displacement is extended from trusted nodes to the others by harmonic
-interpolation, so untrusted regions follow smoothly instead of tearing.
+interpolation, solved exactly over each connected region of untrusted nodes
+with the trusted nodes around it as boundary values: a region moves as a
+membrane spanned by its rim instead of tearing away from it, and one with no
+trusted node around it stays put.
 
-The surface is carried either as the same mesh (cap vertices slide within
-their cap plane, and a few Taubin iterations keep the mesh regular) or, with
-`level_set=True`, as the zero level of a signed distance on the image grid,
-remeshed every iteration so that it cannot fold. After each move the
+The surface is carried as the zero level of a signed distance on the image
+grid, remeshed every iteration so that it cannot fold (`level_set`, the
+default), or as the same mesh (cap vertices slide within their cap plane, and
+a few Taubin iterations keep the mesh regular). After each move the
 normals are recomputed, the profiles resampled and the model refitted,
 warm-started with `m` shifted by the move. While the surface moves, the inner
 fit stops once its edges change by less than `edge_ratio` times the last
-move; with `freeze=True`, regions that have stopped moving are frozen and no
-longer refitted. Refinement converges when a full, converged fit moves the
+move; regions that have stopped moving are frozen and no longer refitted
+(`freeze`, the default). The scanner's parameters (the volumetric model's
+PSF, a global `σ`, an estimated `ρc`) are held through a refinement pass and
+then re-fitted on the refined surface with under-relaxation, and another pass
+follows while they change by more than 1% (at most three passes).
+Refinement converges when a full, converged fit moves the
 surface by less than the tolerance (a tenth of the smallest voxel spacing,
 RMS) overall and by less than twice that in every region; a fit that
 exhausts its work budget does not stop the loop but cannot end it as
@@ -406,7 +440,8 @@ and two bones joined at the threshold. `bone_hulls` (for several bones, as in
 the knee) closes each bone with a ball instead, which keeps wide concavities
 such as the femoral notch open. `buie_segmentation` is the dual-threshold
 method of Buie et al. (2007), the standard-of-care reference; it is usually
-close but fails topologically on cortical breaks of about 1.2 mm and more.
+close but can fail topologically, its marrow mask leaking through a gap in
+the cortex.
 [segmentation.md](segmentation.md) has the implementation details and the
 comparison.
 

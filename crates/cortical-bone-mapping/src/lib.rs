@@ -105,15 +105,15 @@ pub mod volume;
 pub use error::Error;
 pub use fit::profiles::NormalConstraint;
 pub use fit::psf::PsfModel;
-pub use operators::{CurvatureMode, Distance};
+pub use operators::{mesh_curvature, CurvatureMeasure, CurvatureMode, Distance};
 pub use options::{
-    AxialBlur, CurvatureOptions, Method, ModelOptions, Options, RhoCMode, SamplingOptions, SigmaMode, Site,
-    SolverOptions, SurfaceOptions, VolumetricOptions,
+    AxialBlur, CurvatureOptions, LaplacianScale, Method, ModelOptions, Options, RhoCMode, SamplingOptions, SigmaMode,
+    Site, SolverOptions, SurfaceOptions, VolumetricOptions,
 };
 pub use pipeline::run;
 pub use refine::{
     cortical_masks, refine_segmentation, refine_segmentation_excluding, FreezeOptions, IterationStats, RefineOptions,
-    RefineResult,
+    RefineResult, ScannerState,
 };
 pub use result::{CbmResult, FitInfo, VolumetricInfo};
 pub use surface::mesh::Mesh;

@@ -58,6 +58,9 @@ pub(crate) const NV: usize = 6;
 /// model's parameter vector.
 const NODE_PARAMS: [(usize, usize); 4] = [(M, PM), (T, PT), (RHO_S, PRS), (RHO_B, PRB)];
 
+/// The fields the smoothing penalty can act on, in the order of its weights.
+const SMOOTHED: [usize; 4] = [M, T, RHO_S, RHO_B];
+
 /// A volumetric problem on a fixed surface.
 pub(crate) struct VolumetricProblem<'a> {
     pub band: &'a Band,
@@ -74,8 +77,9 @@ pub(crate) struct VolumetricProblem<'a> {
     pub fixed: [f64; NV],
     /// Nodes held at their values (boundary conditions).
     pub frozen: Option<&'a [bool]>,
-    /// The smoothing operator and the weights of the `ρs`, `ρb` fields.
-    pub smoothing: Option<(&'a SmoothingOperator, [f64; 2])>,
+    /// The smoothing operator and the weights of the `m`, `t`, `ρs`, `ρb`
+    /// fields.
+    pub smoothing: Option<(&'a SmoothingOperator, [f64; 4])>,
     pub curvature: Option<&'a CurvatureOperator>,
     pub lower: [f64; NV],
     pub upper: [f64; NV],
@@ -284,11 +288,12 @@ impl<'a> VolumetricProblem<'a> {
         let field = |c: usize| lay.fields.iter().position(|&f| f == c);
         let mut gnode: Vec<Vec<f64>> = vec![vec![0.0; n]; lay.fields.len()];
         let derivs = grads.is_some();
-        // smoothing of the density fields
+        // smoothing of the fields
         let mut smooth = 0.0;
         if let Some((op, coef)) = self.smoothing {
-            let ch: Vec<(usize, f64)> = [(RHO_S, coef[0]), (RHO_B, coef[1])]
+            let ch: Vec<(usize, f64)> = SMOOTHED
                 .into_iter()
+                .zip(coef)
                 .filter_map(|(c, k)| field(c).filter(|_| k != 0.0).map(|fi| (fi, k)))
                 .collect();
             if !ch.is_empty() {
@@ -391,7 +396,7 @@ impl<'a> VolumetricProblem<'a> {
         let n = lay.nodes;
         let field = |c: usize| lay.fields.iter().position(|&f| f == c);
         if let Some((op, coef)) = self.smoothing {
-            for (c, k) in [(RHO_S, coef[0]), (RHO_B, coef[1])] {
+            for (c, k) in SMOOTHED.into_iter().zip(coef) {
                 if let (Some(fi), true) = (field(c), k != 0.0) {
                     let mut y = vec![0.0; n];
                     smoothing_product(op, &[&v[fi * n..(fi + 1) * n]], &[k], &mut [&mut y]);
@@ -444,27 +449,22 @@ impl<'a> VolumetricProblem<'a> {
         if let Some((op, coef)) = self.smoothing {
             let sd = op.gram_diag();
             for (fi, &c) in lay.fields.iter().enumerate() {
-                let k = match c {
-                    RHO_S => coef[0],
-                    RHO_B => coef[1],
-                    _ => 0.0,
-                };
+                let k = SMOOTHED.iter().position(|&s| s == c).map_or(0.0, |i| coef[i]);
                 for v in 0..n {
                     d[v * nfc + fi] += k * sd[v];
                 }
             }
         }
         if let Some(cv) = self.curvature {
-            let cd = cv.gram_diag();
+            let (cm, ct) = cv.gram_diag();
             for (fi, &c) in lay.fields.iter().enumerate() {
-                // two surfaces: m gets 2D, t gets 2D/4 (cross terms cancel)
-                let k = match c {
-                    M => 2.0,
-                    T => 0.5,
-                    _ => 0.0,
+                let cd = match c {
+                    M => &cm,
+                    T => &ct,
+                    _ => continue,
                 };
                 for v in 0..n {
-                    d[v * nfc + fi] += k * cd[v];
+                    d[v * nfc + fi] += cd[v];
                 }
             }
         }
@@ -527,32 +527,6 @@ impl<'p, 'a> Prepared<'p, 'a> {
                 eval(p.band.depth[e] as f64, &p.voxel(&val, f, e).0, p.rho_c)
             })
             .collect()
-    }
-
-    /// The voxels well inside the fitted cortex (more than `2σ_n` from both
-    /// fitted edges), as (node with the largest barycentric weight, value):
-    /// the samples of the cortical plateau.
-    pub fn cortical_samples(&self, x: &[f64]) -> Vec<(u32, f32)> {
-        let p = self.problem;
-        let val = p.values(&self.lay, x);
-        let per_face: Vec<Vec<(u32, f32)>> = (0..p.faces.len())
-            .into_par_iter()
-            .map(|f| {
-                p.band
-                    .of(f)
-                    .filter_map(|e| {
-                        let (q, _, beta) = p.voxel(&val, f, e);
-                        let d = p.band.depth[e] as f64;
-                        let (lo, hi) = (q[PM] - 0.5 * q[PT] + 2.0 * q[PS], q[PM] + 0.5 * q[PT] - 2.0 * q[PS]);
-                        (d >= lo && d <= hi).then(|| {
-                            let s = (0..3).max_by(|&a, &b| beta[a].total_cmp(&beta[b])).unwrap();
-                            (p.faces[f][s], p.band.value[e])
-                        })
-                    })
-                    .collect()
-            })
-            .collect();
-        per_face.into_iter().flatten().collect()
     }
 
     /// Per node, from the voxels of its faces at `x`, with `g_i` the

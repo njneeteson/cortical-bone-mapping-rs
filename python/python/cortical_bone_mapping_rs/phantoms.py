@@ -114,17 +114,10 @@ class BonePhantom:
       surfaces along direction ``angle`` (radians, 0 = array axis 1) is
       ``gap`` in every slice. Real neighbours are always separated by some
       soft tissue (typically 1-5 mm), so ``gap`` should be positive;
-    * optionally cortical ``breaks``, each ``(angle, width, z_center, length)``:
-      a channel of soft tissue through the full cortical depth, elliptical on
-      the periosteal surface with axes ``width`` (along the arc, centred on
-      ``angle``) and ``length`` (along the axis, centred on ``z_center``).
-      Realistic HR-pQCT breaks are ~0.3-1.2 mm across. The true periosteal
-      surface spans the break.
 
     Densities: ``rho_soft`` outside, ``rho_bone`` for cortical and
     trabecular tissue, ``rho_marrow`` in marrow and pores. The truth masks
-    are of the main bone only; :meth:`labels` marks the neighbour and the
-    breaks.
+    are of the main bone only; :meth:`labels` marks the neighbour.
     """
 
     dims: Tuple[int, int, int] = (32, 192, 192)
@@ -153,7 +146,6 @@ class BonePhantom:
     seed: int = 1
     supersample: int = 2
     neighbour: Optional[Tuple[float, float, float, float]] = None
-    breaks: Sequence[Tuple[float, float, float, float]] = ()
 
     def _spec(self) -> dict:
         d = asdict(self)
@@ -161,7 +153,6 @@ class BonePhantom:
         d["spacing"] = _triple(self.spacing, "spacing")
         d["blur"] = _triple(self.blur, "blur")
         d["neighbour"] = None if self.neighbour is None else tuple(float(v) for v in self.neighbour)
-        d["breaks"] = [tuple(float(v) for v in b) for b in self.breaks]
         return d
 
     def generate(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -170,8 +161,7 @@ class BonePhantom:
         return _core.bone_phantom(self._spec())
 
     def labels(self) -> np.ndarray:
-        """uint8 labels at voxel centres: 1 = neighbouring bone, 2 = cortical
-        break (soft tissue inside the cortex shell), 0 otherwise."""
+        """uint8 labels at voxel centres: 1 = neighbouring bone, 0 otherwise."""
         return _core.bone_phantom_labels(self._spec())
 
     def edges_along(self, points, normals, x0: float, x1: float) -> np.ndarray:
@@ -186,114 +176,6 @@ class BonePhantom:
         o = result.options
         e = self.edges_along(result.points, result.normals, -o.outside, o.inside)
         return e[:, 1] - e[:, 0]
-
-
-@dataclass
-class JointPhantom:
-    """A knee-joint phantom: the articular ends of the tibia (below) and the
-    femur (above, along array axis 0) across a cartilage-filled joint space.
-
-    Each bone is a star-shaped cylinder (footprint ``radius``, femur
-    ``femur_scale`` larger) cut by its articular surface, with the rim
-    rounded over ``rim_rounding``. The tibial plateau is a shallow dish
-    (curvature radius ``tibia_curvature``) with random bumps; the femoral
-    condyle is more curved (``femur_curvature``), so the joint space is
-    ``joint_space`` at the contact point (``contact_offset`` from the axis)
-    and widens towards the rim. The cortex is a subchondral plate
-    (``plate_thickness``, random relative variation ``plate_variation``,
-    minimum ``plate_min``) and a thin side shell (``shell_thickness``);
-    trabecular BV/TV rises from ``bvtv`` to ``endo_bvtv`` towards the plate;
-    the plate has pores. The joint space holds cartilage / fluid
-    (``rho_cartilage``).
-
-    Optionally the femoral plate is thinner (``femur_plate_thickness``),
-    and the femur has an intercondylar ``notch`` given as
-    ``(width, height, anterior)``: a slot ``width`` across (array axis 2,
-    centred on the axis), its roof ``height`` above the femoral surface at
-    the contact point, open posteriorly from ``anterior`` along axis 1, with
-    cortex of ``shell_thickness`` on its walls.
-
-    The default is a scaled-down joint (a real tibial plateau is ~70 mm
-    wide): it reproduces the local geometry of the contact region in a small
-    volume; ``site_phantom("knee")`` is a full-size knee at clinical CT
-    resolution.
-    The default joint space, 4 mm, is a healthy bone-to-bone distance (medial
-    radiographic joint space width ~4.8 mm in women, ~5.7 mm in men); ~2 mm
-    is moderate osteoarthritis.
-    """
-
-    dims: Tuple[int, int, int] = (180, 200, 200)
-    spacing: Triple = (0.0607, 0.0607, 0.0607)
-    radius: float = 5.0
-    femur_scale: float = 1.05
-    shape_harmonics: int = 5
-    shape_amplitude: float = 0.08
-    joint_level: float = 0.35
-    joint_space: float = 4.0
-    contact_offset: Tuple[float, float] = (0.8, -0.5)
-    tibia_curvature: float = 20.0
-    femur_curvature: float = 9.0
-    bump_amplitude: float = 0.08
-    bump_wavelength: float = 4.0
-    plate_thickness: float = 0.45
-    plate_variation: float = 0.3
-    plate_min: float = 0.15
-    shell_thickness: float = 0.3
-    rim_rounding: float = 0.4
-    bvtv: float = 0.22
-    endo_bvtv: float = 0.4
-    transition_width: float = 0.4
-    trabecular_wavelength: float = 1.0
-    porosity: float = 0.03
-    pore_wavelength: float = 0.35
-    rho_soft: float = 50.0
-    rho_cartilage: float = 80.0
-    rho_bone: float = 1000.0
-    rho_marrow: float = 30.0
-    blur: Triple = (0.08, 0.08, 0.08)
-    noise: float = 40.0
-    seed: int = 1
-    supersample: int = 2
-    femur_plate_thickness: Optional[float] = None
-    notch: Optional[Tuple[float, float, float]] = None
-
-    TIBIA = 1
-    FEMUR = 2
-
-    def _spec(self) -> dict:
-        d = asdict(self)
-        d["dims"] = tuple(int(x) for x in self.dims)
-        d["spacing"] = _triple(self.spacing, "spacing")
-        d["blur"] = _triple(self.blur, "blur")
-        d["contact_offset"] = tuple(float(v) for v in self.contact_offset)
-        d["notch"] = None if self.notch is None else tuple(float(v) for v in self.notch)
-        return d
-
-    def joint_height(self) -> float:
-        """Height of the tibial plateau at the contact point (physical, axis 0)."""
-        return self.joint_level * (self.dims[0] - 1) * _triple(self.spacing, "spacing")[0]
-
-    def generate(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """``(image float32, periosteal labels, endosteal labels)``: uint8,
-        0 outside, 1 tibia, 2 femur."""
-        return _core.joint_phantom(self._spec())
-
-    def edges_along(self, points, normals, x0: float, x1: float) -> np.ndarray:
-        """True ``(x_periosteal, x_endosteal, bone)`` along each line ``p + x n``
-        (first entry into either bone, then into its marrow space), shape (N, 3)."""
-        p = np.ascontiguousarray(points, dtype=np.float64)
-        n = np.ascontiguousarray(normals, dtype=np.float64)
-        return _core.joint_phantom_edges(self._spec(), p, n, float(x0), float(x1))
-
-    def true_thickness(self, result: "CbmResult", bone: Optional[int] = None) -> np.ndarray:
-        """Reference thickness along each sampling line of a result (NaN where
-        the line first enters a bone other than ``bone``, if given)."""
-        o = result.options
-        e = self.edges_along(result.points, result.normals, -o.outside, o.inside)
-        t = e[:, 1] - e[:, 0]
-        if bone is not None:
-            t[e[:, 2] != bone] = np.nan
-        return t
 
 
 @dataclass
@@ -389,7 +271,7 @@ class FemurPhantom:
         return t
 
 
-SITES = ("distal_radius", "distal_tibia", "proximal_femur", "knee")
+SITES = ("distal_radius", "distal_tibia", "proximal_femur")
 
 
 def site_phantom(site: str, seed: int = 1):
@@ -398,10 +280,9 @@ def site_phantom(site: str, seed: int = 1):
 
     ``"distal_radius"`` and ``"distal_tibia"`` (HR-pQCT, 61 um voxels, with
     the ulna / fibula beside them) are :class:`BonePhantom`;
-    ``"proximal_femur"`` (hip CT) is a :class:`FemurPhantom`; ``"knee"``
-    (clinical CT, with an intercondylar notch) is a :class:`JointPhantom`.
+    ``"proximal_femur"`` (hip CT) is a :class:`FemurPhantom`.
     ``seed`` sets the noise and the random geometry.
     """
     kind, spec = _core.site_phantom(str(site), int(seed))
-    cls = {"bone": BonePhantom, "femur": FemurPhantom, "joint": JointPhantom}[kind]
+    cls = {"bone": BonePhantom, "femur": FemurPhantom}[kind]
     return cls(**spec)

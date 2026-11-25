@@ -1,6 +1,6 @@
 use super::*;
 use crate::model::{eval, residual_weights, Params, M, RHO_B, RHO_S, SIGMA, T};
-use crate::operators::{interpolation_matrix, select_control_points, CurvatureMode};
+use crate::operators::{interpolation_matrix, select_control_points, CurvatureMeasure, CurvatureMode};
 use crate::util::{Rng, V3};
 
 fn synth(n: usize, seed: u64, noise: f64) -> (Profiles, Vec<f64>, Vec<Params>, Vec<V3>) {
@@ -136,14 +136,20 @@ fn gradient_matches_finite_differences_with_all_terms() {
     let w = residual_weights(&x, 3.0);
     let near = crate::operators::Neighbours::euclidean(&mesh.vertices);
     let sm = SmoothingOperator::new(&near, 6, 0.8, f64::INFINITY);
-    for mode in [CurvatureMode::Change, CurvatureMode::Excess { kappa: 0.3 }] {
+    let absolute = CurvatureMode::Absolute { kappa: 0.3 };
+    for (mode, measure) in [
+        (CurvatureMode::Change, CurvatureMeasure::Mean),
+        (absolute, CurvatureMeasure::Mean),
+        (absolute, CurvatureMeasure::Total),
+        (CurvatureMode::Variation, CurvatureMeasure::Mean),
+    ] {
         for lap_kind in 0..2 {
             let lap = if lap_kind == 0 {
                 crate::operators::SurfaceLaplacian::cotangent(&mesh)
             } else {
                 crate::operators::SurfaceLaplacian::gaussian(&near, 8, 0.8, 3.0)
             };
-            let cv = CurvatureOperator::new(lap, &mesh.vertices, &normals, mode, 5.0, [true, true]);
+            let cv = CurvatureOperator::new(lap, &mesh.vertices, &normals, mode, measure, [5.0, 5.0]);
             for use_interp in [false, true] {
                 let ctrl = select_control_points(&near, 1.0, 1);
                 let a = interpolation_matrix(&near, &ctrl, 4, 1.0);

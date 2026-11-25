@@ -62,7 +62,11 @@ const REASONS: [&str; 6] = [
 /// residual).
 fn failed_tests(result: &CbmResult, k: usize, options: &Options, med: f64) -> [bool; 6] {
     let (lo, hi) = (options.model.lower, options.model.upper);
-    let (x0, x1) = (-options.sampling.outside, options.sampling.inside);
+    // the band's reach at the node (volumetric model), else the sampling range
+    let (x0, x1) = match result.volumetric.as_ref().and_then(|v| v.reach.get(k)) {
+        Some(&[o, i]) => (-o, i),
+        None => (-options.sampling.outside, options.sampling.inside),
+    };
     let eps = |a: f64, b: f64| 1e-6 * (b - a).abs().max(1e-12);
     let p = result.params[k];
     let edge = p[M] - 0.5 * p[T];

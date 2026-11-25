@@ -2,6 +2,7 @@
 
 use ndarray::Array3;
 
+use super::ScannerState;
 use crate::result::CbmResult;
 use crate::surface::mesh::Mesh;
 
@@ -45,10 +46,23 @@ pub struct RefineOptions {
     /// over the whole surface, but stands out regionally.
     pub region_tolerance: Option<f64>,
     /// Carry the surface as a level set and extract a new mesh every
-    /// iteration (remeshing) instead of moving the same vertices.
+    /// iteration (remeshing) instead of moving the same vertices (default:
+    /// on, as on the clinical knee CT, `docs/refinement_experiments.md`).
     pub level_set: bool,
-    /// Regional convergence: freeze regions that have stopped moving.
+    /// Regional convergence: freeze regions that have stopped moving
+    /// (default: on).
     pub freeze: Option<FreezeOptions>,
+    /// The scanner parameters (blur, `ρc`) are held through a refinement
+    /// pass and then re-fitted on the refined surface; at most this many
+    /// passes (1 = hold the first fit's values throughout; see the module
+    /// `scanner`).
+    pub scanner_passes: usize,
+    /// Under-relaxation `β` in (0, 1] of the scanner parameters between
+    /// passes: `p ← p + β (p_fit − p)`.
+    pub scanner_relaxation: f64,
+    /// Another pass follows only if the re-fit changes a scanner parameter
+    /// by more than this (relative).
+    pub scanner_tolerance: f64,
 }
 
 impl Default for RefineOptions {
@@ -66,8 +80,11 @@ impl Default for RefineOptions {
             stall_iterations: 5,
             region_radius: None,
             region_tolerance: None,
-            level_set: false,
-            freeze: None,
+            level_set: true,
+            freeze: Some(FreezeOptions::default()),
+            scanner_passes: 3,
+            scanner_relaxation: 0.5,
+            scanner_tolerance: 0.01,
         }
     }
 }
@@ -155,6 +172,8 @@ pub struct RefineResult {
     pub stalled: bool,
     /// Why refinement stopped, with a diagnosis if it stalled.
     pub message: String,
+    /// The scanner parameters held in each pass.
+    pub scanner: Vec<ScannerState>,
     /// Wall time per stage, summed over all fits (seconds).
     pub timings: Vec<(String, f64)>,
 }

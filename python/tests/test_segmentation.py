@@ -97,22 +97,16 @@ def test_presets():
         cbm.Options.preset("hip")
 
 
-def test_neighbour_and_breaks_phantom():
-    ph = cbm.BonePhantom(dims=(8, 240, 240), noise=0.0, neighbour=(1.5, 0.5, 0.5, np.pi / 4),
-                         breaks=[(2.0, 1.0, 0.24, 0.3)])
+def test_neighbour_phantom():
+    ph = cbm.BonePhantom(dims=(8, 240, 240), noise=0.0, neighbour=(1.5, 0.5, 0.5, np.pi / 4))
     img, peri, endo = ph.generate()
     lab = ph.labels()
-    assert (lab == 1).any() and not (peri & (lab == 1)).any()
-    assert (lab == 2).any() and (peri[lab == 2]).all() and not endo[lab == 2].any()
-    cortex = peri & ~endo & (lab == 0)
-    assert img[lab == 2].mean() < 0.5 * img[cortex].mean()  # soft tissue in the break
+    assert (lab == 1).any() and not (peri & (lab == 1)).any() and set(np.unique(lab)) <= {0, 1}
     # the paper's largest-bone pre-processing keeps the neighbour out at a 0.5 mm gap,
     # and so does the hull's largest-component step
     bp, _, _ = cbm.buie_segmentation(img)
     assert bp[lab == 1].mean() < 0.05
     assert cbm.hull_segmentation(img)[lab == 1].mean() < 0.05
-    # the hull spans the break; Buie may not
-    assert cbm.hull_segmentation(img)[lab == 2].all()
 
 
 def test_otsu_label_and_hull_two_bones():
@@ -146,6 +140,11 @@ def test_otsu_label_and_hull_two_bones():
                     rho_c="estimate")
     full = cbm.map_bones(img, hulls, options=o, crop=False)
     crop = cbm.map_bones(img, hulls, options=o)
+    # the bones share one estimated rho_c (the scanner's), held in both fits
+    shared = cbm.shared_scanner(img, hulls, options=o, verbose=False)
+    assert set(shared) == {"rho_c"} and full[1].rho_c == full[2].rho_c == shared["rho_c"]
+    alone = cbm.map_bones(img, hulls, options=o, crop=False, shared=False)
+    assert alone[1].rho_c != alone[2].rho_c
     assert set(full) == set(crop) == {1, 2}
     for b in (1, 2):
         d = np.abs(crop[b].thickness - full[b].thickness)  # same surface; float rounding + solver tolerance
@@ -177,19 +176,3 @@ def test_separate_bones_raises_the_threshold_locally():
     assert inv["main"] == 1 and (lab[truth == 1] == inv["main"]).mean() < 0.01
     with pytest.raises(ValueError, match="could not be separated"):
         cbm.separate_bones(img, 150.0, marks, ph.spacing, min_size=500, max_threshold=160.0, verbose=False)
-
-
-def test_joint_phantom_truth():
-    ph = cbm.JointPhantom(dims=(100, 120, 120), radius=3.0, joint_space=2.0, joint_level=0.4, noise=0.0)
-    img, peri, endo = ph.generate()
-    assert set(np.unique(peri)) == {0, 1, 2}
-    assert ((endo > 0) <= (peri > 0)).all()
-    # vertical lines through the joint space: down to the tibia, up to the femur
-    c = (np.array(img.shape) - 1) / 2 * 0.0607
-    z = ph.joint_height() + 0.5 * ph.joint_space
-    pts = np.array([[z, c[1] + ph.contact_offset[0] + dy, c[2] + ph.contact_offset[1]] for dy in (-0.5, 0, 0.5)])
-    down = ph.edges_along(pts, np.tile([-1.0, 0, 0], (3, 1)), 0.0, 2.0)
-    up = ph.edges_along(pts, np.tile([1.0, 0, 0], (3, 1)), 0.0, 2.0)
-    assert (down[:, 2] == cbm.JointPhantom.TIBIA).all() and (up[:, 2] == cbm.JointPhantom.FEMUR).all()
-    plate = down[:, 1] - down[:, 0]
-    assert (plate > ph.plate_min - 1e-6).all() and (plate < 1.0).all()

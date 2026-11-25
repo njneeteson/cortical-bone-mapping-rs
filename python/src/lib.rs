@@ -23,15 +23,15 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(segmentation::grow_bones, m)?)?;
     m.add_function(wrap_pyfunction!(fitting::run, m)?)?;
     m.add_function(wrap_pyfunction!(fitting::refine, m)?)?;
+    m.add_function(wrap_pyfunction!(fitting::mask_surface, m)?)?;
     m.add_function(wrap_pyfunction!(mesh::voxelize, m)?)?;
     m.add_function(wrap_pyfunction!(mesh::write_vtk, m)?)?;
+    m.add_function(wrap_pyfunction!(mesh::mesh_curvature, m)?)?;
     m.add_function(wrap_pyfunction!(phantoms::phantom, m)?)?;
     m.add_function(wrap_pyfunction!(fitting::fit_profiles, m)?)?;
     m.add_function(wrap_pyfunction!(phantoms::bone_phantom, m)?)?;
     m.add_function(wrap_pyfunction!(phantoms::bone_phantom_edges, m)?)?;
     m.add_function(wrap_pyfunction!(phantoms::bone_phantom_labels, m)?)?;
-    m.add_function(wrap_pyfunction!(phantoms::joint_phantom, m)?)?;
-    m.add_function(wrap_pyfunction!(phantoms::joint_phantom_edges, m)?)?;
     m.add_function(wrap_pyfunction!(phantoms::femur_phantom, m)?)?;
     m.add_function(wrap_pyfunction!(phantoms::femur_phantom_edges, m)?)?;
     m.add_function(wrap_pyfunction!(phantoms::site_phantom, m)?)?;

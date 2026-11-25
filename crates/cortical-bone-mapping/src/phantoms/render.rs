@@ -179,3 +179,13 @@ pub(crate) fn first_entry(f: &dyn Fn(f64) -> f64, from: f64, x1: f64, h: f64) ->
     }
     f64::NAN
 }
+
+/// Smooth maximum `k ln(e^{a/k} + e^{b/k})` with width `k` (`max` for
+/// `k = 0`), written as `max + k ln(1 + e^{−|a−b|/k})` to avoid overflow.
+pub(crate) fn smax(a: f64, b: f64, k: f64) -> f64 {
+    if k <= 0.0 {
+        return a.max(b);
+    }
+    let m = a.max(b);
+    m + k * (-(a - b).abs() / k).exp().ln_1p()
+}

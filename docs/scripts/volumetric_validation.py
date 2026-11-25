@@ -22,7 +22,7 @@ operator for its density fields. Per node and method:
 
 Results are summarised per site and method, and binned by the true
 thickness relative to the in-plane PSF (``t / sigma_xy``; the thin-cortex
-regime is ``t < 2 sigma``). Writes ``docs/volumetric_validation.json``
+regime is ``t < 2 sigma``). Writes ``docs/results/volumetric_validation.json``
 (sites given as arguments are updated in an existing file).
 
     python docs/scripts/volumetric_validation.py [OUT.json] [SITE ...]
@@ -50,8 +50,6 @@ SITES = {
                          extra=dict(normal_constraint="in_plane", normal_axis=0), tied=True, true_rho_c=False),
     "proximal_femur": dict(bones=((1, "femur"),), outside=2.5, inside=7.0, sigma=1.9424, k=128, extra={},
                            tied=False, true_rho_c=True),
-    "knee": dict(bones=((1, "tibia"), (2, "femur")), outside=3.0, inside=6.0, sigma=1.9424, k=128, extra={},
-                 tied=False, true_rho_c=True),
 }
 
 
@@ -147,7 +145,7 @@ def site(name):
 
 def main():
     names = sys.argv[2:] or list(SITES)
-    path = sys.argv[1] if len(sys.argv) > 1 else "docs/volumetric_validation.json"
+    path = sys.argv[1] if len(sys.argv) > 1 else "docs/results/volumetric_validation.json"
     results = {"phantom psf": {}, "seeds": list(SEEDS), "sites": {}}
     if os.path.exists(path):
         with open(path) as f:

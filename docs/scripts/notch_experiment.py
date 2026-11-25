@@ -64,7 +64,7 @@ VARIANTS = {
     "hull_freeze": ("convex hull, level set, adaptive, density fields, regional convergence",
                     FIELDS, dict(level_set=True, freeze=True), "hull"),
     "closing": ("4 mm closing, level set, adaptive, density fields (no freezing)",
-                FIELDS, dict(level_set=True), CLOSING),
+                FIELDS, dict(level_set=True, freeze=False), CLOSING),
     "closing_freeze_global_sigma": ("as closing_freeze, global sigma",
                                     dict(global_params=("sigma",)), dict(level_set=True, freeze=True), CLOSING),
     "closing_freeze_inside_15": ("as closing_freeze, 15 mm inside profiles",
@@ -79,17 +79,100 @@ VARIANTS = {
     "closing_freeze_volumetric": ("as closing_freeze, the volumetric model as the inner fit",
                                   dict(method="volumetric", vol_scanner_axis=0),
                                   dict(level_set=True, freeze=True), CLOSING),
+    # curvature penalties on the fitted surfaces, measured at 1 mm (the nodes are ~0.65 mm apart);
+    # the volumetric ones capped at 15 moves (not converged by then = not solved)
+    "closing_freeze_change": ("as closing_freeze, change-of-curvature penalty (weight 1)",
+                              dict(FIELDS, curvature="change", curvature_weight=1.0, curvature_scale=1.0),
+                              dict(level_set=True, freeze=True), CLOSING),
+    "closing_freeze_absolute_0.3": ("as closing_freeze, absolute curvature above 0.3 / mm (weight 0.3)",
+                                    dict(FIELDS, curvature="absolute", curvature_kappa=0.3, curvature_weight=0.3,
+                                         curvature_scale=1.0),
+                                    dict(level_set=True, freeze=True), CLOSING),
+    "closing_freeze_absolute_1": ("as closing_freeze, absolute curvature above 1 / mm (weight 0.3)",
+                                  dict(FIELDS, curvature="absolute", curvature_kappa=1.0, curvature_weight=0.3,
+                                       curvature_scale=1.0),
+                                  dict(level_set=True, freeze=True), CLOSING),
+    "closing_freeze_variation_0.1": ("as closing_freeze, curvature-variation penalty (weight 0.1)",
+                                     dict(FIELDS, curvature="variation", curvature_weight=0.1, curvature_scale=1.0),
+                                     dict(level_set=True, freeze=True), CLOSING),
+    "closing_freeze_variation_1": ("as closing_freeze, curvature-variation penalty (weight 1)",
+                                   dict(FIELDS, curvature="variation", curvature_weight=1.0, curvature_scale=1.0),
+                                   dict(level_set=True, freeze=True), CLOSING),
+    "closing_freeze_volumetric_spacing": ("as closing_freeze_volumetric_change, curvature at 4 node spacings",
+                                          dict(method="volumetric", vol_scanner_axis=0, vol_curvature="change",
+                                               vol_curvature_weight=0.3),
+                                          dict(level_set=True, freeze=True, refine_iterations=15), CLOSING),
+    "closing_freeze_volumetric_adaptive": ("as closing_freeze_volumetric_spacing, adaptive band (up to 2x the reach)",
+                                           dict(method="volumetric", vol_scanner_axis=0, vol_curvature="change",
+                                                vol_curvature_weight=0.3, vol_adaptive_band=2.0),
+                                           dict(level_set=True, freeze=True, refine_iterations=15), CLOSING),
+    "closing_freeze_volumetric_adaptive_soft_tissue": ("as closing_freeze_volumetric_adaptive, global soft tissue",
+                                                       dict(method="volumetric", vol_scanner_axis=0,
+                                                            vol_curvature="change", vol_curvature_weight=0.3,
+                                                            vol_adaptive_band=2.0, vol_global_soft_tissue=True),
+                                                       dict(level_set=True, freeze=True, refine_iterations=15),
+                                                       CLOSING),
+    # one change at a time from the regularised closing_freeze (lambda 1, no curvature penalty)
+    "closing_freeze_volumetric_edge_smoothing": ("as closing_freeze, the volumetric model with the same smoothing of "
+                                                 "m and t and no curvature penalty",
+                                                 dict(method="volumetric", vol_scanner_axis=0, vol_curvature=None,
+                                                      vol_edge_lambda=1.0),
+                                                 dict(level_set=True, freeze=True, refine_iterations=15), CLOSING),
+    "closing_freeze_volumetric_edge_smoothing_curvature": ("as closing_freeze_volumetric_edge_smoothing, plus the "
+                                                           "change-of-curvature penalty (weight 0.3)",
+                                                           dict(method="volumetric", vol_scanner_axis=0,
+                                                                vol_curvature="change", vol_curvature_weight=0.3,
+                                                                vol_edge_lambda=1.0),
+                                                           dict(level_set=True, freeze=True, refine_iterations=15),
+                                                           CLOSING),
+    "closing_freeze_volumetric_edge_smoothing_rho_c": ("as closing_freeze_volumetric_edge_smoothing, rho_c fixed "
+                                                       "at the regularised fit's 1270 HU",
+                                                       dict(method="volumetric", vol_scanner_axis=0, vol_curvature=None,
+                                                            vol_edge_lambda=1.0, rho_c=1270.0),
+                                                       dict(level_set=True, freeze=True, refine_iterations=15), CLOSING),
+    "closing_freeze_volumetric_rho_c": ("as closing_freeze_volumetric_spacing, rho_c fixed at 1270 HU",
+                                        dict(method="volumetric", vol_scanner_axis=0, vol_curvature="change",
+                                             vol_curvature_weight=0.3, rho_c=1270.0),
+                                        dict(level_set=True, freeze=True, refine_iterations=15), CLOSING),
+    "closing_freeze_volumetric_defaults": ("the volumetric model's defaults: edge smoothing, rho_c estimated from "
+                                           "the profiles",
+                                           dict(method="volumetric", vol_scanner_axis=0),
+                                           dict(level_set=True, freeze=True, refine_iterations=15), CLOSING),
+    "closing_freeze_volumetric_defaults_curvature": ("as closing_freeze_volumetric_defaults, plus the "
+                                                     "change-of-curvature penalty (weight 0.3)",
+                                                     dict(method="volumetric", vol_scanner_axis=0,
+                                                          vol_curvature="change", vol_curvature_weight=0.3),
+                                                     dict(level_set=True, freeze=True, refine_iterations=15), CLOSING),
+    "closing_freeze_volumetric_soft_tissue": ("as closing_freeze_volumetric_change, one global soft-tissue density",
+                                              dict(method="volumetric", vol_scanner_axis=0, vol_curvature="change",
+                                                   vol_curvature_weight=0.3, curvature_scale=1.0,
+                                                   vol_global_soft_tissue=True),
+                                              dict(level_set=True, freeze=True, refine_iterations=15), CLOSING),
+    "closing_freeze_volumetric_change": ("as closing_freeze_volumetric, change-of-curvature penalty (weight 0.3)",
+                                         dict(method="volumetric", vol_scanner_axis=0, vol_curvature="change",
+                                              vol_curvature_weight=0.3, curvature_scale=1.0),
+                                         dict(level_set=True, freeze=True, refine_iterations=15), CLOSING),
+    "closing_freeze_volumetric_absolute_0.3": ("as closing_freeze_volumetric, absolute curvature above 0.3 / mm",
+                                               dict(method="volumetric", vol_scanner_axis=0, curvature_kappa=0.3,
+                                                    vol_curvature_weight=0.3, curvature_scale=1.0),
+                                               dict(level_set=True, freeze=True, refine_iterations=15), CLOSING),
+    "closing_freeze_volumetric_variation": ("as closing_freeze_volumetric, curvature-variation penalty (weight 0.1)",
+                                            dict(method="volumetric", vol_scanner_axis=0, vol_curvature="variation",
+                                                 vol_curvature_weight=0.1, curvature_scale=1.0),
+                                            dict(level_set=True, freeze=True, refine_iterations=15), CLOSING),
     # the earlier stages, from the convex hull, with the 20 moves they were run with
     "same_nodes": ("convex hull, same nodes moved every iteration, global densities, full fits",
                    {}, dict(refine_iterations=20, edge_ratio=0.0, stall_iterations=0,
-                            region_tolerance=float("inf")), "hull"),
+                            region_tolerance=float("inf"), level_set=False, freeze=False), "hull"),
     "level_set": ("convex hull, level set, global densities, full fits",
                   {}, dict(refine_iterations=20, level_set=True, edge_ratio=0.0, stall_iterations=0,
-                           region_tolerance=float("inf")), "hull"),
+                           region_tolerance=float("inf"), freeze=False), "hull"),
     "level_set_adaptive": ("convex hull, level set, global densities, adaptive inner fits",
-                           {}, dict(refine_iterations=20, level_set=True, region_tolerance=float("inf")), "hull"),
+                           {}, dict(refine_iterations=20, level_set=True, region_tolerance=float("inf"),
+                                    freeze=False), "hull"),
     "density_fields": ("convex hull, level set, adaptive, density fields",
-                       FIELDS, dict(refine_iterations=20, level_set=True, region_tolerance=float("inf")), "hull"),
+                       FIELDS, dict(refine_iterations=20, level_set=True, region_tolerance=float("inf"),
+                                    freeze=False), "hull"),
 }
 
 
@@ -265,20 +348,27 @@ def figures(args):
     shown = np.where(keep, img, -1000)
     out = Path(args.out)
     names = [n for n in (args.variants or VARIANTS) if (out / f"{n}.pkl").exists()]
-    fig, axes = plt.subplots(len(names), len(CUTS), figsize=(3.2 * len(CUTS), 3.3 * len(names)), squeeze=False)
+    cuts = CUTS
+    if args.centre:  # the three sections through one voxel
+        centre = [int(v) for v in args.centre.split(",")]
+        cuts = [(0, centre[0], "axial"), (1, centre[1], "coronal"), (2, centre[2], "sagittal")]
+    fig, axes = plt.subplots(len(names), len(cuts), figsize=(3.2 * len(cuts), 3.3 * len(names)), squeeze=False)
     for row, n in zip(axes, names):
         rr = pickle.load(open(out / f"{n}.pkl", "rb"))
         s = json.load(open(out / f"{n}.json"))
         r = rr.result
         st = s.get("start", "hull")
         start = hull if st == "hull" else closing_start(args.cache, float(st), out)
-        for ax, (axis, k, kind) in zip(row, CUTS):
+        for ax, (axis, k, kind) in zip(row, cuts):
             ax.imshow(np.take(shown, k, axis=axis), cmap="gray", vmin=-200, vmax=1400, origin="lower")
             ax.contour(np.take(start, k, axis=axis), [0.5], colors="y", linewidths=0.7, linestyles="--")
             for v, c, lw in ((r.surface_vertices, "r", 0.9), (r.displaced_surface("endosteal"), "c", 0.6)):
                 seg = cbm.mesh_section(v, r.surface_faces, axis, k, sp)[:, :, ::-1]
                 if len(seg):
                     ax.add_collection(LineCollection(seg, colors=c, linewidths=lw))
+            if args.centre:
+                other = [i for i in range(3) if i != axis]
+                ax.plot(centre[other[1]], centre[other[0]], "+", color="lime", ms=10)
             ax.set_xticks([]), ax.set_yticks([])
             if n == names[0]:
                 ax.set_title(f"{kind} {k}", fontsize=9)
@@ -391,6 +481,7 @@ def main():
     ap.add_argument("command", choices=("run", "figures", "profiles", "table", "remeasure"))
     ap.add_argument("variants", nargs="*")
     ap.add_argument("--figure", default="notch_variants.png", help="file name in docs/images (figures)")
+    ap.add_argument("--centre", help="figures: the three sections through voxel z,y,x of the crop instead of CUTS")
     a = ap.parse_args()
     {"run": run, "figures": figures, "profiles": profiles, "table": table, "remeasure": remeasure}[a.command](a)
 

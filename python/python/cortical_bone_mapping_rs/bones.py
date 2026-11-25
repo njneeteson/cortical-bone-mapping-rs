@@ -260,9 +260,41 @@ def _uncrop(r, sl, shape, options):
 _OPTION_FIELDS = {f.name for f in fields(Options)}
 
 
+def shared_scanner(image, labels, spacing=None, *, bones=None, options: Optional[Options] = None,
+                   verbose: bool = True, **kwargs) -> dict:
+    """The scanner parameters shared by the bones of one scan: one fit of all
+    the bones' surfaces together (one mesh component per bone) estimates the
+    cortical density (if ``rho_c="estimate"``) and, for the volumetric model,
+    the PSF (unless given). Returns the option overrides that hold them in
+    every bone's fit, e.g. ``{"rho_c": 1270.0, "vol_sigma_xy": 0.57,
+    "vol_sigma_z": 0.80}`` (empty if nothing is estimated).
+
+    The bones share the scanner, so they share its blur and its apparent
+    cortical density; a joint estimate also sees more thick cortex than any
+    one bone's (the cortical density can only be measured where the cortex
+    is thicker than the blur).
+    """
+    o = _make_options(options, spacing, {k: v for k, v in kwargs.items() if k in _OPTION_FIELDS})
+    volumetric = o.method == "volumetric"
+    psf_free = volumetric and (o.vol_sigma_xy is None or o.vol_sigma_z in ("fit", "tied"))
+    if o.rho_c != "estimate" and not psf_free:
+        return {}
+    lab = np.asarray(labels)
+    ids, _ = _bone_ids(lab, bones)
+    r = cortical_bone_mapping(np.asarray(image), np.isin(lab, ids), options=o)
+    out = {}
+    if o.rho_c == "estimate":
+        out["rho_c"] = float(r.rho_c)
+    if psf_free:
+        out["vol_sigma_xy"] = float(r.volumetric["sigma_xy"])
+        out["vol_sigma_z"] = float(r.volumetric["sigma_z"])
+    _log(verbose, "scanner parameters of all bones: " + ", ".join(f"{k} {v:.4g}" for k, v in out.items()))
+    return out
+
+
 def map_bones(image, labels, spacing: Union[float, Sequence[float], None] = None, *, bones=None,
               options: Optional[Options] = None, per_bone: Optional[dict] = None, crop: bool = True,
-              verbose: bool = True, names: Optional[dict] = None, **kwargs) -> dict:
+              verbose: bool = True, names: Optional[dict] = None, shared: bool = True, **kwargs) -> dict:
     """:func:`cortical_bone_mapping` on each labelled bone separately.
 
     Every bone is its own closed surface and its own fit, with its own global
@@ -273,17 +305,33 @@ def map_bones(image, labels, spacing: Union[float, Sequence[float], None] = None
     the sampling range (results are in the full image's coordinates).
     Bones are fitted from the smallest to the largest; with ``verbose`` the
     bones found are listed first (stderr), with ``names`` ({label: name},
-    e.g. from :func:`name_bones`) if given. Returns ``{label: CbmResult}``.
+    e.g. from :func:`name_bones`) if given. With ``shared`` (default) and
+    more than one bone, the scanner parameters (an estimated cortical
+    density, the volumetric model's PSF) are estimated once for all the bones
+    (:func:`shared_scanner`) and held in every bone's fit. Returns
+    ``{label: CbmResult}``.
     """
+    kwargs = _with_shared(image, labels, spacing, bones, options, verbose, kwargs, shared)
     return _per_bone(cortical_bone_mapping, image, labels, spacing, bones, options, per_bone, crop, verbose,
                      kwargs, names)
+
+
+def _with_shared(image, labels, spacing, bones, options, verbose, kwargs, shared):
+    """``kwargs`` with the shared scanner parameters, if ``shared`` and there
+    is more than one bone (explicit keyword arguments win)."""
+    ids, _ = _bone_ids(np.asarray(labels), bones)
+    if not shared or len(ids) < 2:
+        return kwargs
+    opts = {k: v for k, v in kwargs.items() if k in _OPTION_FIELDS}
+    return {**shared_scanner(image, labels, spacing, bones=bones, options=options, verbose=verbose, **opts),
+            **kwargs}
 
 
 def refine_bones(image, labels, spacing: Union[float, Sequence[float], None] = None, *, bones=None,
                  options: Optional[Options] = None, refine: Optional[RefineOptions] = None,
                  per_bone: Optional[dict] = None, crop: bool = True, verbose: bool = True,
                  names: Optional[dict] = None, exclude_others: bool = True, rounds: int = 1,
-                 round_tolerance: float = 0.005, **kwargs) -> dict:
+                 round_tolerance: float = 0.005, shared: bool = True, **kwargs) -> dict:
     """:func:`refine_segmentation` on each labelled bone separately (see
     :func:`map_bones`); each bone converges at its own rate. Keyword arguments
     may be fields of :class:`Options` or :class:`RefineOptions`. Masks are
@@ -302,8 +350,14 @@ def refine_bones(image, labels, spacing: Union[float, Sequence[float], None] = N
     ``rounds`` > 1 repeats the pass over all bones, each starting from its
     own refined region and excluding the others' refined regions, until no
     bone's region changes by more than ``round_tolerance`` (fraction of its
-    voxels). Returns ``{label: RefineResult}`` from the last round.
+    voxels).
+
+    With ``shared`` (default) and more than one bone, the scanner parameters
+    are estimated once on all the starting surfaces (:func:`shared_scanner`)
+    and held in every bone's refinement. Returns ``{label: RefineResult}``
+    from the last round.
     """
+    kwargs = _with_shared(image, labels, spacing, bones, options, verbose, kwargs, shared)
     kw = dict(kwargs, refine=refine) if refine is not None else dict(kwargs)
     lab = np.asarray(labels)
     ids, counts = _bone_ids(lab, bones)

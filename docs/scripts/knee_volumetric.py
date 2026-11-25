@@ -22,7 +22,7 @@ bounds, density smoothing and ``rho_c`` rule):
 With no truth, the methods are compared with each other: per node, the
 difference of thickness and of the periosteal position; and the volumetric
 model's PSF, noise and reliability outputs. Writes
-``docs/knee_volumetric.json``.
+``docs/results/knee_volumetric.json``.
 """
 
 import json
@@ -98,7 +98,7 @@ def compare(reg, vol, idx):
 
 def main():
     d = pickle.loads(open(sys.argv[1], "rb").read())
-    path = sys.argv[2] if len(sys.argv) > 2 else "docs/knee_volumetric.json"
+    path = sys.argv[2] if len(sys.argv) > 2 else "docs/results/knee_volumetric.json"
     joint = joint_fit(d)
     psf = (joint.volumetric["sigma_xy"], joint.volumetric["sigma_z"])
     print("joint", psf, rho_c_of(joint), flush=True)
