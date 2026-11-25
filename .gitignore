@@ -12,3 +12,4 @@ dist/
 *.pdb
 .hypothesis/
 *.vtk
+docs/_build/

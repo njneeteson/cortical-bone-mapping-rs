@@ -23,9 +23,13 @@ dynamic = ["version"]
 
 [project.optional-dependencies]
 test = ["pytest>=7", "scipy>=1.7", "hypothesis>=6"]
-docs = ["matplotlib>=3.5", "scipy>=1.7", "pillow>=9"]
+docs = [
+    "matplotlib>=3.5", "scipy>=1.7", "pillow>=9",
+    "sphinx>=8", "furo>=2024.8", "myst-parser>=4", "sphinx-copybutton>=0.5",
+]
 
 [project.urls]
+Documentation = "https://njneeteson.github.io/cortical-bone-mapping-rs/"
 Repository = "https://github.com/njneeteson/cortical-bone-mapping-rs"
 "Neeteson & Boyd 2025" = "https://doi.org/10.1016/j.compbiomed.2025.110636"
 "Treece & Gee 2018" = "https://doi.org/10.1007/s11914-018-0475-3"
