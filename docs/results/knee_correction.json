@@ -1,0 +1,52 @@
+{
+  "provenance": {
+    "source_hash": "e333350af592c110",
+    "commit": "e6677e1",
+    "uncommitted_changes": true,
+    "version": "0.1.0",
+    "date": "2026-11-25",
+    "machine": "Windows 11, AMD64 Family 26 Model 68 Stepping 0, AuthenticAMD",
+    "inputs": {
+      "dicom": "MOJO_0281",
+      "automatic": "61e2ff199d9c7fdf",
+      "corrected": "bf03282f34678727",
+      "knee_results": "9fb0698650df2d8e",
+      "method": "volumetric",
+      "refine": {
+        "refine_iterations": 150
+      }
+    }
+  },
+  "bones": {
+    "left femur": {
+      "painted_cm3": 1.9019517562661967,
+      "erased_cm3": 0.0,
+      "moves": 6,
+      "converged": true,
+      "time_s": 106.40794630005257,
+      "painted_kept_cm3": 0.8706042720857083,
+      "surface_nodes_in_edit": 3011,
+      "outside_automatic_median_mm": 0.9020163262829559,
+      "outside_automatic_p95_mm": 3.9023460000000005,
+      "thickness_median_mm": 0.5358559462111674,
+      "change_0_to_1_mm_from_edit": {
+        "nodes": 3011,
+        "median_mm": 0.6809925434694041,
+        "p95_mm": 3.767155549521842,
+        "max_mm": 4.582710208812079
+      },
+      "change_1_to_5_mm_from_edit": {
+        "nodes": 1922,
+        "median_mm": 0.11591198764414512,
+        "p95_mm": 0.3732920785153395,
+        "max_mm": 0.6255859368905621
+      },
+      "change_5_to_inf_mm_from_edit": {
+        "nodes": 74911,
+        "median_mm": 0.017922934689693193,
+        "p95_mm": 0.1132832216578213,
+        "max_mm": 0.7365551758195379
+      }
+    }
+  }
+}

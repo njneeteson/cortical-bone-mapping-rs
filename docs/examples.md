@@ -132,12 +132,14 @@ along the scanner axis.
 ![Volumetric refinement of both knees](images/knee_refinement.gif)
 
 *Volumetric refinement of all eight bones, one frame per move. Each row is
-one knee: coronal, sagittal and axial sections, and a 3D view from the
-lateral side, cut at the sagittal section: the image of that plane, each
-bone's section drawn on it, and the half of each bone towards the viewer,
-semi-transparent. Yellow dashed: the starting segmentation. Solid: the
-refined periosteal surface, coloured by bone. Soft tissue more than 10 mm
-from the start is blanked in the sections (display only).*
+one knee: coronal, sagittal and axial sections, and a 3D cutaway from the
+lateral side at the sagittal section: the image on the cut face (bones and
+4 mm of soft tissue around them), each bone's section drawn on it, and the
+surface behind the cut coloured by how far it has moved since the start
+(0–2 mm). Yellow dashed: the starting segmentation. Solid: the refined
+periosteal surface, coloured by bone. Soft tissue more than 10 mm from the
+start is blanked in the sections (display only). The surfaces move about
+1 mm in median over the whole refinement, most of it in the first two moves.*
 
 ### Final surfaces
 
@@ -145,8 +147,9 @@ from the start is blanked in the sections (display only).*
 
 *Right (uninjured) knee, the final surfaces of each method (rows).
 Sections through the femur and patella, and axial through the femoral
-condyles. Yellow dashed: start. Solid: refined periosteal surface. Dotted:
-fitted endosteal surface. Coloured by bone.*
+condyles. Yellow dashed: start. Solid, coloured by bone: refined periosteal
+surface. Magenta dotted: fitted endosteal surface (the inner edge of the
+cortex).*
 
 ![Left knee, every method](images/knee_left_sections.png)
 
@@ -215,6 +218,66 @@ Median fitted cortical thickness, mm (5th–95th percentile):
 - The thickness pattern is the same for every method: thin (≲ 0.5 mm)
   subchondral shells, a thick anterior patella and diaphyseal cortices of
   2–3.5 mm.
+- At the posteromedial corner of the left femoral condyle a thin cortex
+  fades to 50–110 HU over about 10 mm, barely above soft tissue
+  (57 ± 22 HU). The automatic start cannot grow into it, and the surface
+  follows the brighter condyle about 3 mm inside it; a quick correction by
+  hand fixes it (below).
+
+## Correcting a segmentation
+
+Where the automatic segmentation misses bone, the mask can be corrected
+roughly by hand in any segmentation editor and refined again. The library
+takes and returns arrays; reading and writing files is left to the user (the
+scripts use `nibabel`).
+
+| step | here |
+|---|---|
+| 1. export | the volumetric result as a NIfTI label map on the CT's grid, one label per bone (`knee.py --export`) |
+| 2. correct | in ITK-SNAP: paint roughly *outside* the missed cortex; here 1.9 cm³ added to the left femur over 31 mm (50 slices) |
+| 3. refine again | the corrected labels as the start of `refine_bones` for the edited bone only, with the scan's `ρc` and PSF held and the other bones excluded |
+
+```python
+labels = ...                                     # the corrected label map, as an array on the image grid
+results = cbm.refine_bones(image, labels, spacing, bones=[left_femur], options=options,
+                           names=names, shared=False)   # options: the scan's rho_c and PSF fixed
+```
+
+![Correction of the left femur](images/knee_correction_left_femur.png)
+
+*The posteromedial corner of the left femoral condyle, two axial sections
+and a sagittal section through the edit. Top: the automatic result (blue).
+Middle: the mask corrected by hand (yellow dashed), the painted voxels in
+red. Bottom: the surface refined from the correction (blue), with the
+corrected mask (yellow dashed) and the automatic result (white dotted).*
+
+![Refinement from the correction](images/knee_correction_left_femur.gif)
+
+*Refinement of the left femur from the hand-corrected mask, one frame per
+move, in the same sections.*
+
+| | left femur |
+|---|---:|
+| painted by hand | 1.90 cm³ |
+| moves to converge | 6 |
+| run time | 1.8 min |
+| painted voxels kept inside the refined surface | 0.87 cm³ |
+
+Distance from the automatic surface to the refined one, by distance from
+the painted voxels:
+
+| from the edit | nodes | median | 95th percentile | max |
+|---|---:|---:|---:|---:|
+| within 1 mm | 3 011 | 0.68 mm | 3.77 mm | 4.58 mm |
+| 1–5 mm | 1 922 | 0.12 mm | 0.37 mm | 0.63 mm |
+| more than 5 mm | 74 911 | 0.02 mm | 0.11 mm | 0.74 mm |
+
+- The rough painting only has to contain the missed cortex: refinement
+  pulls the surface in onto the faint cortex, keeping 0.87 of the 1.90 cm³
+  painted, up to 4.6 mm outside the automatic surface.
+- Away from the edit the surface stays where it was (0.02 mm median more
+  than 5 mm away); the corrected bone converges in 6 moves, under two
+  minutes.
 
 ## Reproducing
 
@@ -223,6 +286,8 @@ pip install ./python[docs]
 cd docs/scripts
 python phantoms.py                     # docs/results/phantoms.json, docs/images/phantom_*
 python knee.py /path/to/DICOM          # docs/results/knee.json, docs/images/knee_* (the CT is not public)
+python knee.py /path/to/DICOM --redraw --export OUT_DIR          # the volumetric labels as NIfTI, to correct
+python knee_correction.py /path/to/DICOM AUTOMATIC.nii.gz CORRECTED.nii.gz   # docs/images/knee_correction_*
 ```
 
 Each results file records the hash of the code and inputs that produced it;

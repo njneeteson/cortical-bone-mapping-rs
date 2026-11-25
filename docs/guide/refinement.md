@@ -105,3 +105,24 @@ rr = cbm.refine_segmentation(image, start, options=options, exclude=other_bones)
 ```
 
 {func}`~cortical_bone_mapping_rs.refine_bones` does this for you, bone by bone.
+
+## Correcting by hand
+
+Where the automatic result misses bone (a cortex too faint to grow into, for
+example), correct the mask roughly in a segmentation editor such as
+ITK-SNAP, MITK or 3D Slicer and refine again from it:
+
+1. Save `rr.periosteal_mask` (or one label per bone) in a format your
+   editor reads, on the image's grid.
+2. Paint roughly *outside* the missed bone; the start only has to contain
+   it. Refinement pulls the surface in onto the edge.
+3. Read the corrected mask back as an array and use it as the start:
+   `cbm.refine_segmentation(image, corrected, options=options)`, or
+   `cbm.refine_bones(..., bones=[edited])` for one bone of several. Hold the
+   scan's `ρc` and PSF at their earlier values (pass them in `options`) so
+   that the edit does not change them.
+
+The library takes and returns arrays; reading and writing files is up to
+you. The [examples](../examples.md#correcting-a-segmentation) show the whole
+loop on the clinical knee: a 1.9 cm³ correction refined in under two
+minutes, with the rest of the surface unchanged.

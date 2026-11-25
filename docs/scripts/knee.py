@@ -133,6 +133,9 @@ def run_method(method, img, sp, labels, starts, names):
 # ------------------------------------------------------------------ figures
 
 SIDES = ("right", "left")
+ENDO_COLOUR = "#ff4fd8"  # the fitted endosteal surfaces, distinct from every bone colour
+MOVED_MAX = 2.0  # mm: colour scale of the distance moved since the start (GIF)
+MOVED_CMAP = "plasma"
 
 
 def colour(name):
@@ -179,11 +182,11 @@ def draw_plane(ax, d, disp, side, plane, surfaces, endo=None, lw=1.8):
     other, lo, hi = plane_window(d, side, ax_i, k)
     ax.imshow(np.take(disp, k, ax_i), cmap="gray", vmin=-200, vmax=1300, aspect=sp[other[0]] / sp[other[1]])
     ax.contour(np.take(d["starts"] > 0, k, ax_i), [0.5], colors=START, linewidths=1.0, linestyles="--")
-    for bone, surf in surfaces.items():
-        if bone.startswith(side):
-            draw_segments(ax, section_segments(*surf, ax_i, k, sp), colour(bone), lw=lw)
-            if endo:
-                draw_segments(ax, section_segments(*endo[bone], ax_i, k, sp), colour(bone), lw=1.0, ls=":")
+    mine = [b for b in surfaces if b.startswith(side)]
+    for bone in mine if endo else []:  # under the periosteal surfaces
+        draw_segments(ax, section_segments(*endo[bone], ax_i, k, sp), ENDO_COLOUR, lw=0.9, ls=":")
+    for bone in mine:
+        draw_segments(ax, section_segments(*surfaces[bone], ax_i, k, sp), colour(bone), lw=lw)
     ax.set_xlim(lo[1], hi[1])
     if other[0] == 0:
         ax.set_ylim(lo[0], hi[0])  # axis 0 (foot to head) upwards
@@ -199,7 +202,7 @@ def legend(fig, endo=True):
     h = [Line2D([], [], color=START, ls="--", lw=2.5, label="start")]
     h += [Line2D([], [], color=c, lw=3, label=b) for b, c in BONE_COLOURS.items()]
     if endo:
-        h.append(Line2D([], [], color="0.35", ls=":", lw=2.5, label="fitted endosteal"))
+        h.append(Line2D([], [], color=ENDO_COLOUR, ls=":", lw=2.5, label="fitted endosteal (all bones)"))
     fig.legend(handles=h, loc="outside lower center", ncol=len(h), frameon=False)
 
 
@@ -288,48 +291,59 @@ def knee_box(d, side, pad_mm=10.0):
     return tuple(slice(int(x), int(y)) for x, y in zip(lo, hi))
 
 
-def render_cut(d, surf, side, plane, size=(620, 900)):
-    """One knee in 3D, cut at its sagittal section: the half towards the
-    camera, semi-transparent, standing on the image of the cut plane, with
-    each bone's section drawn on the image (where it meets the bone it was
-    fitted to)."""
+def render_cut(d, surf, start, side, plane, size=(700, 900), rim_mm=4.0):
+    """One knee in 3D, cut away at its sagittal section: the half of each
+    bone behind the cut, coloured by the distance its surface has moved since
+    the start, with the image on the cut face (the bones and a rim of soft
+    tissue around them) and each bone's section drawn on it."""
+    from scipy.spatial import cKDTree
+
     sp = np.array(d["spacing"])
     box = knee_box(d, side)
     grid = pv_image(d["img"][box], sp, np.array([s.start for s in box]) * sp)
+    near = ndimage.distance_transform_edt(d["starts"][box] == 0, sampling=sp) <= rim_mm
+    grid.point_data["near"] = near.ravel(order="C").astype(np.float32)
     x0 = plane[2] * sp[2]
     toward = -1.0 if side == "right" else 1.0  # camera on the lateral side
+    cut = grid.slice(normal="x", origin=(x0, 0.0, 0.0)).threshold(0.5, scalars="near")
     p = plotter(size)
-    p.add_mesh(grid.slice(normal="x", origin=(x0, 0.0, 0.0)), scalars="intensity", cmap="gray",
-               clim=(-200, 1300), show_scalar_bar=False, lighting=False)
+    p.add_mesh(cut, scalars="intensity", cmap="gray", clim=(-200, 1300), show_scalar_bar=False, lighting=False)
     for b, s in surf.items():
         if not b.startswith(side):
             continue
         mesh = pv_mesh(*s)
-        half = mesh.clip(normal="x", origin=(x0, 0, 0), invert=toward < 0)
+        mesh.point_data["moved"] = cKDTree(start[b][0][:, ::-1]).query(mesh.points)[0]
+        half = mesh.clip(normal="x", origin=(x0, 0, 0), invert=toward > 0)  # the half behind the cut
         if half.n_points:
-            p.add_mesh(half, color=colour(b), opacity=0.45, smooth_shading=True, ambient=0.25, specular=0.1)
+            p.add_mesh(half, scalars="moved", cmap=MOVED_CMAP, clim=(0.0, MOVED_MAX), show_scalar_bar=False,
+                       smooth_shading=True, ambient=0.35, diffuse=0.65, specular=0.0)
         # the section, nudged towards the camera so that it is drawn over the image
         line = mesh.slice(normal="x", origin=(x0, 0, 0))
         if line.n_points:
             p.add_mesh(line.translate((0.3 * toward, 0, 0)), color=colour(b), line_width=4)
-    p.view_vector((toward, -0.55, 0.3), viewup=(0, 0, 1))
-    p.camera.zoom(1.4)
+    p.view_vector((toward, -0.85, 0.3), viewup=(0, 0, 1))
+    p.camera.zoom(1.45)
     return screenshot(p)
 
 
 def gif_palette():
     """A fixed GIF palette: greys for the image, shades of each bone colour
-    and of the start colour, so that thin coloured lines keep their colour."""
-    from matplotlib import colors
+    and of the start colour (so that thin coloured lines keep their colour),
+    and the colour scale of the 3D view."""
+    from matplotlib import colormaps, colors
     from PIL import Image
 
-    pal = [(v, v, v) for v in np.linspace(0, 255, 176).round().astype(int)]
+    pal = [(v, v, v) for v in np.linspace(0, 255, 112).round().astype(int)]
     for c in list(BONE_COLOURS.values()) + [START]:
         rgb = np.array(colors.to_rgb(c))
-        for f in np.linspace(0.35, 1.0, 13):
+        for f in np.linspace(0.45, 1.0, 10):
             pal.append(tuple(int(round(255 * x)) for x in rgb * f))
         pal.append(tuple(int(round(255 * x)) for x in rgb + (1 - rgb) * 0.5))
         pal.append(tuple(int(round(255 * x)) for x in rgb + (1 - rgb) * 0.25))
+    cmap = colormaps[MOVED_CMAP]
+    for f in (0.55, 0.8, 1.0):
+        for v in np.linspace(0, 1, 28):
+            pal.append(tuple(int(round(255 * x * f)) for x in cmap(v)[:3]))
     pal = pal[:256] + [(0, 0, 0)] * (256 - len(pal))
     img = Image.new("P", (1, 1))
     img.putpalette([v for c in pal for v in c])
@@ -338,15 +352,19 @@ def gif_palette():
 
 def fig_gif(d, plt):
     """The default method's refinement of every bone, one frame per move:
-    each knee's three sections and its 3D view cut with the image on the cut."""
+    each knee's three sections, and its 3D view cut at the sagittal section
+    with the surfaces coloured by how far they have moved since the start."""
+    from matplotlib import cm, colors
     from PIL import Image
 
     bones = d["runs"][DEFAULT]["bones"]
     hist = {b: v["history"] for b, v in bones.items()}
+    start = {b: h[0] for b, h in hist.items()}
     n = max(len(h) for h in hist.values())
     disp = display_image(d)
     planes = {side: knee_planes(d, side) for side in SIDES}
     w = {side: widths(d, side, planes[side]) for side in SIDES}
+    sm = cm.ScalarMappable(norm=colors.Normalize(0.0, MOVED_MAX), cmap=MOVED_CMAP)
     frames = []
     for k in range(n):
         surf = {b: h[min(k, len(h) - 1)] for b, h in hist.items()}
@@ -357,9 +375,11 @@ def fig_gif(d, plt):
             for ax, plane in zip(axes, planes[side]):
                 draw_plane(ax, d, disp, side, plane, surf, lw=2.4)
                 ax.set_title(f"{plane[0]} section")
-            axes[3].imshow(render_cut(d, surf, side, planes[side][1]))
+            axes[3].imshow(render_cut(d, surf, start, side, planes[side][1]))
             axes[3].set_axis_off()
             axes[3].set_title("3D, cut at the sagittal section")
+            cax = axes[3].inset_axes([0.12, 0.0, 0.76, 0.035])
+            sf.colorbar(sm, cax=cax, orientation="horizontal", label="moved since the start (mm)")
             sf.supylabel(f"{side} knee", fontsize=16)
         moving = [b for b, h in hist.items() if k < len(h) - 1]
         status = "start" if k == 0 else f"move {k}: " + (f"{len(moving)} of {len(hist)} bones still moving"
@@ -370,7 +390,7 @@ def fig_gif(d, plt):
         frames.append(Image.fromarray(np.asarray(fig.canvas.buffer_rgba())[..., :3]))
         plt.close(fig)
     pal = gif_palette()
-    frames = [f.quantize(palette=pal, dither=Image.Dither.NONE) for f in frames]
+    frames = [f.quantize(palette=pal, dither=Image.Dither.FLOYDSTEINBERG) for f in frames]
     durations = ([1600] + [900] * (n - 2) + [3500]) if n > 1 else [3500]
     out = IMAGES / "knee_refinement.gif"
     frames[0].save(out, save_all=True, append_images=frames[1:], duration=durations, loop=0)
@@ -385,8 +405,81 @@ def draw(d):
     fig_gif(d, plt)
 
 
+# ------------------------------------------------------------------ export
+# File formats are the user's business; the library takes and returns arrays.
+# These two helpers only show how the masks go to and from a segmentation
+# editor (ITK-SNAP, MITK, 3D Slicer) as NIfTI, on the DICOM's own grid.
+
+LABEL_ORDER = ["right femur", "right tibia", "right patella", "right fibula",
+               "left femur", "left tibia", "left patella", "left fibula"]  # NIfTI label values 1-8
+
+
+def dicom_affine(folder):
+    """The NIfTI (RAS) affine of the series ``read_dicom`` reads, for an
+    array transposed to (column, row, slice)."""
+    import pydicom
+
+    series = {}
+    for f in sorted(Path(folder).rglob("*")):
+        if not f.is_file() or f.name.startswith("._") or f.name == "DICOMDIR":
+            continue
+        try:
+            ds = pydicom.dcmread(f, stop_before_pixels=True)
+        except Exception:
+            continue
+        if "ImagePositionPatient" in ds and "AXIAL" in list(ds.get("ImageType", ["AXIAL"])):
+            series.setdefault(ds.SeriesInstanceUID, []).append(ds)
+    ds = max(series.values(), key=len)
+    ds.sort(key=lambda s: float(s.ImagePositionPatient[2]))
+    iop = np.array(ds[0].ImageOrientationPatient, float)
+    dr, dc = (float(v) for v in ds[0].PixelSpacing)
+    p0 = np.array(ds[0].ImagePositionPatient, float)
+    lps = np.eye(4)
+    lps[:3, 0] = iop[:3] * dc  # along a row: increasing column
+    lps[:3, 1] = iop[3:] * dr  # down a column: increasing row
+    lps[:3, 2] = (np.array(ds[-1].ImagePositionPatient, float) - p0) / (len(ds) - 1)
+    lps[:3, 3] = p0
+    return np.diag([-1.0, -1.0, 1.0, 1.0]) @ lps  # DICOM LPS to NIfTI RAS
+
+
+def read_labels(path):
+    """A NIfTI label map as an array in (slice, row, column) order, and its affine."""
+    import nibabel as nib
+
+    im = nib.load(path)
+    return np.ascontiguousarray(np.asarray(im.dataobj).transpose(2, 1, 0)), im.affine
+
+
+def export_labels(d, dicom, out_dir):
+    """The default method's refined periosteal masks as one NIfTI label map
+    (values in ``LABEL_ORDER``) with an ITK-SNAP label description file."""
+    import nibabel as nib
+    from matplotlib import colors
+
+    labels = np.zeros(d["img"].shape, np.uint8)
+    for i, name in enumerate(LABEL_ORDER, start=1):
+        v, f = d["runs"][DEFAULT]["bones"][name]["peri"]
+        m = cbm.voxelize(v, f, labels.shape, d["spacing"], (0.0, 0.0, 0.0))
+        labels[m & (labels == 0)] = i
+    affine = dicom_affine(dicom)
+    im = nib.Nifti1Image(np.ascontiguousarray(labels.transpose(2, 1, 0)), affine)
+    im.set_qform(affine, code=1)
+    im.set_sform(affine, code=1)
+    out = Path(out_dir) / f"knee_{DEFAULT}_labels.nii.gz"
+    nib.save(im, out)
+    rgb = {b: tuple(int(round(255 * x)) for x in colors.to_rgb(c)) for b, c in BONE_COLOURS.items()}
+    lines = ['    0     0    0    0        0  0  0    "Clear Label"']
+    lines += [f'{i:5d} {r:5d} {g:4d} {b:4d}        1  1  1    "{name}"'
+              for i, name in enumerate(LABEL_ORDER, start=1) for r, g, b in [rgb[name.split()[-1]]]]
+    (Path(out_dir) / "knee_labels.txt").write_text("\n".join(lines) + "\n")
+    print("wrote", out, "and", Path(out_dir) / "knee_labels.txt")
+
+
 def main():
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    """``knee.py DICOM_DIR [--redraw] [--export OUT_DIR]``"""
+    args = sys.argv[1:]
+    export = args[args.index("--export") + 1] if "--export" in args else None
+    args = [a for a in args if not a.startswith("--") and a != export]
     if not args:
         raise SystemExit(__doc__)
     inputs = dict(INPUTS, dicom=Path(args[0]).name)
@@ -406,6 +499,8 @@ def main():
     else:
         d = saved["data"]
     draw(d)
+    if export:
+        export_labels(d, args[0], export)
 
 
 if __name__ == "__main__":
