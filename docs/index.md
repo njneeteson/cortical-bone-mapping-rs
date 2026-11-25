@@ -6,18 +6,25 @@ periosteal and endosteal surfaces, from CT and HR-pQCT images.
 
 At every vertex of the bone's outer surface, CBM samples a density profile
 along the inward normal and fits a blurred three-level step model (soft
-tissue, cortex, trabecular bone). The result at every surface point is the
-cortical thickness `t`, the position `m` of the cortical mid-line, the blur
-`σ`, and the soft-tissue and trabecular densities `ρs` and `ρb`.
+tissue, cortex, trabecular bone): the cortical thickness `t`, the position
+`m` of the cortex, the blur `σ` and the soft-tissue and trabecular
+densities.
 
-![A profile and its fitted model](images/profile_fit.png)
+![Volumetric refinement of both knees of a clinical CT](images/knee_refinement.gif)
 
-The package implements the original method of Treece et al. (2010), the
-global multigrid and spatially regularised fits of our 2025 paper (Neeteson
-& Boyd, *Comput. Biol. Med.*), and three extensions: a curvature penalty on
-the fitted surfaces, a volumetric model that fits every voxel of a band
-around the surface, and segmentation refinement, which moves a rough
-segmentation onto the fitted periosteum.
+*Refinement of all eight bones of a clinical CT of both knees, from a rough
+automatic segmentation (yellow dashed) to the fitted periosteal surfaces,
+one frame per move ([examples](examples.md#clinical-knee-ct)).*
+
+| method | | |
+|---|---|---|
+| local | one fit per profile | Treece et al. 2010 |
+| multigrid | control points, coarse to fine | Neeteson & Boyd 2025 |
+| regularised | spatially regularised fit | Neeteson & Boyd 2025 |
+| volumetric | every voxel of a band around the surface, one PSF per scan | extension |
+
+Plus a curvature penalty on the fitted surfaces and segmentation refinement
+(extensions).
 
 ```python
 import cortical_bone_mapping_rs as cbm
@@ -29,19 +36,16 @@ rr.result.thickness                                         # mm, per surface no
 rr.periosteal_mask, rr.endosteal_mask, rr.cortical_mask
 ```
 
-![A rough segmentation (red) tightening onto the periosteum](images/refinement.gif)
-
 ## Where to start
 
-- [Installation](guide/install.md), then the [quick start](guide/quickstart.md),
-  which runs every step on a phantom.
-- [Choosing a method](guide/methods.md) and
-  [scanners and parameters](guide/scanners.md) for your data.
-- [Automatic segmentation](guide/refinement.md) if you have no segmentation,
-  and [several bones](guide/several_bones.md) for a scan with more than one.
-- The [API reference](api.md) for every function and option.
-- [Method](method.md) for the model, the solvers and the extensions, and
-  the validation pages for how well each part works.
+- [Installation](guide/install.md), then the [quick start](guide/quickstart.md).
+- [Choosing a method](guide/methods.md) and [scanners and
+  parameters](guide/scanners.md).
+- [Automatic segmentation](guide/refinement.md), and [several
+  bones](guide/several_bones.md) in one scan.
+- [Examples](examples.md): every method on phantoms and on a clinical CT of
+  both knees. [Benchmarks](benchmarks.md): run time and memory.
+- [Method](method.md) and the [API reference](api.md).
 
 ```{toctree}
 :hidden:
@@ -59,24 +63,18 @@ guide/rust
 
 ```{toctree}
 :hidden:
-:caption: Reference
+:caption: Results
 
-api
+examples
+benchmarks
 ```
 
 ```{toctree}
 :hidden:
-:caption: Method and validation
+:caption: Reference
 
 method
-examples
-segmentation
-clinical_ct
-volumetric_model
-volumetric_validation
-volumetric_refinement
-refinement_experiments
-performance
+api
 ```
 
 ## Citing

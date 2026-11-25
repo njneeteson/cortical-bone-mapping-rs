@@ -1,0 +1,486 @@
+{
+  "provenance": {
+    "source_hash": "69b1861ecd273af7",
+    "commit": "e70a317",
+    "uncommitted_changes": true,
+    "version": "0.1.0",
+    "date": "2026-11-25",
+    "machine": "Windows 11, AMD64 Family 26 Model 68 Stepping 0, AuthenticAMD",
+    "inputs": {
+      "scaling_slices": [
+        8,
+        32,
+        128
+      ],
+      "reference_slices": [
+        8,
+        32
+      ],
+      "bonelab_commit": "e0cf8e4"
+    }
+  },
+  "scaling": [
+    {
+      "method": "local",
+      "nodes": 7392,
+      "time": 0.409109,
+      "peak_bytes": 18653856,
+      "rmse": 0.019828,
+      "iterations": 12,
+      "cg_iterations": 0,
+      "timings": {
+        "surface": 0.03609,
+        "sampling": 0.003492,
+        "global fit": 0.344539,
+        "local fit": 0.017054
+      }
+    },
+    {
+      "method": "multigrid",
+      "nodes": 7392,
+      "time": 1.133559,
+      "peak_bytes": 18653856,
+      "rmse": 0.008937,
+      "iterations": 32,
+      "cg_iterations": 425,
+      "timings": {
+        "surface": 0.04738,
+        "sampling": 0.003559,
+        "global fit": 0.34192,
+        "multigrid fit": 0.734421,
+        "solver: evaluation": 0.539554,
+        "solver: Gauss-Newton products": 0.131049,
+        "solver: preconditioner": 0.031925,
+        "solver: other": 0.020279
+      }
+    },
+    {
+      "method": "regularized k=64",
+      "nodes": 7392,
+      "time": 0.652186,
+      "peak_bytes": 20672019,
+      "rmse": 0.01518,
+      "iterations": 7,
+      "cg_iterations": 50,
+      "timings": {
+        "surface": 0.037108,
+        "sampling": 0.003906,
+        "global fit": 0.355781,
+        "smoothing operator": 0.004242,
+        "regularized fit": 0.249031,
+        "solver: evaluation": 0.140293,
+        "solver: Gauss-Newton products": 0.07746,
+        "solver: preconditioner": 0.01227,
+        "solver: other": 0.013724
+      }
+    },
+    {
+      "method": "regularized k=500",
+      "nodes": 7392,
+      "time": 1.100247,
+      "peak_bytes": 46456835,
+      "rmse": 0.013926,
+      "iterations": 7,
+      "cg_iterations": 51,
+      "timings": {
+        "surface": 0.037125,
+        "sampling": 0.004672,
+        "global fit": 0.351249,
+        "smoothing operator": 0.024832,
+        "regularized fit": 0.700457,
+        "solver: evaluation": 0.184574,
+        "solver: Gauss-Newton products": 0.455581,
+        "solver: preconditioner": 0.014579,
+        "solver: other": 0.017294
+      }
+    },
+    {
+      "method": "reg+curvature",
+      "nodes": 7392,
+      "time": 1.774411,
+      "peak_bytes": 27070091,
+      "rmse": 0.007815,
+      "iterations": 7,
+      "cg_iterations": 328,
+      "timings": {
+        "surface": 0.035713,
+        "sampling": 0.003608,
+        "global fit": 0.33475,
+        "smoothing operator": 0.004261,
+        "regularized fit": 1.39394,
+        "solver: evaluation": 0.166942,
+        "solver: Gauss-Newton products": 1.094018,
+        "solver: preconditioner": 0.063245,
+        "solver: other": 0.056947
+      }
+    },
+    {
+      "method": "volumetric",
+      "nodes": 7392,
+      "time": 28.703468,
+      "peak_bytes": 91766401,
+      "rmse": 0.031635,
+      "iterations": 33,
+      "cg_iterations": 1645,
+      "timings": {
+        "surface": 0.036566,
+        "band": 0.319254,
+        "global fit": 0.098382,
+        "volumetric fit": 28.144937,
+        "reliability": 0.078613,
+        "solver: evaluation": 0.464728,
+        "solver: Gauss-Newton products": 27.182667,
+        "solver: preconditioner": 0.278564,
+        "solver: other": 0.30147
+      }
+    },
+    {
+      "method": "local",
+      "nodes": 32736,
+      "time": 0.613001,
+      "peak_bytes": 34073676,
+      "rmse": 0.019341,
+      "iterations": 13,
+      "cg_iterations": 0,
+      "timings": {
+        "surface": 0.065255,
+        "sampling": 0.008102,
+        "global fit": 0.432528,
+        "local fit": 0.077484
+      }
+    },
+    {
+      "method": "multigrid",
+      "nodes": 32736,
+      "time": 1.547165,
+      "peak_bytes": 43064972,
+      "rmse": 0.011847,
+      "iterations": 30,
+      "cg_iterations": 443,
+      "timings": {
+        "surface": 0.063495,
+        "sampling": 0.006903,
+        "global fit": 0.431277,
+        "multigrid fit": 1.017752,
+        "solver: evaluation": 0.664663,
+        "solver: Gauss-Newton products": 0.203697,
+        "solver: preconditioner": 0.082901,
+        "solver: other": 0.024575
+      }
+    },
+    {
+      "method": "regularized k=64",
+      "nodes": 32736,
+      "time": 0.965535,
+      "peak_bytes": 80174947,
+      "rmse": 0.015325,
+      "iterations": 7,
+      "cg_iterations": 53,
+      "timings": {
+        "surface": 0.066807,
+        "sampling": 0.006389,
+        "global fit": 0.430654,
+        "smoothing operator": 0.015237,
+        "regularized fit": 0.433847,
+        "solver: evaluation": 0.174038,
+        "solver: Gauss-Newton products": 0.175484,
+        "solver: preconditioner": 0.039821,
+        "solver: other": 0.025938
+      }
+    },
+    {
+      "method": "regularized k=500",
+      "nodes": 32736,
+      "time": 1.817129,
+      "peak_bytes": 194356595,
+      "rmse": 0.014237,
+      "iterations": 7,
+      "cg_iterations": 50,
+      "timings": {
+        "surface": 0.084205,
+        "sampling": 0.011722,
+        "global fit": 0.436546,
+        "smoothing operator": 0.104678,
+        "regularized fit": 1.255964,
+        "solver: evaluation": 0.278111,
+        "solver: Gauss-Newton products": 0.794464,
+        "solver: preconditioner": 0.039294,
+        "solver: other": 0.027361
+      }
+    },
+    {
+      "method": "reg+curvature",
+      "nodes": 32736,
+      "time": 3.025748,
+      "peak_bytes": 107497399,
+      "rmse": 0.007824,
+      "iterations": 7,
+      "cg_iterations": 280,
+      "timings": {
+        "surface": 0.064202,
+        "sampling": 0.006797,
+        "global fit": 0.431557,
+        "smoothing operator": 0.016172,
+        "regularized fit": 2.494438,
+        "solver: evaluation": 0.233992,
+        "solver: Gauss-Newton products": 1.907614,
+        "solver: preconditioner": 0.191711,
+        "solver: other": 0.091413
+      }
+    },
+    {
+      "method": "volumetric",
+      "nodes": 32736,
+      "time": 11.993211,
+      "peak_bytes": 404270877,
+      "rmse": 0.008192,
+      "iterations": 30,
+      "cg_iterations": 197,
+      "timings": {
+        "surface": 0.061016,
+        "band": 1.585103,
+        "global fit": 0.619525,
+        "volumetric fit": 9.142837,
+        "reliability": 0.452845,
+        "solver: evaluation": 1.416419,
+        "solver: Gauss-Newton products": 7.917851,
+        "solver: preconditioner": 0.177322,
+        "solver: other": 0.129922
+      }
+    },
+    {
+      "method": "local",
+      "nodes": 134112,
+      "time": 1.876478,
+      "peak_bytes": 103045396,
+      "rmse": 0.019101,
+      "iterations": 13,
+      "cg_iterations": 0,
+      "timings": {
+        "surface": 0.169398,
+        "sampling": 0.02091,
+        "global fit": 1.246744,
+        "local fit": 0.318701
+      }
+    },
+    {
+      "method": "multigrid",
+      "nodes": 134112,
+      "time": 4.644698,
+      "peak_bytes": 140024846,
+      "rmse": 0.012608,
+      "iterations": 32,
+      "cg_iterations": 454,
+      "timings": {
+        "surface": 0.169015,
+        "sampling": 0.020398,
+        "global fit": 1.197693,
+        "multigrid fit": 3.142888,
+        "solver: evaluation": 1.753926,
+        "solver: Gauss-Newton products": 0.91782,
+        "solver: preconditioner": 0.244527,
+        "solver: other": 0.050864
+      }
+    },
+    {
+      "method": "regularized k=64",
+      "nodes": 134112,
+      "time": 3.37963,
+      "peak_bytes": 317810227,
+      "rmse": 0.015218,
+      "iterations": 7,
+      "cg_iterations": 55,
+      "timings": {
+        "surface": 0.172767,
+        "sampling": 0.02296,
+        "global fit": 1.20916,
+        "smoothing operator": 0.060591,
+        "regularized fit": 1.85809,
+        "solver: evaluation": 0.589005,
+        "solver: Gauss-Newton products": 0.956757,
+        "solver: preconditioner": 0.131306,
+        "solver: other": 0.105848
+      }
+    },
+    {
+      "method": "regularized k=500",
+      "nodes": 134112,
+      "time": 5.814743,
+      "peak_bytes": 785594403,
+      "rmse": 0.014081,
+      "iterations": 7,
+      "cg_iterations": 50,
+      "timings": {
+        "surface": 0.17147,
+        "sampling": 0.021271,
+        "global fit": 1.207432,
+        "smoothing operator": 0.409118,
+        "regularized fit": 4.294265,
+        "solver: evaluation": 0.880389,
+        "solver: Gauss-Newton products": 2.739852,
+        "solver: preconditioner": 0.117973,
+        "solver: other": 0.098651
+      }
+    },
+    {
+      "method": "reg+curvature",
+      "nodes": 134112,
+      "time": 16.498598,
+      "peak_bytes": 429100299,
+      "rmse": 0.007627,
+      "iterations": 7,
+      "cg_iterations": 285,
+      "timings": {
+        "surface": 0.1662,
+        "sampling": 0.019964,
+        "global fit": 1.20957,
+        "smoothing operator": 0.070053,
+        "regularized fit": 14.979942,
+        "solver: evaluation": 1.01687,
+        "solver: Gauss-Newton products": 12.881412,
+        "solver: preconditioner": 0.512722,
+        "solver: other": 0.263424
+      }
+    },
+    {
+      "method": "volumetric",
+      "nodes": 134112,
+      "time": 53.177661,
+      "peak_bytes": 1996833185,
+      "rmse": 0.006649,
+      "iterations": 30,
+      "cg_iterations": 205,
+      "timings": {
+        "surface": 0.167386,
+        "band": 8.153722,
+        "global fit": 2.875224,
+        "volumetric fit": 39.171808,
+        "reliability": 2.12827,
+        "solver: evaluation": 6.923877,
+        "solver: Gauss-Newton products": 33.43337,
+        "solver: preconditioner": 0.496827,
+        "solver: other": 0.451003
+      }
+    }
+  ],
+  "bonelab": [
+    {
+      "method": "local",
+      "nodes": 7392,
+      "bonelab_time": 52.81210888877045,
+      "bonelab_time_extrapolated_from": 400,
+      "bonelab_peak_bytes": 389707,
+      "bonelab_rmse": 0.0200780853295342,
+      "rust_fit_time": 0.3646531,
+      "rust_total_time": 0.42368829995393753,
+      "rust_rmse": 0.01982764922930728
+    },
+    {
+      "method": "multigrid",
+      "nodes": 7392,
+      "bonelab_time": 16.822358099976555,
+      "bonelab_peak_bytes": 51900363,
+      "bonelab_rmse": 0.014090776427900853,
+      "rust_fit_time": 1.7420683000000001,
+      "rust_total_time": 1.095364500011783,
+      "rust_rmse": 0.008937338090056557
+    },
+    {
+      "method": "regularized k=64",
+      "nodes": 7392,
+      "bonelab_time": 4.506808099977206,
+      "bonelab_peak_bytes": 62157764,
+      "bonelab_rmse": 0.018649759845089944,
+      "rust_fit_time": 0.7675528,
+      "rust_total_time": 0.6021139000076801,
+      "rust_rmse": 0.01517951716647051
+    },
+    {
+      "method": "regularized k=500",
+      "nodes": 7392,
+      "bonelab_time": 4.592874499969184,
+      "bonelab_peak_bytes": 83164673,
+      "bonelab_rmse": 0.017709342997806896,
+      "rust_fit_time": 1.6827204,
+      "rust_total_time": 1.062726499978453,
+      "rust_rmse": 0.013926371371526709
+    },
+    {
+      "method": "local",
+      "nodes": 32736,
+      "bonelab_time": 203.13869769696146,
+      "bonelab_time_extrapolated_from": 400,
+      "bonelab_peak_bytes": 67564,
+      "bonelab_rmse": 0.01845390806221154,
+      "rust_fit_time": 0.4973646,
+      "rust_total_time": 0.5982614000095055,
+      "rust_rmse": 0.019341031028982693
+    },
+    {
+      "method": "multigrid",
+      "nodes": 32736,
+      "bonelab_time": 62.46435670001665,
+      "bonelab_peak_bytes": 228862079,
+      "bonelab_rmse": 0.016002645986586427,
+      "rust_fit_time": 2.3293436,
+      "rust_total_time": 1.4891011000145227,
+      "rust_rmse": 0.011844729188525681
+    },
+    {
+      "method": "regularized k=64",
+      "nodes": 32736,
+      "bonelab_time": 10.923559800023213,
+      "bonelab_peak_bytes": 274575236,
+      "bonelab_rmse": 0.018681513033766303,
+      "rust_fit_time": 1.3218107000000001,
+      "rust_total_time": 0.9724267999990843,
+      "rust_rmse": 0.015324799905210773
+    }
+  ],
+  "scipy": [
+    {
+      "method": "local",
+      "nodes": 7392,
+      "rust_time": 0.4137713999953121,
+      "scipy_time": 6.890519327703863,
+      "scipy_time_extrapolated_from": 1000,
+      "rust_rmse": 0.01982764922930728,
+      "scipy_rmse": 0.020066114907291575,
+      "median_abs_difference": 3.986069729844388e-08
+    },
+    {
+      "method": "regularized k=64",
+      "nodes": 7392,
+      "rust_time": 0.6063462000456639,
+      "scipy_time": 10.027257299982011,
+      "scipy_peak_bytes": 108289274,
+      "scipy_iterations": 214,
+      "rust_cost": 2920.5452669940473,
+      "scipy_cost": 2920.5452818581016,
+      "rust_rmse": 0.01517951716647051,
+      "scipy_rmse": 0.015179591154520743
+    },
+    {
+      "method": "local",
+      "nodes": 32736,
+      "rust_time": 0.597808399994392,
+      "scipy_time": 29.917535153601317,
+      "scipy_time_extrapolated_from": 1000,
+      "rust_rmse": 0.019341031028982693,
+      "scipy_rmse": 0.020093727305239884,
+      "median_abs_difference": 4.1557110697088007e-08
+    },
+    {
+      "method": "regularized k=64",
+      "nodes": 32736,
+      "rust_time": 0.9788409000029787,
+      "scipy_time": 69.75335660000565,
+      "scipy_peak_bytes": 502176439,
+      "scipy_iterations": 330,
+      "rust_cost": 2842.385714774208,
+      "scipy_cost": 2842.3857598844797,
+      "rust_rmse": 0.015324799905210773,
+      "scipy_rmse": 0.015324124366934115
+    }
+  ]
+}

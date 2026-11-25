@@ -1,0 +1,204 @@
+{
+  "provenance": {
+    "source_hash": "6c26801ec6ecc9a1",
+    "commit": "e70a317",
+    "uncommitted_changes": true,
+    "version": "0.1.0",
+    "date": "2026-11-25",
+    "machine": "Windows 11, AMD64 Family 26 Model 68 Stepping 0, AuthenticAMD",
+    "inputs": {
+      "sites": {
+        "distal_radius": {
+          "title": "Distal radius (HR-pQCT, 61 \u00b5m)",
+          "sampling": {
+            "outside": 1.0,
+            "inside": 2.5,
+            "normal_constraint": "in_plane",
+            "normal_axis": 0
+          },
+          "k": 500,
+          "tied": true,
+          "spacings": [
+            7.7696,
+            3.8848,
+            1.9424,
+            0.9712
+          ]
+        },
+        "distal_tibia": {
+          "title": "Distal tibia (HR-pQCT, 61 \u00b5m)",
+          "sampling": {
+            "outside": 1.0,
+            "inside": 2.5,
+            "normal_constraint": "in_plane",
+            "normal_axis": 0
+          },
+          "k": 500,
+          "tied": true,
+          "spacings": [
+            7.7696,
+            3.8848,
+            1.9424,
+            0.9712
+          ]
+        },
+        "proximal_femur": {
+          "title": "Proximal femur (clinical CT, 0.75 \u00d7 0.75 \u00d7 1 mm)",
+          "sampling": {
+            "outside": 2.5,
+            "inside": 7.0
+          },
+          "k": 128,
+          "tied": false,
+          "spacings": [
+            8.0,
+            4.0,
+            2.0
+          ]
+        }
+      },
+      "refine": {
+        "refine_iterations": 50
+      },
+      "seed": 1
+    }
+  },
+  "distal_radius": {
+    "local": {
+      "moves": 5,
+      "converged": true,
+      "time_s": 18.773734999995213,
+      "nodes": 41320,
+      "rho_c": 970.9797668457031,
+      "thickness_bias_mm": 0.04668344752163202,
+      "thickness_rmse_mm": 0.15377674339970857,
+      "periosteum_rmse_mm": 0.009497213958186725,
+      "cortex_dice": 0.9479238032713819
+    },
+    "multigrid": {
+      "moves": 4,
+      "converged": true,
+      "time_s": 19.895247799984645,
+      "nodes": 42229,
+      "rho_c": 970.9797668457031,
+      "thickness_bias_mm": 0.01026173414161673,
+      "thickness_rmse_mm": 0.03942788595530503,
+      "periosteum_rmse_mm": 0.0065664297911023515,
+      "cortex_dice": 0.98115607220536
+    },
+    "regularized": {
+      "moves": 5,
+      "converged": true,
+      "time_s": 26.896045799949206,
+      "nodes": 41433,
+      "rho_c": 970.9797668457031,
+      "thickness_bias_mm": 0.012288677563885433,
+      "thickness_rmse_mm": 0.06630968299705874,
+      "periosteum_rmse_mm": 0.009990439887563627,
+      "cortex_dice": 0.9665046366224517
+    },
+    "volumetric": {
+      "moves": 4,
+      "converged": true,
+      "time_s": 85.59801130002597,
+      "nodes": 42204,
+      "rho_c": 970.9797668457031,
+      "thickness_bias_mm": 0.0018374838961921012,
+      "thickness_rmse_mm": 0.026205984847843974,
+      "periosteum_rmse_mm": 0.005481890037637027,
+      "cortex_dice": 0.9855056366968401
+    }
+  },
+  "distal_tibia": {
+    "local": {
+      "moves": 6,
+      "converged": true,
+      "time_s": 66.56583360000513,
+      "nodes": 71436,
+      "rho_c": 947.0514526367188,
+      "thickness_bias_mm": 0.04843613359028935,
+      "thickness_rmse_mm": 0.18971177499301925,
+      "periosteum_rmse_mm": 0.01377776706729759,
+      "cortex_dice": 0.9571539973729389
+    },
+    "multigrid": {
+      "moves": 5,
+      "converged": true,
+      "time_s": 65.56410159997176,
+      "nodes": 72670,
+      "rho_c": 947.0514526367188,
+      "thickness_bias_mm": -0.004980648302376385,
+      "thickness_rmse_mm": 0.043328573411562786,
+      "periosteum_rmse_mm": 0.007739443007119435,
+      "cortex_dice": 0.9846645711372168
+    },
+    "regularized": {
+      "moves": 6,
+      "converged": true,
+      "time_s": 83.95696440001484,
+      "nodes": 71371,
+      "rho_c": 947.0514526367188,
+      "thickness_bias_mm": 0.013354479300591785,
+      "thickness_rmse_mm": 0.09743387664874144,
+      "periosteum_rmse_mm": 0.013507350553880736,
+      "cortex_dice": 0.9698660053545234
+    },
+    "volumetric": {
+      "moves": 6,
+      "converged": true,
+      "time_s": 342.63647309999214,
+      "nodes": 72404,
+      "rho_c": 947.2226104736328,
+      "thickness_bias_mm": -0.005014049286810656,
+      "thickness_rmse_mm": 0.034466755222763434,
+      "periosteum_rmse_mm": 0.007306683935299702,
+      "cortex_dice": 0.9873347587954744
+    }
+  },
+  "proximal_femur": {
+    "local": {
+      "moves": 2,
+      "converged": true,
+      "time_s": 1.5755493000033312,
+      "nodes": 29383,
+      "rho_c": 1543.3538818359375,
+      "thickness_bias_mm": 0.16814204458932422,
+      "thickness_rmse_mm": 0.22424270731825846,
+      "periosteum_rmse_mm": 0.05815895207817188,
+      "cortex_dice": 0.930532526786429
+    },
+    "multigrid": {
+      "moves": 2,
+      "converged": true,
+      "time_s": 3.0360797000466846,
+      "nodes": 29407,
+      "rho_c": 1543.3538818359375,
+      "thickness_bias_mm": 0.1640248868285702,
+      "thickness_rmse_mm": 0.19575591794727448,
+      "periosteum_rmse_mm": 0.044811785724542995,
+      "cortex_dice": 0.931007663273476
+    },
+    "regularized": {
+      "moves": 2,
+      "converged": true,
+      "time_s": 2.952691300015431,
+      "nodes": 29398,
+      "rho_c": 1543.3538818359375,
+      "thickness_bias_mm": 0.14934038230495367,
+      "thickness_rmse_mm": 0.16677347759399616,
+      "periosteum_rmse_mm": 0.04642483801033222,
+      "cortex_dice": 0.9347229714994089
+    },
+    "volumetric": {
+      "moves": 2,
+      "converged": true,
+      "time_s": 8.256613700010348,
+      "nodes": 29447,
+      "rho_c": 1543.3538818359375,
+      "thickness_bias_mm": 0.1254182475586394,
+      "thickness_rmse_mm": 0.13757688018459038,
+      "periosteum_rmse_mm": 0.03947307785876138,
+      "cortex_dice": 0.9411927813850313
+    }
+  }
+}

@@ -120,7 +120,7 @@ fn main() {
     }
 }
 
-/// Every method, with the settings of the table in `docs/performance.md`.
+/// Every method, with the settings of the benchmarks page of the documentation.
 fn all_methods() -> Vec<(&'static str, Method)> {
     vec![
         ("local", Method::Local),

@@ -1,4 +1,4 @@
-//! Reliability of the volumetric fit (`docs/volumetric_model.md`, section 6).
+//! Reliability of the volumetric fit.
 //!
 //! * **Noise.** The voxels in the outer half of the outside band sample soft
 //!   tissue, where the model is the soft-tissue level, so their residuals

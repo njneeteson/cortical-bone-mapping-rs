@@ -259,8 +259,7 @@ pub enum AxialBlur {
     Fixed(f64),
 }
 
-/// Options of the volumetric model ([`Method::Volumetric`]; extension, see
-/// `docs/volumetric_model.md`).
+/// Options of the volumetric model ([`Method::Volumetric`]; extension).
 #[derive(Clone, Debug, PartialEq)]
 pub struct VolumetricOptions {
     /// The scanner axis (array axis) along which the PSF has `σ_z`.
@@ -280,19 +279,17 @@ pub struct VolumetricOptions {
     /// (the regularised method's penalty, with the same operator and
     /// weighting, `λ ρc² / (N t0²)`; default 1, as Table 1 of Neeteson &
     /// Boyd 2025). With it the refinement of the knee CT converges, where the
-    /// curvature penalty alone let the surface sink into marrow
-    /// (`docs/volumetric_refinement.md`).
+    /// curvature penalty alone let the surface sink into marrow.
     pub edge_lambda: f64,
     /// One global soft-tissue density `ρs`, with `ρb` a field. Soft tissue
     /// varies less than marrow, and a global `ρs` keeps a node whose band
     /// lies inside the bone from explaining bone outside its surface as soft
-    /// tissue (which lets the surface sink; `docs/volumetric_refinement.md`).
+    /// tissue (which lets the surface sink).
     pub global_soft_tissue: bool,
     /// Curvature penalty on the fitted surfaces (on `m`, `t`), beside the
     /// edge smoothing: by default the change mode at weight 0.3, which with
     /// the edge smoothing gave the most precise thickness on the noisy
-    /// cylinder phantom and converged on the knee CT
-    /// (`docs/volumetric_refinement.md`, section 6).
+    /// cylinder phantom and converged on the knee CT.
     pub curvature: Option<CurvatureOptions>,
     /// Use every `voxel_stride`-th voxel along each axis (1 = all).
     pub voxel_stride: usize,

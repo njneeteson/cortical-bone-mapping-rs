@@ -10,19 +10,22 @@ tied together. Set the method with `method=`.
 | `"regularized"` | `m, t, σ` per node with a spatial smoothness penalty (Neeteson & Boyd 2025) | the default; the presets use it |
 | `"volumetric"` | every voxel of a band around the surface, with one PSF for the scan (extension) | the most accurate thickness, at a few times the cost |
 
-On smooth phantoms the spatially constrained methods have 1.5–5 times less
-thickness error than the local fit ([examples](../examples.md)). On phantoms
-of the distal radius and tibia at HR-pQCT resolution the volumetric model is
-nearly unbiased, with about a third of the regularised fit's error, and at
-clinical resolution it is slightly more accurate than the best 1D fit
-([volumetric validation](../volumetric_validation.md)). Its accuracy on real
-HR-pQCT scans is still to be measured.
+From the [examples](../examples.md):
+
+- On phantoms of the distal radius and tibia at HR-pQCT resolution, the
+  volumetric model has the lowest thickness error (26–34 µm), about 6 times
+  less than the local fit; at clinical resolution it is also the most
+  accurate.
+- On a clinical CT of both knees, only the regularised and volumetric fits
+  refine every bone to convergence; the volumetric model leaves the least
+  bone outside its surface.
+- Accuracy on real HR-pQCT scans is still to be measured.
 
 ## Cost
 
 On 134 000 surface nodes (a cylinder 8 mm in radius and 128 slices long at
-HR-pQCT resolution, 16 threads), the 1D methods take 2–16 s and 0.1–0.8 GB,
-and the volumetric model 51 s and 2 GB ([performance](../performance.md)).
+HR-pQCT resolution, 16 threads), the 1D methods take 2–17 s and 0.1–0.8 GB,
+and the volumetric model 53 s and 2 GB ([benchmarks](../benchmarks.md)).
 Memory grows with `reg_neighbours`; `reg_neighbours=64` uses less than half
 the memory of the paper's 500 at nearly the same accuracy. Refinement repeats the fit a few to a
 dozen times, though later fits are cheaper.
@@ -88,8 +91,8 @@ res.volumetric["std_error_t"]                           # per-node standard erro
   the fit that comes from the data and the misfit relative to the noise, to
   find where a value is poorly determined.
 
-[Method: volumetric model](../method.md#volumetric-model) and the
-[design note](../volumetric_model.md) describe it in full.
+[Method: volumetric model](../method.md#volumetric-model) describes it in
+full.
 
 ## Blur in the 1D methods
 

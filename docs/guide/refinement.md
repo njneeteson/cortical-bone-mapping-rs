@@ -38,21 +38,21 @@ periosteal, cortical and trabecular masks.
 
 ## Which fit to refine with
 
-`refine_segmentation` takes every option of the fit. On phantoms built from
-published HR-pQCT values, refinement converged from a convex hull with every
-method; the volumetric model was the most accurate (thickness RMSE 34–47 µm,
-against 70–147 µm for Buie's method) and was not drawn towards a
-neighbouring bone 0.5 mm away
-([automatic segmentation](../segmentation.md)). The regularised fit with
-the curvature penalty is cheaper:
+`refine_segmentation` takes every option of the fit. In the
+[examples](../examples.md):
+
+- on the HR-pQCT phantoms every method converges from a convex hull, and the
+  volumetric model is the most accurate (thickness RMSE 26–34 µm);
+- on the clinical knee CT only the regularised and volumetric fits converge
+  on every bone; use one of them.
+
+The regularised fit is the cheaper of the two:
 
 ```python
-rr = cbm.refine_segmentation(image, start, options=options,
-                             curvature="change", curvature_weight=1.0)
+rr = cbm.refine_segmentation(image, start, options=options, method="regularized")
 ```
 
-These phantom results show that the pipeline works; its accuracy on real
-HR-pQCT scans is still to be measured.
+Accuracy on real HR-pQCT scans is still to be measured.
 
 ## Refinement options
 
@@ -75,8 +75,7 @@ rr = cbm.refine_segmentation(image, start, options=options, refine=refine)
 | `verbose` | on | one line per move on stderr |
 
 Level-set remeshing and freezing are on by default because they made
-refinement converge on real data
-([refinement experiments](../refinement_experiments.md)).
+refinement converge on the clinical knee CT.
 
 The scanner's parameters (an estimated `ρc`, the volumetric PSF) are held
 fixed during a pass and re-estimated on the refined surface between passes
@@ -106,3 +105,24 @@ rr = cbm.refine_segmentation(image, start, options=options, exclude=other_bones)
 ```
 
 {func}`~cortical_bone_mapping_rs.refine_bones` does this for you, bone by bone.
+
+## Correcting by hand
+
+Where the automatic result misses bone (a cortex too faint to grow into, for
+example), correct the mask roughly in a segmentation editor such as
+ITK-SNAP, MITK or 3D Slicer and refine again from it:
+
+1. Save `rr.periosteal_mask` (or one label per bone) in a format your
+   editor reads, on the image's grid.
+2. Paint roughly *outside* the missed bone; the start only has to contain
+   it. Refinement pulls the surface in onto the edge.
+3. Read the corrected mask back as an array and use it as the start:
+   `cbm.refine_segmentation(image, corrected, options=options)`, or
+   `cbm.refine_bones(..., bones=[edited])` for one bone of several. Hold the
+   scan's `ρc` and PSF at their earlier values (pass them in `options`) so
+   that the edit does not change them.
+
+The library takes and returns arrays; reading and writing files is up to
+you. The [examples](../examples.md#correcting-a-segmentation) show the whole
+loop on the clinical knee: a 1.9 cm³ correction refined in under two
+minutes, with the rest of the surface unchanged.

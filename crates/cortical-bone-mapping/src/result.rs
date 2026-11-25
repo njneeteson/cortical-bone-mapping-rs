@@ -74,8 +74,7 @@ pub struct CbmResult {
     pub volumetric: Option<VolumetricInfo>,
 }
 
-/// The volumetric model's PSF, band and reliability outputs
-/// (`docs/volumetric_model.md`, section 6).
+/// The volumetric model's PSF, band and reliability outputs.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VolumetricInfo {
     /// The PSF (in-plane and along the scanner axis) and the scanner axis.

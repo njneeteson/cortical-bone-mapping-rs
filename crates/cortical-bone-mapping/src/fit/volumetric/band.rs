@@ -7,7 +7,7 @@
 //! closest point `c(x)`, with that point's barycentric coordinates `β` on the
 //! face, and its inward normal is `n(x) = (x − c(x)) / d(x)`, the gradient of
 //! the distance (the face normal for a voxel on the surface). These are fixed
-//! for a fit (section 2 of `docs/volumetric_model.md`).
+//! for a fit.
 //!
 //! The caps closing a mask cut by the image edge are not bone surface, so
 //! closest points are taken on the rest of the mesh: a voxel inside the bone

@@ -1,0 +1,493 @@
+{
+  "provenance": {
+    "source_hash": "9fb0698650df2d8e",
+    "commit": "e70a317",
+    "uncommitted_changes": true,
+    "version": "0.1.0",
+    "date": "2026-11-25",
+    "machine": "Windows 11, AMD64 Family 26 Model 68 Stepping 0, AuthenticAMD",
+    "inputs": {
+      "landmarks": {
+        "right femur": [
+          250,
+          240,
+          123
+        ],
+        "right tibia": [
+          60,
+          250,
+          110
+        ],
+        "right patella": [
+          211,
+          167,
+          114
+        ],
+        "right fibula": [
+          60,
+          296,
+          43
+        ],
+        "left femur": [
+          215,
+          250,
+          400
+        ],
+        "left tibia": [
+          92,
+          232,
+          408
+        ],
+        "left patella": [
+          235,
+          172,
+          421
+        ],
+        "left fibula": [
+          77,
+          308,
+          473
+        ]
+      },
+      "base": {
+        "outside": 4.0,
+        "inside": 8.0,
+        "resolution": 0.25,
+        "taubin_iterations": 50,
+        "taubin_passband": 0.1,
+        "global_params": [],
+        "rho_c": "estimate",
+        "init": [
+          0.0,
+          2.0,
+          0.5,
+          0.0,
+          100.0
+        ],
+        "lower": [
+          -4.0,
+          0.05,
+          0.05,
+          -300.0,
+          -300.0
+        ],
+        "upper": [
+          8.0,
+          8.0,
+          2.0,
+          400.0,
+          1200.0
+        ],
+        "reg_sigma": 3.0,
+        "reg_neighbours": 500,
+        "progress_every": 0
+      },
+      "methods": {
+        "local": {
+          "method": "local"
+        },
+        "multigrid": {
+          "method": "multigrid",
+          "multigrid_spacings": [
+            16.0,
+            8.0,
+            4.0,
+            2.0
+          ]
+        },
+        "regularized": {
+          "method": "regularized"
+        },
+        "volumetric": {
+          "method": "volumetric",
+          "vol_scanner_axis": 0
+        }
+      },
+      "refine": {
+        "refine_iterations": 150
+      },
+      "dicom": "MOJO_0281"
+    }
+  },
+  "threshold_hu": 271.34765625,
+  "low_threshold_hu": 152.40610136741975,
+  "spacing_mm": [
+    0.625,
+    0.650391,
+    0.650391
+  ],
+  "methods": {
+    "local": {
+      "time_s": 99.17277619999368,
+      "bones": {
+        "right patella": {
+          "moves": 14,
+          "converged": false,
+          "nodes": 20012,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 0.8810711833695745,
+          "thickness_p5_mm": 0.05,
+          "thickness_p95_mm": 3.4007630896018686,
+          "bone_outside_cm3": 2.198057673282897
+        },
+        "left patella": {
+          "moves": 13,
+          "converged": false,
+          "nodes": 20628,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 0.9123809533701231,
+          "thickness_p5_mm": 0.05,
+          "thickness_p95_mm": 3.380559152918157,
+          "bone_outside_cm3": 3.277257988695548
+        },
+        "right fibula": {
+          "moves": 13,
+          "converged": false,
+          "nodes": 19756,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 0.8347822067836368,
+          "thickness_p5_mm": 0.05,
+          "thickness_p95_mm": 2.859389975596557,
+          "bone_outside_cm3": 1.6293756844410023
+        },
+        "left fibula": {
+          "moves": 13,
+          "converged": false,
+          "nodes": 21189,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 0.8343523719697828,
+          "thickness_p5_mm": 0.05055054371948281,
+          "thickness_p95_mm": 2.9625690360945685,
+          "bone_outside_cm3": 1.5786146700952823
+        },
+        "right tibia": {
+          "moves": 13,
+          "converged": false,
+          "nodes": 86416,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 0.6996516991210429,
+          "thickness_p5_mm": 0.05,
+          "thickness_p95_mm": 3.3260068566994523,
+          "bone_outside_cm3": 9.25066610394137
+        },
+        "left tibia": {
+          "moves": 14,
+          "converged": false,
+          "nodes": 88455,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 0.7997524554804555,
+          "thickness_p5_mm": 0.05,
+          "thickness_p95_mm": 3.322549479224615,
+          "bone_outside_cm3": 9.8132673462731
+        },
+        "left femur": {
+          "moves": 14,
+          "converged": false,
+          "nodes": 91934,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 0.5565123351093035,
+          "thickness_p5_mm": 0.05,
+          "thickness_p95_mm": 2.3135318714093622,
+          "bone_outside_cm3": 7.061068599716093
+        },
+        "right femur": {
+          "moves": 14,
+          "converged": false,
+          "nodes": 92149,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 0.5404655603283745,
+          "thickness_p5_mm": 0.05,
+          "thickness_p95_mm": 2.53892502874416,
+          "bone_outside_cm3": 4.752235587834986
+        }
+      }
+    },
+    "multigrid": {
+      "time_s": 448.06410419999156,
+      "bones": {
+        "right patella": {
+          "moves": 19,
+          "converged": false,
+          "nodes": 14305,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 0.9593194638979208,
+          "thickness_p5_mm": 0.09703811996456989,
+          "thickness_p95_mm": 3.4492314200219356,
+          "bone_outside_cm3": 1.3684323450700353
+        },
+        "left patella": {
+          "moves": 13,
+          "converged": false,
+          "nodes": 14557,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 0.8495282932135063,
+          "thickness_p5_mm": 0.10072018644630677,
+          "thickness_p95_mm": 3.428899381256834,
+          "bone_outside_cm3": 1.1516405129685228
+        },
+        "right fibula": {
+          "moves": 16,
+          "converged": true,
+          "nodes": 16779,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 0.9706708216593108,
+          "thickness_p5_mm": 0.2442126336528872,
+          "thickness_p95_mm": 2.8489882484288853,
+          "bone_outside_cm3": 0.5713257916724008
+        },
+        "left fibula": {
+          "moves": 5,
+          "converged": true,
+          "nodes": 18180,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 1.0189988499027884,
+          "thickness_p5_mm": 0.20574113345968553,
+          "thickness_p95_mm": 3.042116408731356,
+          "bone_outside_cm3": 0.732597764333282
+        },
+        "right tibia": {
+          "moves": 11,
+          "converged": false,
+          "nodes": 73821,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 0.8617217155090047,
+          "thickness_p5_mm": 0.09148487218623874,
+          "thickness_p95_mm": 3.4381792575482746,
+          "bone_outside_cm3": 5.673865254549464
+        },
+        "left tibia": {
+          "moves": 12,
+          "converged": false,
+          "nodes": 84719,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 0.8571347651051501,
+          "thickness_p5_mm": 0.10027017538484188,
+          "thickness_p95_mm": 3.3089112009148836,
+          "bone_outside_cm3": 7.469007376463208
+        },
+        "left femur": {
+          "moves": 17,
+          "converged": false,
+          "nodes": 84193,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 0.6260951439971458,
+          "thickness_p5_mm": 0.10075802762762673,
+          "thickness_p95_mm": 2.333134294323913,
+          "bone_outside_cm3": 4.390563360621731
+        },
+        "right femur": {
+          "moves": 19,
+          "converged": false,
+          "nodes": 91371,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 0.5540703354182863,
+          "thickness_p5_mm": 0.10585399493768285,
+          "thickness_p95_mm": 2.539258017536212,
+          "bone_outside_cm3": 4.313893078537049
+        }
+      }
+    },
+    "regularized": {
+      "time_s": 534.9158582000528,
+      "bones": {
+        "right patella": {
+          "moves": 5,
+          "converged": true,
+          "nodes": 13262,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 1.07402898264936,
+          "thickness_p5_mm": 0.2892374714206113,
+          "thickness_p95_mm": 3.131354226481805,
+          "bone_outside_cm3": 1.3906402888462879
+        },
+        "left patella": {
+          "moves": 5,
+          "converged": true,
+          "nodes": 13890,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 1.0361422535799534,
+          "thickness_p5_mm": 0.23444094921824446,
+          "thickness_p95_mm": 2.9436154144379336,
+          "bone_outside_cm3": 1.235977823261672
+        },
+        "right fibula": {
+          "moves": 5,
+          "converged": true,
+          "nodes": 16653,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 0.8660732064565396,
+          "thickness_p5_mm": 0.3119246320831891,
+          "thickness_p95_mm": 2.746976538168971,
+          "bone_outside_cm3": 0.45843541080978384
+        },
+        "left fibula": {
+          "moves": 4,
+          "converged": true,
+          "nodes": 18009,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 0.9505666447884468,
+          "thickness_p5_mm": 0.29249654816570186,
+          "thickness_p95_mm": 3.059233396160309,
+          "bone_outside_cm3": 0.6506398765875883
+        },
+        "right tibia": {
+          "moves": 6,
+          "converged": true,
+          "nodes": 65360,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 0.9049399713483797,
+          "thickness_p5_mm": 0.1522085347592148,
+          "thickness_p95_mm": 3.189248088340742,
+          "bone_outside_cm3": 3.306339819831117
+        },
+        "left tibia": {
+          "moves": 11,
+          "converged": true,
+          "nodes": 70415,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 1.0065332518886534,
+          "thickness_p5_mm": 0.15695612232969042,
+          "thickness_p95_mm": 3.2180886057695175,
+          "bone_outside_cm3": 4.828641489636616
+        },
+        "left femur": {
+          "moves": 11,
+          "converged": true,
+          "nodes": 76051,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 0.6096793498926417,
+          "thickness_p5_mm": 0.20361650685058855,
+          "thickness_p95_mm": 2.3212908377785624,
+          "bone_outside_cm3": 3.383274482198849
+        },
+        "right femur": {
+          "moves": 5,
+          "converged": true,
+          "nodes": 82332,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 0.5509036959979441,
+          "thickness_p5_mm": 0.21527762187287194,
+          "thickness_p95_mm": 2.61253002588579,
+          "bone_outside_cm3": 1.8794794322068935
+        }
+      }
+    },
+    "volumetric": {
+      "time_s": 725.6619266000343,
+      "bones": {
+        "right patella": {
+          "moves": 5,
+          "converged": true,
+          "nodes": 13714,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 0.8456458553244213,
+          "thickness_p5_mm": 0.12066887335237712,
+          "thickness_p95_mm": 2.8134800041787984,
+          "bone_outside_cm3": 0.9581141457754652,
+          "psf_mm": [
+            0.6656721056390765,
+            0.7428046546334794
+          ]
+        },
+        "left patella": {
+          "moves": 5,
+          "converged": true,
+          "nodes": 14337,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 0.7807879150204413,
+          "thickness_p5_mm": 0.09941729871058169,
+          "thickness_p95_mm": 2.4602844528101615,
+          "bone_outside_cm3": 0.7981640745298371,
+          "psf_mm": [
+            0.6656721056390765,
+            0.7428046546334794
+          ]
+        },
+        "right fibula": {
+          "moves": 4,
+          "converged": true,
+          "nodes": 16847,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 0.7866187879680003,
+          "thickness_p5_mm": 0.2579657426059967,
+          "thickness_p95_mm": 2.742225669672755,
+          "bone_outside_cm3": 0.2181137335167657,
+          "psf_mm": [
+            0.6656721056390765,
+            0.7428046546334794
+          ]
+        },
+        "left fibula": {
+          "moves": 4,
+          "converged": true,
+          "nodes": 18239,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 0.8716696931445694,
+          "thickness_p5_mm": 0.2359232395556925,
+          "thickness_p95_mm": 2.8804921037810636,
+          "bone_outside_cm3": 0.5097251857216051,
+          "psf_mm": [
+            0.6656721056390765,
+            0.7428046546334794
+          ]
+        },
+        "right tibia": {
+          "moves": 7,
+          "converged": true,
+          "nodes": 66166,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 0.7440709171051205,
+          "thickness_p5_mm": 0.13440850113824587,
+          "thickness_p95_mm": 3.1506399005944115,
+          "bone_outside_cm3": 2.5235098017182165,
+          "psf_mm": [
+            0.6656721056390765,
+            0.7428046546334794
+          ]
+        },
+        "left tibia": {
+          "moves": 10,
+          "converged": true,
+          "nodes": 71833,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 0.7944389319793418,
+          "thickness_p5_mm": 0.15724171367011663,
+          "thickness_p95_mm": 3.1678546233560856,
+          "bone_outside_cm3": 3.493256679947909,
+          "psf_mm": [
+            0.6656721056390765,
+            0.7428046546334794
+          ]
+        },
+        "left femur": {
+          "moves": 9,
+          "converged": true,
+          "nodes": 76842,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 0.537953080437573,
+          "thickness_p5_mm": 0.17448864566987637,
+          "thickness_p95_mm": 2.2998698633897816,
+          "bone_outside_cm3": 2.6297906755045672,
+          "psf_mm": [
+            0.6656721056390765,
+            0.7428046546334794
+          ]
+        },
+        "right femur": {
+          "moves": 5,
+          "converged": true,
+          "nodes": 82736,
+          "rho_c": 1488.4580688476562,
+          "thickness_median_mm": 0.5072193536840554,
+          "thickness_p5_mm": 0.18829158083209818,
+          "thickness_p95_mm": 2.6025652976832547,
+          "bone_outside_cm3": 1.5730626841512192,
+          "psf_mm": [
+            0.6656721056390765,
+            0.7428046546334794
+          ]
+        }
+      }
+    }
+  }
+}

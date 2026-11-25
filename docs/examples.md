@@ -1,123 +1,295 @@
-# Examples on smooth phantoms
+# Examples
 
-These examples check each method on a simple phantom with known geometry,
-where differences between methods are easy to see.
-[segmentation.md](segmentation.md) checks the automatic pipeline on realistic
-phantoms (trabeculae, porosity, neighbouring bones), and
-[volumetric_validation.md](volumetric_validation.md) the volumetric model at
-the anatomical sites.
+Every method refining an automatic segmentation, on phantoms with exact
+ground truth and on a clinical CT of both knees. All methods start from the
+same segmentation and use the same options apart from the method.
 
-## Phantom and settings
+| method | in the figures |
+|---|---|
+| local | one fit per profile, no regularisation (Treece et al. 2010) |
+| multigrid | control points, coarse to fine (Neeteson & Boyd 2025) |
+| regularised | spatially regularised fit (Neeteson & Boyd 2025) |
+| volumetric | volumetric model, the voxels of a band around the surface |
 
-The phantom (`cbm.Phantom`) is a cylinder along array axis 0 with 0.1 mm
-voxels, outer radius 3.5 mm and cortical thickness `t(θ) = 0.8 + 0.3 cos 2θ`
-mm. Soft tissue, cortex and marrow have densities 50, 1000 and 250; the
-image is integrated over voxels, blurred with a 0.12 mm Gaussian PSF and
-given Gaussian noise. Profiles run from 1.5 mm outside to 2.5 mm inside, with
-normals in the transverse plane.
+## Phantoms
 
-The methods: multigrid with control-point spacings of 4, 2 and 1 mm;
-regularised with `λ = 1`, `σ_reg = 1 mm` and 64 neighbours; the curvature
-penalty alone (`"change"`, `λ = 0`, `μ = 1`, at four node spacings, about
-0.4 mm here); and the [volumetric model](method.md#volumetric-model) with its
-defaults (the same smoothing of `m`, `t` and the densities, plus the curvature
-penalty at `μ = 0.3`), its axial blur tied to the in-plane one (on a shaft
-every normal is in-plane). All figures are made by
-[`scripts/make_figures.py`](scripts/make_figures.py).
+Phantoms from `cbm.site_phantom`, with parameters from the literature:
 
-## One profile
+| phantom | scanner | voxels (mm) | PSF σ (mm) | noise σ | cortex (mm) | start |
+|---|---|---|---|---:|---|---|
+| distal radius | HR-pQCT | 0.061 | 0.08 | 40 | 0.85 mean, 0.2 min, porous; ulna 3 mm away | `hull_segmentation` |
+| distal tibia | HR-pQCT | 0.061 | 0.08 | 40 | 1.3 mean, 0.2 min, porous; fibula 3 mm away | `hull_segmentation` |
+| proximal femur | clinical CT | 0.75 × 0.75 × 1.0 | 0.5–0.6 | 30 | 0.3–3.5; acetabulum next to the head | `bone_hulls`, 4 mm closing |
 
-![Profile fit](images/profile_fit.png)
+Errors are measured along each node's sampling line against the exact
+crossings of the true surfaces. The end slices of the shafts (where the
+image cuts the bone) are left out.
 
-A slice with the mask contour (red), one sampling line (orange) and the
-fitted cortex (cyan), and the sampled profile with the fitted model and
-edges. The node (`x = 0`) sits on the smoothed mask surface; the fit places
-the edges independently of it.
+### Distal radius
 
-## Methods at noise σ = 120
+![Distal radius sections](images/phantom_distal_radius_sections.png)
 
-![Methods comparison](images/methods_comparison.png)
+*Distal radius phantom, middle axial slice. Each column is one method.
+Green dashed: true periosteal and endosteal surfaces. Yellow dotted: the
+starting segmentation (convex hull). Red: refined periosteal surface. Blue:
+fitted endosteal surface. Bottom row: the 4 mm white box, enlarged, placed
+where the local fit's endosteum is farthest from the truth.*
 
-Top: thickness unrolled around the circumference (θ) and along the axis.
-Bottom: thickness against θ at the middle slice, with the truth (line), and
-the error histograms. The local fit is unbiased but noisy (29 µm RMSE).
-Every spatially constrained method removes most of the noise while following
-the true thickness variation: multigrid 13 µm, regularised 14 µm, the
-volumetric model 11 µm and the curvature penalty alone 8 µm.
+![Distal radius thickness maps](images/phantom_distal_radius_maps.png)
 
-## Accuracy against noise
+*Distal radius phantom, the whole surface unrolled: angle around the shaft
+(horizontal) by height (vertical), in 2° bins. Top: fitted cortical
+thickness. Bottom: thickness error, fitted minus true (red: too thick,
+blue: too thin).*
 
-![Accuracy vs noise](images/accuracy_vs_noise.png)
+| method | moves | converged | time (s) | Ct.Th bias (µm) | Ct.Th RMSE (µm) | periosteum RMSE (µm) | cortex Dice |
+|---|---:|---|---:|---:|---:|---:|---:|
+| local | 5 | yes | 19 | +47 | 154 | 9 | 0.948 |
+| multigrid | 4 | yes | 20 | +10 | 39 | 7 | 0.981 |
+| regularised | 5 | yes | 27 | +12 | 66 | 10 | 0.967 |
+| volumetric | 4 | yes | 86 | +2 | 26 | 5 | 0.986 |
 
-The local fit's RMSE grows roughly linearly with noise; the constrained
-methods' much more slowly. Multigrid has a floor of about 12 µm even at low
-noise, because interpolating from control points 1 mm apart slightly
-flattens the thickness pattern. The 1D methods share a bias of about +3 µm
-(3% of a voxel) whatever the method, so it comes from profile sampling and
-partial volume rather than the fit. The volumetric model, which uses the
-voxels themselves, has a small negative bias instead (−2 to −4 µm), and its
-RMSE grows only from 9 to 16 µm over the whole noise range; the curvature
-penalty alone, from 7 to 10 µm.
+### Distal tibia
 
-## Curvature penalty
+![Distal tibia sections](images/phantom_distal_tibia_sections.png)
 
-![Curvature sweep](images/curvature_sweep.png)
+*Distal tibia phantom, middle axial slice; colours and zoom as for the
+radius.*
 
-Thickness RMSE against the curvature weight `μ` for several Laplacian
-scales (curvature penalty alone, `λ = 0`), against the smoothing weight `λ`,
-and against the volumetric model's curvature weight, at noise σ = 150 (local
-fit: 36 µm).
+![Distal tibia thickness maps](images/phantom_distal_tibia_maps.png)
 
-Small Laplacian scales (0.15–0.25 mm, 1.5–2.5 voxels) reach about 7–8 µm at
-`μ ≈ 0.3–1`. Larger scales are weaker against node-scale noise and, at large
-weights, flatten the cos 2θ pattern, which has curvature too; every scale
-degrades beyond `μ ≈ 3`. On this smooth phantom the smoothing penalty
-reaches the same accuracy at large `λ` (7 µm at 30). The volumetric model,
-whose edges are also smoothed (`λ = 1`), is best at `μ = 0.3–1` (13 µm).
+*Distal tibia phantom, unrolled as for the radius. Top: fitted thickness.
+Bottom: error, fitted minus true.*
 
-So the curvature penalty does not win on raw accuracy on smooth anatomy. Its
-advantages are that its scale is explicit and physical, that it acts on the
-fitted surfaces (so the periosteal and endosteal surfaces can be penalised
-separately), and that its `"absolute"` mode leaves curvature below a threshold
-untouched. Which penalty suits real bone, with genuinely sharp features,
-needs real data.
+| method | moves | converged | time (s) | Ct.Th bias (µm) | Ct.Th RMSE (µm) | periosteum RMSE (µm) | cortex Dice |
+|---|---:|---|---:|---:|---:|---:|---:|
+| local | 6 | yes | 67 | +48 | 190 | 14 | 0.957 |
+| multigrid | 5 | yes | 66 | −5 | 43 | 8 | 0.985 |
+| regularised | 6 | yes | 84 | +13 | 97 | 14 | 0.970 |
+| volumetric | 6 | yes | 343 | −5 | 34 | 7 | 0.987 |
 
-## Segmentation refinement
+### Proximal femur
 
-![Refinement](images/refinement.gif)
+![Proximal femur sections](images/phantom_proximal_femur_sections.png)
 
-![Refinement convergence](images/refinement_convergence.png)
+*Proximal femur phantom at clinical resolution, middle coronal slice
+(femoral head, neck and shaft; the acetabulum curves around the head). Colours as
+for the radius. Bottom row: the 24 mm white box, enlarged, placed where the local fit's
+endosteum is farthest from the truth.*
 
-A tibia-like phantom with a three-lobed outer surface,
-`R(θ) = 4 + 0.5 cos 3θ` mm, starts from a segmentation dilated by 0.45 mm
-with 7-lobed bumps of 0.35 mm, and is refined with `α = 0.5`. With the
-regularised inner fit the RMS displacement halves every iteration, as
-expected for an under-relaxed fixed-point iteration, until it levels off at
-about 0.003 mm after eight moves, and the Dice coefficient with the true
-segmentation approaches 1 (0.999). The surface is carried as a level set on
-the image grid (the default), whose remeshing leaves moves of a few
-thousandths of a millimetre, so neither inner fit reaches the 0.002 mm used
-here within 12 moves; both move by less than the default tolerance
-(0.01 mm) from the eighth move on.
+![Proximal femur thickness maps](images/phantom_proximal_femur_maps.png)
 
-With the volumetric inner fit (orange) the moves keep shrinking, to 0.002 mm
-after 12 moves, and the Dice coefficient rises steadily to 0.998. An earlier
-volumetric default, whose edges were regularised by the curvature penalty
-alone and whose surface moved as the same vertices, stopped shrinking at
-about 0.01 mm and drifted, its Dice falling from 0.997 to 0.992
-([volumetric_refinement.md](volumetric_refinement.md)).
+*Proximal femur phantom, the refined surface seen from the front. Top:
+fitted cortical thickness. Bottom: error, fitted minus true. The thin dark
+red line where the neck meets the shaft, in every method, is a concave
+crease, where the cortex is not locally flat as the model assumes.*
 
-In practice the starting segmentation comes from the image
-(`cbm.hull_segmentation`, see [segmentation.md](segmentation.md)). To run
-the example:
+| method | moves | converged | time (s) | Ct.Th bias (µm) | Ct.Th RMSE (µm) | periosteum RMSE (µm) | cortex Dice |
+|---|---:|---|---:|---:|---:|---:|---:|
+| local | 2 | yes | 2 | +168 | 224 | 58 | 0.931 |
+| multigrid | 2 | yes | 3 | +164 | 196 | 45 | 0.931 |
+| regularised | 2 | yes | 3 | +149 | 167 | 46 | 0.935 |
+| volumetric | 2 | yes | 8 | +125 | 138 | 39 | 0.941 |
+
+### Takeaways
+
+- Every method converges on every phantom from the automatic start.
+- The volumetric model has the lowest thickness error at every site: 26–34 µm
+  at HR-pQCT resolution, about 6 times less than the local fit.
+- At HR-pQCT resolution multigrid is second (39–43 µm). The regularised fit
+  (66–97 µm) smooths over only its 500 nearest nodes, about 0.8 mm at this
+  node spacing.
+- At clinical resolution every method overestimates the femur's cortex by
+  0.13–0.17 mm, where the cortex is mostly thinner than the blur.
+- The periosteum is placed within 5–14 µm (a quarter of a voxel) at
+  HR-pQCT resolution and 39–58 µm at clinical resolution.
+
+## Clinical knee CT
+
+A clinical CT of both knees (GE Revolution GSI, 0.65 × 0.65 mm pixels,
+0.625 mm slices, not density-calibrated), used with the subject's
+permission; the image is not in the repository. The left knee had an injury
+in which bone broke off the femur and the patella; the right knee is
+uninjured. There is no ground truth.
+
+| step | call | here |
+|---|---|---|
+| threshold | `otsu_thresholds(image, floor=-500)` | 271 HU |
+| bones | `separate_bones` with a landmark in each bone | 8 bones |
+| thin cortex | `grow_bones` above `soft_tissue_threshold` | 152 HU |
+| start | `bone_hulls(closing_radius=4.0)` | one closed surface per bone |
+| refinement | `refine_bones`, every other bone excluded | per method, below |
+
+Shared by every method: profiles 4 mm out and 8 mm in at 0.25 mm,
+per-node densities (`global_params=()`), `ρc` estimated once for all eight
+bones (1488 HU), `reg_sigma` 3 mm over 500 neighbours (regularised,
+volumetric), multigrid spacings 16, 8, 4 and 2 mm, at most 150 moves. The
+volumetric model's PSF, fitted to all eight bones: 0.67 mm in-plane, 0.74 mm
+along the scanner axis.
+
+### Refinement
+
+![Volumetric refinement of both knees](images/knee_refinement.gif)
+
+*Volumetric refinement of all eight bones, one frame per move. Each row is
+one knee: coronal, sagittal and axial sections, and a 3D cutaway from the
+lateral side at the sagittal section: the image on the cut face (bones and
+4 mm of soft tissue around them), each bone's section drawn on it, and the
+surface behind the cut coloured by how far it has moved since the start
+(0–2 mm). Yellow dashed: the starting segmentation. Solid: the refined
+periosteal surface, coloured by bone. Soft tissue more than 10 mm from the
+start is blanked in the sections (display only). The surfaces move about
+1 mm in median over the whole refinement, most of it in the first two moves.*
+
+### Final surfaces
+
+![Right knee, every method](images/knee_right_sections.png)
+
+*Right (uninjured) knee, the final surfaces of each method (rows).
+Sections through the femur and patella, and axial through the femoral
+condyles. Yellow dashed: start. Solid, coloured by bone: refined periosteal
+surface. Magenta dotted: fitted endosteal surface (the inner edge of the
+cortex).*
+
+![Left knee, every method](images/knee_left_sections.png)
+
+*Left (injured) knee, as above.*
+
+![Thickness maps](images/knee_thickness.png)
+
+*Fitted cortical thickness on the refined surfaces of each method (rows),
+each knee from the front and the back, on one colour scale (0–3 mm).*
+
+### Results
+
+Moves until convergence; **not converged** means the refinement stopped
+because it made no progress for five fits.
+
+| bone | local | multigrid | regularised | volumetric |
+|---|---|---|---|---|
+| right femur | 14 **not converged** | 19 **not converged** | 5 | 5 |
+| right tibia | 13 **not converged** | 11 **not converged** | 6 | 7 |
+| right patella | 14 **not converged** | 19 **not converged** | 5 | 5 |
+| right fibula | 13 **not converged** | 16 | 5 | 4 |
+| left femur | 14 **not converged** | 17 **not converged** | 11 | 9 |
+| left tibia | 14 **not converged** | 12 **not converged** | 11 | 10 |
+| left patella | 13 **not converged** | 13 **not converged** | 5 | 5 |
+| left fibula | 13 **not converged** | 5 | 4 | 4 |
+| run time, all bones | 1.7 min | 7.5 min | 8.9 min | 12.1 min |
+
+Bone outside the refined surface (cm³): the voxels of each bone's
+thresholded and grown region more than 1 mm outside its refined periosteal
+surface. Part of it is the blurred edge itself.
+
+| bone | local | multigrid | regularised | volumetric |
+|---|---:|---:|---:|---:|
+| right femur | 4.8 | 4.3 | 1.9 | 1.6 |
+| right tibia | 9.3 | 5.7 | 3.3 | 2.5 |
+| right patella | 2.2 | 1.4 | 1.4 | 1.0 |
+| right fibula | 1.6 | 0.6 | 0.5 | 0.2 |
+| left femur | 7.1 | 4.4 | 3.4 | 2.6 |
+| left tibia | 9.8 | 7.5 | 4.8 | 3.5 |
+| left patella | 3.3 | 1.2 | 1.2 | 0.8 |
+| left fibula | 1.6 | 0.7 | 0.7 | 0.5 |
+
+Median fitted cortical thickness, mm (5th–95th percentile):
+
+| bone | local | multigrid | regularised | volumetric |
+|---|---|---|---|---|
+| right femur | 0.54 (0.05–2.54) | 0.55 (0.11–2.54) | 0.55 (0.22–2.61) | 0.51 (0.19–2.60) |
+| right tibia | 0.70 (0.05–3.33) | 0.86 (0.09–3.44) | 0.90 (0.15–3.19) | 0.74 (0.13–3.15) |
+| right patella | 0.88 (0.05–3.40) | 0.96 (0.10–3.45) | 1.07 (0.29–3.13) | 0.85 (0.12–2.81) |
+| right fibula | 0.83 (0.05–2.86) | 0.97 (0.24–2.85) | 0.87 (0.31–2.75) | 0.79 (0.26–2.74) |
+| left femur | 0.56 (0.05–2.31) | 0.63 (0.10–2.33) | 0.61 (0.20–2.32) | 0.54 (0.17–2.30) |
+| left tibia | 0.80 (0.05–3.32) | 0.86 (0.10–3.31) | 1.01 (0.16–3.22) | 0.79 (0.16–3.17) |
+| left patella | 0.91 (0.05–3.38) | 0.85 (0.10–3.43) | 1.04 (0.23–2.94) | 0.78 (0.10–2.46) |
+| left fibula | 0.83 (0.05–2.96) | 1.02 (0.21–3.04) | 0.95 (0.29–3.06) | 0.87 (0.24–2.88) |
+
+### Takeaways
+
+- Only the regularised and volumetric fits refine clinical CT: they converge
+  on all eight bones, the local fit on none and multigrid on two.
+- With the local fit the surface drifts into the bone where profiles have no
+  clear edge, leaving up to 10 cm³ of bone outside a tibia.
+- The volumetric model leaves the least bone outside on every bone,
+  0.2–3.5 cm³ against 0.5–4.8 cm³ for the regularised fit.
+- The injured left knee leaves more bone outside than the right with every
+  method, and its femur and tibia need 1.5–2 times the moves.
+- The thickness pattern is the same for every method: thin (≲ 0.5 mm)
+  subchondral shells, a thick anterior patella and diaphyseal cortices of
+  2–3.5 mm.
+- At the posteromedial corner of the left femoral condyle a thin cortex
+  fades to 50–110 HU over about 10 mm, barely above soft tissue
+  (57 ± 22 HU). The automatic start cannot grow into it, and the surface
+  follows the brighter condyle about 3 mm inside it; a quick correction by
+  hand fixes it (below).
+
+## Correcting a segmentation
+
+Where the automatic segmentation misses bone, the mask can be corrected
+roughly by hand in any segmentation editor and refined again. The library
+takes and returns arrays; reading and writing files is left to the user (the
+scripts use `nibabel`).
+
+| step | here |
+|---|---|
+| 1. export | the volumetric result as a NIfTI label map on the CT's grid, one label per bone (`knee.py --export`) |
+| 2. correct | in ITK-SNAP: paint roughly *outside* the missed cortex; here 1.9 cm³ added to the left femur over 31 mm (50 slices) |
+| 3. refine again | the corrected labels as the start of `refine_bones` for the edited bone only, with the scan's `ρc` and PSF held and the other bones excluded |
 
 ```python
-import cortical_bone_mapping_rs as cbm
-
-ph = cbm.Phantom(mask_offset=0.35, mask_bump=0.25)
-image, bad = ph.generate()
-rr = cbm.refine_segmentation(image, bad, ph.spacing, normal_constraint="in_plane",
-                             method="regularized", reg_neighbours=64, reg_sigma=1.0,
-                             keep_history=True)
-print(rr.converged, [round(h["rms_displacement"], 4) for h in rr.history])
+labels = ...                                     # the corrected label map, as an array on the image grid
+results = cbm.refine_bones(image, labels, spacing, bones=[left_femur], options=options,
+                           names=names, shared=False)   # options: the scan's rho_c and PSF fixed
 ```
+
+![Correction of the left femur](images/knee_correction_left_femur.png)
+
+*The posteromedial corner of the left femoral condyle, two axial sections
+and a sagittal section through the edit. Top: the automatic result (blue).
+Middle: the mask corrected by hand (yellow dashed), the painted voxels in
+red. Bottom: the surface refined from the correction (blue), with the
+corrected mask (yellow dashed) and the automatic result (white dotted).*
+
+![Refinement from the correction](images/knee_correction_left_femur.gif)
+
+*Refinement of the left femur from the hand-corrected mask, one frame per
+move, in the same sections.*
+
+| | left femur |
+|---|---:|
+| painted by hand | 1.90 cm³ |
+| moves to converge | 6 |
+| run time | 1.8 min |
+| painted voxels kept inside the refined surface | 0.87 cm³ |
+
+Distance from the automatic surface to the refined one, by distance from
+the painted voxels:
+
+| from the edit | nodes | median | 95th percentile | max |
+|---|---:|---:|---:|---:|
+| within 1 mm | 3 011 | 0.68 mm | 3.77 mm | 4.58 mm |
+| 1–5 mm | 1 922 | 0.12 mm | 0.37 mm | 0.63 mm |
+| more than 5 mm | 74 911 | 0.02 mm | 0.11 mm | 0.74 mm |
+
+- The rough painting only has to contain the missed cortex: refinement
+  pulls the surface in onto the faint cortex, keeping 0.87 of the 1.90 cm³
+  painted, up to 4.6 mm outside the automatic surface.
+- Away from the edit the surface stays where it was (0.02 mm median more
+  than 5 mm away); the corrected bone converges in 6 moves, under two
+  minutes.
+
+## Reproducing
+
+```bash
+pip install ./python[docs]
+cd docs/scripts
+python phantoms.py                     # docs/results/phantoms.json, docs/images/phantom_*
+python knee.py /path/to/DICOM          # docs/results/knee.json, docs/images/knee_* (the CT is not public)
+python knee.py /path/to/DICOM --redraw --export OUT_DIR          # the volumetric labels as NIfTI, to correct
+python knee_correction.py /path/to/DICOM AUTOMATIC.nii.gz CORRECTED.nii.gz   # docs/images/knee_correction_*
+```
+
+Each results file records the hash of the code and inputs that produced it;
+`--redraw` redraws the figures from the last run only if that hash still
+matches.

@@ -1,6 +1,5 @@
 //! The volumetric least-squares problem: cost, gradient, Gauss–Newton
-//! products and preconditioner blocks (`docs/volumetric_model.md`,
-//! sections 2 and 4).
+//! products and preconditioner blocks.
 //!
 //! **Parameters.** Per node: `m`, `t`, `ρs`, `ρb` (each a field or one global
 //! value); globally the PSF `σ_xy`, `σ_z` (`σ_z` fitted, fixed, or tied to

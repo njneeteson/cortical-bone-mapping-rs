@@ -12,17 +12,17 @@ Bonelab is not a dependency; point the script at a checkout:
 
     git clone https://github.com/Bonelab/Bonelab /path/to/Bonelab
     pip install tqdm
-    python docs/scripts/compare_bonelab.py /path/to/Bonelab   # writes docs/results/bonelab_comparison.json
+    python docs/scripts/compare_bonelab.py /path/to/Bonelab   # prints the rows
+
+``docs/scripts/benchmarks.py`` runs it with the other benchmarks.
 
 Memory: for Bonelab, the peak of Python-heap allocations during the fit
 (tracemalloc, which includes NumPy/SciPy buffers). Rust allocations are
 invisible to tracemalloc; the Rust peak heap is measured with a counting
-allocator by ``examples/benchmark.rs`` on the same phantoms (see
-docs/performance.md).
+allocator by ``examples/benchmark.rs`` on the same phantoms.
 """
 
 import importlib
-import json
 import sys
 import time
 import tracemalloc
@@ -33,11 +33,9 @@ import numpy as np
 
 import cortical_bone_mapping_rs as cbm
 
-OUT = Path(__file__).resolve().parents[1] / "results" / "bonelab_comparison.json"
-
 # Table 1 (radius & tibia) of Neeteson & Boyd (2025), except the trabecular initial
 # guess: Bonelab's CLI default of 200 (with 0, its L-BFGS-B initial global fit
-# stalls at the bounds m = 6, sigma = 2 on these phantoms; see performance.md)
+# stalls at the bounds m = 6, sigma = 2 on these phantoms)
 COMMON = dict(
     rho_c=1000.0, residual_boost_factor=10.0, t_initial_guess=1.0, rho_s_initial_guess=0.0,
     rho_b_initial_guess=200.0, sigma_initial_guess=0.1, x_bounds=(-3.0, 6.0), t_bounds=(0.0607, 12.0),
@@ -92,6 +90,7 @@ def fit_time(res):
 
 
 def main(root):
+    """The comparison rows, one per method and phantom size."""
     Local, ControlPoint, Regularization = load_bonelab(Path(root))
     rows = []
     for slices, local_subset in [(8, 400), (32, 400)]:
@@ -138,8 +137,7 @@ def main(root):
                              bonelab_rmse=rmse(t, truth), rust_fit_time=fit_time(rr), rust_total_time=t_rr,
                              rust_rmse=rmse(rr.thickness, truth)))
             print(rows[-1], flush=True)
-    OUT.write_text(json.dumps(rows, indent=2))
-    print("wrote", OUT)
+    return rows
 
 
 if __name__ == "__main__":

@@ -161,7 +161,7 @@ pub(crate) fn global_settings(o: &Options) -> global::Settings {
 /// of the nodes `keep`, for the volumetric model: the 1D estimate looks for
 /// cortex thick enough to show its density along every profile, where the
 /// volumetric fit's own voxels were dominated by thin cortex on clinical CT
-/// and its estimates were low (`docs/volumetric_refinement.md`, section 6).
+/// and its estimates were low.
 fn profile_rho_c<T: Voxel>(
     image: &ArrayView3<T>,
     surface: &Mesh,
