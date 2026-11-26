@@ -1,8 +1,8 @@
 {
   "provenance": {
-    "source_hash": "9fb0698650df2d8e",
-    "commit": "e70a317",
-    "uncommitted_changes": true,
+    "source_hash": "07880440095dd724",
+    "commit": "63b8e90",
+    "uncommitted_changes": false,
     "version": "0.1.0",
     "date": "2026-11-25",
     "machine": "Windows 11, AMD64 Family 26 Model 68 Stepping 0, AuthenticAMD",
@@ -118,7 +118,7 @@
   ],
   "methods": {
     "local": {
-      "time_s": 99.17277619999368,
+      "time_s": 98.96711940004025,
       "bones": {
         "right patella": {
           "moves": 14,
@@ -203,7 +203,7 @@
       }
     },
     "multigrid": {
-      "time_s": 448.06410419999156,
+      "time_s": 464.2305646999739,
       "bones": {
         "right patella": {
           "moves": 19,
@@ -288,7 +288,7 @@
       }
     },
     "regularized": {
-      "time_s": 534.9158582000528,
+      "time_s": 543.3466309000505,
       "bones": {
         "right patella": {
           "moves": 5,
@@ -373,7 +373,7 @@
       }
     },
     "volumetric": {
-      "time_s": 725.6619266000343,
+      "time_s": 746.9606871999567,
       "bones": {
         "right patella": {
           "moves": 5,
@@ -465,7 +465,7 @@
           "nodes": 76842,
           "rho_c": 1488.4580688476562,
           "thickness_median_mm": 0.537953080437573,
-          "thickness_p5_mm": 0.17448864566987637,
+          "thickness_p5_mm": 0.1744886456698764,
           "thickness_p95_mm": 2.2998698633897816,
           "bone_outside_cm3": 2.6297906755045672,
           "psf_mm": [

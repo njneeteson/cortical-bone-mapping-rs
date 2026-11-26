@@ -1,8 +1,8 @@
 {
   "provenance": {
-    "source_hash": "e333350af592c110",
-    "commit": "e6677e1",
-    "uncommitted_changes": true,
+    "source_hash": "d4ddfa097802915c",
+    "commit": "63b8e90",
+    "uncommitted_changes": false,
     "version": "0.1.0",
     "date": "2026-11-25",
     "machine": "Windows 11, AMD64 Family 26 Model 68 Stepping 0, AuthenticAMD",
@@ -10,7 +10,7 @@
       "dicom": "MOJO_0281",
       "automatic": "61e2ff199d9c7fdf",
       "corrected": "bf03282f34678727",
-      "knee_results": "9fb0698650df2d8e",
+      "knee_results": "07880440095dd724",
       "method": "volumetric",
       "refine": {
         "refine_iterations": 150
@@ -23,7 +23,7 @@
       "erased_cm3": 0.0,
       "moves": 6,
       "converged": true,
-      "time_s": 106.40794630005257,
+      "time_s": 116.48541309998836,
       "painted_kept_cm3": 0.8706042720857083,
       "surface_nodes_in_edit": 3011,
       "outside_automatic_median_mm": 0.9020163262829559,

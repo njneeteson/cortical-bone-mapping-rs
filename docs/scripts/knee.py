@@ -134,8 +134,6 @@ def run_method(method, img, sp, labels, starts, names):
 
 SIDES = ("right", "left")
 ENDO_COLOUR = "#ff4fd8"  # the fitted endosteal surfaces, distinct from every bone colour
-MOVED_MAX = 2.0  # mm: colour scale of the distance moved since the start (GIF)
-MOVED_CMAP = "plasma"
 
 
 def colour(name):
@@ -291,32 +289,23 @@ def knee_box(d, side, pad_mm=10.0):
     return tuple(slice(int(x), int(y)) for x, y in zip(lo, hi))
 
 
-def render_cut(d, surf, start, side, plane, size=(700, 900), rim_mm=4.0):
-    """One knee in 3D, cut away at its sagittal section: the half of each
-    bone behind the cut, coloured by the distance its surface has moved since
-    the start, with the image on the cut face (the bones and a rim of soft
-    tissue around them) and each bone's section drawn on it."""
-    from scipy.spatial import cKDTree
-
+def render_3d(d, surf, side, plane, size=(700, 900), opacity=0.3):
+    """One knee in 3D: the whole sagittal section of the image, and each
+    bone's surface, translucent, with its section drawn on the image."""
     sp = np.array(d["spacing"])
     box = knee_box(d, side)
     grid = pv_image(d["img"][box], sp, np.array([s.start for s in box]) * sp)
-    near = ndimage.distance_transform_edt(d["starts"][box] == 0, sampling=sp) <= rim_mm
-    grid.point_data["near"] = near.ravel(order="C").astype(np.float32)
     x0 = plane[2] * sp[2]
     toward = -1.0 if side == "right" else 1.0  # camera on the lateral side
-    cut = grid.slice(normal="x", origin=(x0, 0.0, 0.0)).threshold(0.5, scalars="near")
     p = plotter(size)
-    p.add_mesh(cut, scalars="intensity", cmap="gray", clim=(-200, 1300), show_scalar_bar=False, lighting=False)
+    p.add_mesh(grid.slice(normal="x", origin=(x0, 0.0, 0.0)), scalars="intensity", cmap="gray",
+               clim=(-200, 1300), show_scalar_bar=False, lighting=False)
     for b, s in surf.items():
         if not b.startswith(side):
             continue
         mesh = pv_mesh(*s)
-        mesh.point_data["moved"] = cKDTree(start[b][0][:, ::-1]).query(mesh.points)[0]
-        half = mesh.clip(normal="x", origin=(x0, 0, 0), invert=toward > 0)  # the half behind the cut
-        if half.n_points:
-            p.add_mesh(half, scalars="moved", cmap=MOVED_CMAP, clim=(0.0, MOVED_MAX), show_scalar_bar=False,
-                       smooth_shading=True, ambient=0.35, diffuse=0.65, specular=0.0)
+        p.add_mesh(mesh, color=colour(b), smooth_shading=True, ambient=0.3, diffuse=0.7, specular=0.2,
+                   opacity=opacity)
         # the section, nudged towards the camera so that it is drawn over the image
         line = mesh.slice(normal="x", origin=(x0, 0, 0))
         if line.n_points:
@@ -326,24 +315,32 @@ def render_cut(d, surf, start, side, plane, size=(700, 900), rim_mm=4.0):
     return screenshot(p)
 
 
+def crop_white(img, pad=6):
+    """A rendering cropped to its content (the background is white)."""
+    idx = np.argwhere((img[..., :3] < 250).any(-1))
+    lo = np.maximum(idx.min(0) - pad, 0)
+    hi = idx.max(0) + pad + 1
+    return img[lo[0]:hi[0], lo[1]:hi[1]]
+
+
 def gif_palette():
     """A fixed GIF palette: greys for the image, shades of each bone colour
     and of the start colour (so that thin coloured lines keep their colour),
-    and the colour scale of the 3D view."""
-    from matplotlib import colormaps, colors
+    and each bone colour blended over greys (the translucent 3D surfaces)."""
+    from matplotlib import colors
     from PIL import Image
 
-    pal = [(v, v, v) for v in np.linspace(0, 255, 112).round().astype(int)]
+    pal = [(v, v, v) for v in np.linspace(0, 255, 96).round().astype(int)]
     for c in list(BONE_COLOURS.values()) + [START]:
         rgb = np.array(colors.to_rgb(c))
-        for f in np.linspace(0.45, 1.0, 10):
+        for f in np.linspace(0.45, 1.0, 8):
             pal.append(tuple(int(round(255 * x)) for x in rgb * f))
         pal.append(tuple(int(round(255 * x)) for x in rgb + (1 - rgb) * 0.5))
         pal.append(tuple(int(round(255 * x)) for x in rgb + (1 - rgb) * 0.25))
-    cmap = colormaps[MOVED_CMAP]
-    for f in (0.55, 0.8, 1.0):
-        for v in np.linspace(0, 1, 28):
-            pal.append(tuple(int(round(255 * x * f)) for x in cmap(v)[:3]))
+    for c in BONE_COLOURS.values():
+        rgb = np.array(colors.to_rgb(c))
+        for g in np.linspace(0.0, 1.0, 26):
+            pal.append(tuple(int(round(255 * x)) for x in 0.35 * rgb + 0.65 * g))
     pal = pal[:256] + [(0, 0, 0)] * (256 - len(pal))
     img = Image.new("P", (1, 1))
     img.putpalette([v for c in pal for v in c])
@@ -352,19 +349,16 @@ def gif_palette():
 
 def fig_gif(d, plt):
     """The default method's refinement of every bone, one frame per move:
-    each knee's three sections, and its 3D view cut at the sagittal section
-    with the surfaces coloured by how far they have moved since the start."""
-    from matplotlib import cm, colors
+    each knee's three sections, and a 3D view of its translucent surfaces
+    over the whole sagittal section."""
     from PIL import Image
 
     bones = d["runs"][DEFAULT]["bones"]
     hist = {b: v["history"] for b, v in bones.items()}
-    start = {b: h[0] for b, h in hist.items()}
     n = max(len(h) for h in hist.values())
     disp = display_image(d)
     planes = {side: knee_planes(d, side) for side in SIDES}
     w = {side: widths(d, side, planes[side]) for side in SIDES}
-    sm = cm.ScalarMappable(norm=colors.Normalize(0.0, MOVED_MAX), cmap=MOVED_CMAP)
     frames = []
     for k in range(n):
         surf = {b: h[min(k, len(h) - 1)] for b, h in hist.items()}
@@ -375,11 +369,9 @@ def fig_gif(d, plt):
             for ax, plane in zip(axes, planes[side]):
                 draw_plane(ax, d, disp, side, plane, surf, lw=2.4)
                 ax.set_title(f"{plane[0]} section")
-            axes[3].imshow(render_cut(d, surf, start, side, planes[side][1]))
+            axes[3].imshow(crop_white(render_3d(d, surf, side, planes[side][1])))
             axes[3].set_axis_off()
-            axes[3].set_title("3D, cut at the sagittal section")
-            cax = axes[3].inset_axes([0.12, 0.0, 0.76, 0.035])
-            sf.colorbar(sm, cax=cax, orientation="horizontal", label="moved since the start (mm)")
+            axes[3].set_title("3D, with the sagittal section")
             sf.supylabel(f"{side} knee", fontsize=16)
         moving = [b for b, h in hist.items() if k < len(h) - 1]
         status = "start" if k == 0 else f"move {k}: " + (f"{len(moving)} of {len(hist)} bones still moving"

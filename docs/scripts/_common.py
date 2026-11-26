@@ -36,14 +36,16 @@ FIGURES_MARKER = "# " + "-" * 66 + " figures"
 def source_hash(script: str, inputs: dict) -> str:
     """Hash of the library sources, the calling script's computing part
     (everything above its ``FIGURES_MARKER`` line; drawing code cannot change
-    results) and its inputs."""
+    results) and its inputs. Line endings are normalised, so that a checkout
+    with CRLF endings (git on Windows) hashes the same."""
     h = hashlib.sha256()
     for base in SOURCES:
         for f in sorted(base.rglob("*")):
             if f.is_file() and f.suffix in (".rs", ".py") and "__pycache__" not in f.parts:
-                h.update(str(f.relative_to(ROOT)).encode())
-                h.update(f.read_bytes())
-    h.update(Path(script).read_text(encoding="utf-8").split(FIGURES_MARKER)[0].encode())
+                h.update(f.relative_to(ROOT).as_posix().encode())
+                h.update(f.read_bytes().replace(b"\r\n", b"\n"))
+    text = Path(script).read_bytes().replace(b"\r\n", b"\n").decode("utf-8")
+    h.update(text.split(FIGURES_MARKER)[0].encode())
     h.update(json.dumps(inputs, sort_keys=True, default=str).encode())
     return h.hexdigest()[:16]
 

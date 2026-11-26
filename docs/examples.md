@@ -132,11 +132,10 @@ along the scanner axis.
 ![Volumetric refinement of both knees](images/knee_refinement.gif)
 
 *Volumetric refinement of all eight bones, one frame per move. Each row is
-one knee: coronal, sagittal and axial sections, and a 3D cutaway from the
-lateral side at the sagittal section: the image on the cut face (bones and
-4 mm of soft tissue around them), each bone's section drawn on it, and the
-surface behind the cut coloured by how far it has moved since the start
-(0–2 mm). Yellow dashed: the starting segmentation. Solid: the refined
+one knee: coronal, sagittal and axial sections, and a 3D view from the
+lateral side: the whole sagittal section of the image, the translucent
+surface of each bone, and each bone's section drawn on the image. Yellow
+dashed: the starting segmentation. Solid: the refined
 periosteal surface, coloured by bone. Soft tissue more than 10 mm from the
 start is blanked in the sections (display only). The surfaces move about
 1 mm in median over the whole refinement, most of it in the first two moves.*
@@ -175,7 +174,7 @@ because it made no progress for five fits.
 | left tibia | 14 **not converged** | 12 **not converged** | 11 | 10 |
 | left patella | 13 **not converged** | 13 **not converged** | 5 | 5 |
 | left fibula | 13 **not converged** | 5 | 4 | 4 |
-| run time, all bones | 1.7 min | 7.5 min | 8.9 min | 12.1 min |
+| run time, all bones | 1.6 min | 7.7 min | 9.1 min | 12.5 min |
 
 Bone outside the refined surface (cm³): the voxels of each bone's
 thresholded and grown region more than 1 mm outside its refined periosteal
@@ -260,7 +259,7 @@ move, in the same sections.*
 |---|---:|
 | painted by hand | 1.90 cm³ |
 | moves to converge | 6 |
-| run time | 1.8 min |
+| run time | 1.9 min |
 | painted voxels kept inside the refined surface | 0.87 cm³ |
 
 Distance from the automatic surface to the refined one, by distance from
