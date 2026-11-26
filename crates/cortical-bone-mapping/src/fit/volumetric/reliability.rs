@@ -77,19 +77,21 @@ pub(super) fn assess(prep: &Prepared, x: &[f64], psf: [f64; 2], axis: usize) -> 
     let band = prep.problem.band;
     let st = crate::stage!("noise");
     let (noise_sd, rho, step) = noise(prep, x);
-    st.done(format_args!(
+    crate::done!(
+        st,
         "sd {noise_sd:.2}, lag-one correlation per axis {rho:.3?} (grid step {step}), from {} soft-tissue voxels",
         band.soft.len()
-    ));
+    );
     let factor = rho.iter().map(|&r| (1.0 + r) / (1.0 - r)).product::<f64>();
     let st = crate::stage!("node moments (standard errors)");
     let cor = Correlation { rho, step };
     let moments = prep.node_moments(x, &cor);
-    st.done(format_args!(
+    crate::done!(
+        st,
         "{} nodes; correlated pairs within {:?} grid steps",
         prep.lay.nodes,
         cor.reach()
-    ));
+    );
     let st = crate::stage!("data share");
     let (_, _, lin) = prep.linearise(x);
     let share = prep.data_share(&lin);

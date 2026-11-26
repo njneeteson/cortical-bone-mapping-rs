@@ -99,8 +99,11 @@ impl Band {
         spec: &BandSpec,
     ) -> Band {
         let mut samples = samples(image, mesh, fitted, spec);
+        let st = crate::stage!("band: grouping by face");
         samples.par_sort_unstable_by_key(|s| (s.face, s.grid));
-        group(samples, nfaces, spec.outside)
+        let band = group(samples, nfaces, spec.outside);
+        st.end();
+        band
     }
 
     /// Number of voxels.
@@ -136,17 +139,22 @@ fn samples<T: Voxel>(image: &ArrayView3<T>, mesh: &Mesh, fitted: &[Option<u32>],
         spacing: spec.geom.spacing,
         origin: spec.geom.to_physical(lo.map(|v| v as f64)),
     };
+    let st = crate::stage!("band: rasterise the surface");
     let inside = mesh.voxelize(shape, &box_geom);
+    crate::done!(st, "box {shape:?}");
     let real = RealSurface::new(mesh, [d0, d1, d2], spec.geom);
     let points = MeshPoints::new(&real.mesh);
     let h = spec.geom.spacing.iter().cloned().fold(0.0, f64::max);
     // the surface passes within a voxel diagonal of the voxelisation's
     // boundary, so a voxel more than `reach + 2h` from that boundary is out
     // of the band: skip it without the closest-point search
+    let st = crate::stage!("band: distance to the rasterised boundary");
     let near = boundary_distance2(&inside, spec.geom.spacing);
+    st.end();
     let far2 = ((reach + 2.0 * h) * (reach + 2.0 * h)) as f32;
     let step = spec.stride.max(1);
-    (lo[0]..=hi[0])
+    let st = crate::stage!("band: closest points");
+    let out: Vec<Sample> = (lo[0]..=hi[0])
         .step_by(step)
         .collect::<Vec<_>>()
         .into_par_iter()
@@ -192,7 +200,9 @@ fn samples<T: Voxel>(image: &ArrayView3<T>, mesh: &Mesh, fitted: &[Option<u32>],
             }
             out
         })
-        .collect()
+        .collect();
+    crate::done!(st, "{} voxels kept, reach {reach:.3}", out.len());
+    out
 }
 
 /// Squared physical distance of every voxel to the nearest boundary voxel of

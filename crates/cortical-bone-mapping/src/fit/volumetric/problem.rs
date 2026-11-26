@@ -355,6 +355,14 @@ impl<'a> VolumetricProblem<'a> {
 
     /// `JᵀJ v` for the data term and the penalties.
     fn product(&self, lay: &Layout, incident: &Incident, lin: &Lin, v: &[f64], out: &mut [f64]) {
+        self.data_product(lay, incident, lin, v, out);
+        self.smoothing_product(lay, v, out);
+        self.curvature_product(lay, lin, v, out);
+    }
+
+    /// The data term's Gauss–Newton product into `out`: `y_f = G_f z_f(v)`
+    /// per face, gathered back to the vertices and summed for the globals.
+    pub(crate) fn data_product(&self, lay: &Layout, incident: &Incident, lin: &Lin, v: &[f64], out: &mut [f64]) {
         let (n, nfc, nz) = (lay.nodes, lay.fields.len(), lay.nz());
         let np = nz * (nz + 1) / 2;
         let faces = self.faces;
@@ -387,22 +395,35 @@ impl<'a> VolumetricProblem<'a> {
         for gi in 0..lay.globals.len() {
             out[nfc * n + gi] = det_sum(y.len(), |f| y[f][3 * nfc + gi]);
         }
-        self.penalty_product(lay, lin, v, out);
     }
 
-    /// Add the penalties' Gauss–Newton product to `out`.
-    fn penalty_product(&self, lay: &Layout, lin: &Lin, v: &[f64], out: &mut [f64]) {
+    /// Add the smoothing penalty's product `κ ωᵀω v` (per smoothed field) to `out`.
+    pub(crate) fn smoothing_product(&self, lay: &Layout, v: &[f64], out: &mut [f64]) {
         let n = lay.nodes;
         let field = |c: usize| lay.fields.iter().position(|&f| f == c);
         if let Some((op, coef)) = self.smoothing {
-            for (c, k) in SMOOTHED.into_iter().zip(coef) {
-                if let (Some(fi), true) = (field(c), k != 0.0) {
-                    let mut y = vec![0.0; n];
-                    smoothing_product(op, &[&v[fi * n..(fi + 1) * n]], &[k], &mut [&mut y]);
-                    add(&mut out[fi * n..(fi + 1) * n], &y);
-                }
+            // every smoothed field in one pass over the operator (each result
+            // is bitwise that of a pass of its own)
+            let smoothed: Vec<(usize, f64)> = SMOOTHED
+                .into_iter()
+                .zip(coef)
+                .filter_map(|(c, k)| field(c).filter(|_| k != 0.0).map(|fi| (fi, k)))
+                .collect();
+            let dxs: Vec<&[f64]> = smoothed.iter().map(|&(fi, _)| &v[fi * n..(fi + 1) * n]).collect();
+            let ks: Vec<f64> = smoothed.iter().map(|&(_, k)| k).collect();
+            let mut ys = vec![vec![0.0; n]; smoothed.len()];
+            let mut refs: Vec<&mut Vec<f64>> = ys.iter_mut().collect();
+            smoothing_product(op, &dxs, &ks, &mut refs);
+            for (&(fi, _), y) in smoothed.iter().zip(&ys) {
+                add(&mut out[fi * n..(fi + 1) * n], y);
             }
         }
+    }
+
+    /// Add the curvature penalty's Gauss–Newton product (on `m`, `t`) to `out`.
+    pub(crate) fn curvature_product(&self, lay: &Layout, lin: &Lin, v: &[f64], out: &mut [f64]) {
+        let n = lay.nodes;
+        let field = |c: usize| lay.fields.iter().position(|&f| f == c);
         if let (Some(cv), Some(st), Some(fm), Some(ft)) = (self.curvature, &lin.curv, field(M), field(T)) {
             let (mut ym, mut yt) = (vec![0.0; n], vec![0.0; n]);
             cv.gn_product(st, &v[fm * n..(fm + 1) * n], &v[ft * n..(ft + 1) * n], &mut ym, &mut yt);
@@ -715,7 +736,9 @@ impl Correlation {
     /// Pairs whose correlation is below this are left out.
     const NEGLIGIBLE: f64 = 1e-3;
 
-    /// The correlation of two voxels.
+    /// The correlation of two voxels (the tests' reference; the sums use
+    /// [`Self::powers`]).
+    #[cfg(test)]
     fn between(&self, a: [u32; 3], b: [u32; 3]) -> f64 {
         (0..3)
             .map(|k| {
@@ -744,13 +767,25 @@ impl Correlation {
         })
     }
 
-    /// For every voxel `i`, the voxels `j` (in increasing order) close enough
-    /// along every axis for a non-negligible correlation. The voxels are
-    /// sorted along the axis of their largest spread (a node's voxels form a
-    /// column along its normal), so each voxel looks only at a window of
-    /// the column instead of every pair.
-    fn partners(&self, grids: &[[u32; 3]]) -> Vec<Vec<usize>> {
+    /// `C += Σ_ij ρ_ij u_i u_jᵀ` for the vectors `u_i` (rows of `u`, length
+    /// `n`) at grid indices `grids`, over the pairs with a non-negligible
+    /// correlation (white noise: the diagonal only).
+    ///
+    /// Computed as `C = Σ_i u_i y_iᵀ` with `y_i = Σ_j ρ_ij u_j`, which costs
+    /// `n` operations per pair instead of `n²`. The voxels are sorted along
+    /// the axis of their largest spread (a node's voxels form a column along
+    /// its normal), so each voxel visits only the window of the column within
+    /// [`Self::reach`]; the powers of `ρ` come from a table.
+    fn covariance(&self, grids: &[[u32; 3]], u: &[f64], n: usize, c: &mut [f64]) {
+        if self.rho.iter().all(|&r| r < Self::NEGLIGIBLE) {
+            for ui in u.chunks_exact(n) {
+                outer_add(c, ui, ui, n);
+            }
+            return;
+        }
+        let step = self.step.max(1);
         let reach = self.reach();
+        let powers = self.powers(reach);
         let spread = |k: usize| {
             let (lo, hi) = grids
                 .iter()
@@ -760,50 +795,51 @@ impl Correlation {
         let axis = (0..3).max_by_key(|&k| spread(k)).unwrap_or(0);
         let mut order: Vec<usize> = (0..grids.len()).collect();
         order.sort_by_key(|&i| grids[i][axis]);
-        grids
-            .iter()
-            .map(|gi| {
-                let lo = gi[axis].saturating_sub(reach[axis]);
-                let hi = gi[axis].saturating_add(reach[axis]);
-                let start = order.partition_point(|&j| grids[j][axis] < lo);
-                let end = order.partition_point(|&j| grids[j][axis] <= hi);
-                let mut js: Vec<usize> = order[start..end]
-                    .iter()
-                    .copied()
-                    .filter(|&j| (0..3).all(|k| gi[k].abs_diff(grids[j][k]) <= reach[k]))
-                    .collect();
-                js.sort_unstable();
-                js
-            })
-            .collect()
-    }
-
-    /// `C += Σ_ij ρ_ij u_i u_jᵀ` for the vectors `u_i` (rows of `u`, length
-    /// `n`) at grid indices `grids` (white noise: the diagonal only). Only
-    /// the pairs within [`Self::reach`] are visited; the sum, in the same
-    /// order, is that over all pairs with a non-negligible correlation.
-    fn covariance(&self, grids: &[[u32; 3]], u: &[f64], n: usize, c: &mut [f64]) {
-        let white = self.rho.iter().all(|&r| r < Self::NEGLIGIBLE);
-        let near = if white { Vec::new() } else { self.partners(grids) };
+        let mut y = vec![0.0; n];
         for (i, gi) in grids.iter().enumerate() {
-            let ui = &u[i * n..(i + 1) * n];
-            let partners: Box<dyn Iterator<Item = usize> + '_> = if white {
-                Box::new(std::iter::once(i))
-            } else {
-                Box::new(near[i].iter().copied())
-            };
-            for j in partners {
-                let r = self.between(*gi, grids[j]);
+            let lo = gi[axis].saturating_sub(reach[axis]);
+            let hi = gi[axis].saturating_add(reach[axis]);
+            let start = order.partition_point(|&j| grids[j][axis] < lo);
+            let end = order.partition_point(|&j| grids[j][axis] <= hi);
+            y.fill(0.0);
+            for &j in &order[start..end] {
+                let gj = grids[j];
+                let mut r = 1.0;
+                for k in 0..3 {
+                    let d = gi[k].abs_diff(gj[k]);
+                    if d > reach[k] {
+                        r = 0.0;
+                        break;
+                    }
+                    r *= powers[k][(d / step) as usize];
+                }
                 if r < Self::NEGLIGIBLE {
                     continue;
                 }
-                let uj = &u[j * n..(j + 1) * n];
-                for a in 0..n {
-                    for b in 0..n {
-                        c[a * n + b] += r * ui[a] * uj[b];
-                    }
+                for (ya, ua) in y.iter_mut().zip(&u[j * n..(j + 1) * n]) {
+                    *ya += r * ua;
                 }
             }
+            outer_add(c, &u[i * n..(i + 1) * n], &y, n);
+        }
+    }
+
+    /// `ρ_a^lag` per axis for the lags within `reach`.
+    fn powers(&self, reach: [u32; 3]) -> [Vec<f64>; 3] {
+        let step = self.step.max(1);
+        std::array::from_fn(|k| {
+            (0..=reach[k] / step)
+                .map(|lag| if lag == 0 { 1.0 } else { self.rho[k].powi(lag as i32) })
+                .collect()
+        })
+    }
+}
+
+/// `C += a bᵀ` (`n × n`, row-major).
+fn outer_add(c: &mut [f64], a: &[f64], b: &[f64], n: usize) {
+    for (row, &ai) in c.chunks_exact_mut(n).zip(a) {
+        for (cij, &bj) in row.iter_mut().zip(b) {
+            *cij += ai * bj;
         }
     }
 }
@@ -913,7 +949,7 @@ mod correlation_tests {
     }
 
     #[test]
-    fn windowed_covariance_equals_all_pairs_exactly() {
+    fn covariance_equals_the_sum_over_all_pairs() {
         let mut rng = Rng::new(7);
         let n = 4;
         for (rho, step) in [
@@ -930,7 +966,13 @@ mod correlation_tests {
                 let mut c = vec![0.0; n * n];
                 cor.covariance(&grids, &u, n, &mut c);
                 let want = all_pairs(&cor, &grids, &u, n);
-                assert_eq!(c, want, "rho {rho:?}, step {step}, {len} voxels");
+                let scale = want.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+                for (got, w) in c.iter().zip(&want) {
+                    assert!(
+                        (got - w).abs() <= 1e-12 * scale,
+                        "rho {rho:?}, step {step}, {len} voxels: {got} vs {w}"
+                    );
+                }
             }
         }
     }

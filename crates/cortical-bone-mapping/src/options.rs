@@ -19,6 +19,13 @@ pub struct SurfaceOptions {
     pub taubin_lambda: f64,
     /// Skip nodes on caps where the mask touches the image edge.
     pub exclude_border: bool,
+    /// Extract the surface on every `grid_step`-th voxel of the image grid
+    /// (1 = every voxel): nodes about `grid_step` voxels apart, about
+    /// `grid_step²` times fewer of them. The surface is then the zero level
+    /// of the mask's exact signed distance, sampled on that coarser grid, so
+    /// its vertices keep sub-voxel positions. The data are still every voxel.
+    /// Not combined with `mask_smoothing`.
+    pub grid_step: usize,
 }
 
 impl Default for SurfaceOptions {
@@ -29,6 +36,7 @@ impl Default for SurfaceOptions {
             taubin_passband: 0.1,
             taubin_lambda: 0.5,
             exclude_border: true,
+            grid_step: 1,
         }
     }
 }
@@ -435,6 +443,10 @@ pub struct Options {
     pub init_from_global: bool,
     /// Keep the sampled profiles in the result.
     pub keep_profiles: bool,
+    /// Compute the volumetric model's reliability outputs (noise level and
+    /// correlation, per-node standard error of `t`, data share, misfit).
+    /// They are only reported, never used by the fit or by refinement.
+    pub reliability: bool,
     /// Worker threads (`None` = all cores).
     pub threads: Option<usize>,
     /// How node neighbourhoods are measured for the regularisation operator
@@ -455,6 +467,7 @@ impl Default for Options {
             method: Method::Local,
             init_from_global: true,
             keep_profiles: false,
+            reliability: true,
             threads: None,
             neighbour_distance: None,
         }
@@ -576,6 +589,12 @@ impl Options {
         }
         if o.sampling.resolution.is_some_and(|r| !(r > 0.0)) {
             return bad("sampling resolution must be positive");
+        }
+        if o.surface.grid_step == 0 {
+            return bad("grid_step must be at least 1");
+        }
+        if o.surface.grid_step > 1 && o.surface.mask_smoothing > 0.0 {
+            return bad("grid_step > 1 extracts the surface from the mask's signed distance; set mask_smoothing to 0");
         }
         for c in 0..NPARAM {
             if !(o.model.lower[c] <= o.model.upper[c]) {

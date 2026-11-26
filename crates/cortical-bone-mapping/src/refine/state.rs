@@ -133,12 +133,13 @@ impl Freeze {
     /// surroundings have moved, count still nodes (a node whose fit failed is
     /// never still), and freeze nodes whose whole neighbourhood is still.
     pub fn update(&self, st: &mut NodeState, mesh: &Mesh, step: &Step) {
+        let logged = log::log_enabled!(log::Level::Debug);
         let count = |st: &NodeState| st.frozen.iter().filter(|&&f| f).count();
-        let before = count(st);
-        if before > 0 {
+        let before = if logged { count(st) } else { 0 };
+        if st.frozen.iter().any(|&f| f) {
             self.thaw_near_motion(st, mesh, step);
         }
-        let thawed = before - count(st);
+        let thawed = if logged { before - count(st) } else { 0 };
         self.count_still(st, step);
         self.freeze_still_regions(st, mesh);
         log::debug!(

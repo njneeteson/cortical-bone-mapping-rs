@@ -17,13 +17,16 @@
 //! per-node or per-voxel loops: a disabled record costs one level check.
 //!
 //! A stage logs its start, so that the log of a run that stalls shows where
-//! it is:
+//! it is, and its end with details:
 //!
 //! ```ignore
 //! let s = stage!("band");
 //! let band = Band::build(...);
-//! s.done(format_args!("{} voxels", band.len()));
+//! let seconds = done!(s, "{} voxels", band.len());
 //! ```
+//!
+//! [`done!`](crate::done) evaluates its details only when debug logging is
+//! on (like `log::debug!`), so they may count or summarise large arrays.
 
 use std::fmt;
 use std::time::Instant;
@@ -48,13 +51,19 @@ impl Stage {
         }
     }
 
+    /// The module the stage logs under.
+    pub fn target(&self) -> &'static str {
+        self.target
+    }
+
     /// Seconds since the stage started.
     pub fn elapsed(&self) -> f64 {
         self.start.elapsed().as_secs_f64()
     }
 
     /// End the stage, logging `detail` and its duration; returns the
-    /// duration in seconds.
+    /// duration in seconds. Use [`done!`](crate::done), which builds `detail`
+    /// only when it will be logged.
     pub fn done(self, detail: fmt::Arguments) -> f64 {
         let t = self.elapsed();
         log::debug!(target: self.target, "{}: done in {t:.3} s; {detail}", self.name);
@@ -76,4 +85,19 @@ macro_rules! stage {
     ($name:expr) => {
         $crate::logging::Stage::new(module_path!(), $name)
     };
+}
+
+/// End a [`Stage`] with details (format arguments), which are evaluated only
+/// when debug logging is on; returns the stage's duration in seconds.
+#[macro_export]
+#[doc(hidden)]
+macro_rules! done {
+    ($stage:expr, $($arg:tt)+) => {{
+        let stage = $stage;
+        if ::log::log_enabled!(target: stage.target(), ::log::Level::Debug) {
+            stage.done(format_args!($($arg)+))
+        } else {
+            stage.elapsed()
+        }
+    }};
 }

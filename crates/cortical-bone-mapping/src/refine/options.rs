@@ -25,6 +25,9 @@ pub struct RefineOptions {
     pub max_step: Option<f64>,
     /// Keep the surface of every iteration (for visualisation).
     pub keep_history: bool,
+    /// Rasterise the refined surfaces into periosteal, endosteal and
+    /// cortical masks of the image's shape (the meshes are always returned).
+    pub masks: bool,
     /// Print one line to stderr after every fit (displacement, thickness,
     /// fit iterations, time), and the time per stage at the end.
     pub verbose: bool,
@@ -74,6 +77,7 @@ impl Default for RefineOptions {
             smoothing_iterations: 2,
             max_step: None,
             keep_history: false,
+            masks: true,
             verbose: true,
             label: String::new(),
             edge_ratio: 0.1,
@@ -157,10 +161,12 @@ pub struct RefineResult {
     pub periosteal: Mesh,
     /// The fitted endosteal surface.
     pub endosteal: Mesh,
-    pub periosteal_mask: Array3<bool>,
-    pub endosteal_mask: Array3<bool>,
+    /// The regions enclosed by the refined surfaces, at the image's shape
+    /// (`None` unless [`RefineOptions::masks`]).
+    pub periosteal_mask: Option<Array3<bool>>,
+    pub endosteal_mask: Option<Array3<bool>>,
     /// `periosteal_mask & !endosteal_mask`.
-    pub cortical_mask: Array3<bool>,
+    pub cortical_mask: Option<Array3<bool>>,
     /// One entry per fit: `history[k]` is the fit on `surfaces[k]`.
     pub history: Vec<IterationStats>,
     /// The input segmentation's surface and the surface after every move (if

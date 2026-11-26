@@ -101,12 +101,13 @@ impl SmoothingOperator {
             cols.shrink_to_fit();
             vals.shrink_to_fit();
         }
-        s.done(format_args!(
+        crate::done!(
+            s,
             "{n} nodes, {k} neighbours within {:.3} (sigma {sigma}): {w} weights, {:.1} per node, {:.1} MB",
             r2.sqrt(),
             w as f64 / n.max(1) as f64,
             (w * 8) as f64 / 1e6
-        ));
+        );
         SmoothingOperator {
             rows: SparseRows {
                 offsets,

@@ -59,7 +59,10 @@ fn main() {
     .unwrap();
     let bad_as_bool = bad_mask.mapv(|v| v != 0);
     println!("Dice(bad, truth)     = {:.4}", dice(&bad_as_bool, &truth_mask));
-    println!("Dice(refined, truth) = {:.4}", dice(&r.periosteal_mask, &truth_mask));
+    println!(
+        "Dice(refined, truth) = {:.4}",
+        dice(r.periosteal_mask.as_ref().unwrap(), &truth_mask)
+    );
     for (i, h) in r.history.iter().enumerate() {
         println!(
             "iter {i:>2}: rms move {:.4}  max move {:.4}  mean t {:.4}  residual {:.2}",

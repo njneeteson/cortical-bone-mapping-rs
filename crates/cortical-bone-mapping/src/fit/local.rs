@@ -335,7 +335,7 @@ pub fn fit_all(
             }
         })
         .collect();
-    s.done(format_args!("{} profiles", fits.len()));
+    crate::done!(s, "{} profiles", fits.len());
     fits
 }
 

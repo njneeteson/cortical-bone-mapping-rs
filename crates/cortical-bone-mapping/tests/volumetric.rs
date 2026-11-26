@@ -98,9 +98,35 @@ fn refinement_with_the_volumetric_model_snaps_to_the_periosteum() {
     let o = options(&ph, volumetric_tied());
     let r = refine_segmentation(img.view(), bad.view(), NO_SUB, &o, &RefineOptions::default()).unwrap();
     assert!(r.converged);
-    let (before, after) = (dice(&bad.mapv(|v| v != 0), &truth), dice(&r.periosteal_mask, &truth));
+    let (before, after) = (
+        dice(&bad.mapv(|v| v != 0), &truth),
+        dice(r.periosteal_mask.as_ref().unwrap(), &truth),
+    );
     assert!(before < 0.92 && after > 0.995, "dice {before} -> {after}");
     assert!(periosteal_error(&ph, &r.result) < 0.02);
     assert!(thickness_error(&ph, &r.result).1 < 0.03);
     assert!(r.result.volumetric.is_some());
+}
+
+#[test]
+fn reliability_outputs_can_be_skipped_without_changing_the_fit() {
+    let ph = cylinder(40.0, 1);
+    let (img, mask) = ph.generate();
+    let o = options(&ph, volumetric_tied());
+    let with = run(img.view(), mask.view(), NO_SUB, &o).unwrap();
+    let without = run(
+        img.view(),
+        mask.view(),
+        NO_SUB,
+        &Options {
+            reliability: false,
+            ..o
+        },
+    )
+    .unwrap();
+    assert_eq!(with.params, without.params);
+    assert_eq!(with.residual, without.residual);
+    let info = without.volumetric.as_ref().unwrap();
+    assert!(info.std_error_t.iter().all(|v| v.is_nan()) && info.noise_sd.is_nan());
+    assert!(with.volumetric.as_ref().unwrap().noise_sd.is_finite());
 }

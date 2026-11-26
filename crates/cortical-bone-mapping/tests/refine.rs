@@ -38,7 +38,7 @@ fn snaps_dilated_and_bumpy_segmentation_to_the_periosteum() {
     let r = refine_segmentation(img.view(), bad.view(), NO_SUB, &o, &RefineOptions::default()).unwrap();
     assert!(r.converged);
     let before = dice(&bad.mapv(|v| v != 0), &truth);
-    let after = dice(&r.periosteal_mask, &truth);
+    let after = dice(r.periosteal_mask.as_ref().unwrap(), &truth);
     assert!(before < 0.92 && after > 0.995, "dice {before} -> {after}");
     assert!(periosteal_error(&ph, &r.result) < 0.02);
     assert!(thickness_error(&ph, &r.result).1 < 0.03);
@@ -55,6 +55,8 @@ fn snaps_dilated_and_bumpy_segmentation_to_the_periosteum() {
         .clone()
         .map(|i| {
             r.cortical_mask
+                .as_ref()
+                .unwrap()
                 .index_axis(ndarray::Axis(0), i)
                 .iter()
                 .filter(|&&b| b)
@@ -82,7 +84,7 @@ fn level_set_refinement_remeshes_and_snaps_to_the_periosteum() {
     };
     let r = refine_segmentation(img.view(), bad.view(), NO_SUB, &o, &ro).unwrap();
     assert!(r.converged, "{:?}", r.history);
-    let after = dice(&r.periosteal_mask, &truth);
+    let after = dice(r.periosteal_mask.as_ref().unwrap(), &truth);
     assert!(after > 0.995, "dice {after}");
     assert!(periosteal_error(&ph, &r.result) < 0.025);
     assert!(thickness_error(&ph, &r.result).1 < 0.035);
@@ -119,7 +121,7 @@ fn regional_convergence_freezes_still_regions_and_refits_all_at_the_end() {
         );
         // the final fit covers the whole surface
         assert_eq!(r.result.n(), r.history.last().unwrap().nodes);
-        let after = dice(&r.periosteal_mask, &truth);
+        let after = dice(r.periosteal_mask.as_ref().unwrap(), &truth);
         assert!(after > 0.99, "level set {level_set}: dice {after}");
         assert!(periosteal_error(&ph, &r.result) < 0.03);
         assert!(thickness_error(&ph, &r.result).1 < 0.04);
@@ -152,6 +154,8 @@ fn refinement_never_enters_an_excluded_region() {
         let r = refine_segmentation_excluding(img.view(), bad.view(), NO_SUB, Some(ex.view()), &o, &ro).unwrap();
         let inside = r
             .periosteal_mask
+            .as_ref()
+            .unwrap()
             .iter()
             .zip(ex.iter())
             .filter(|(&p, &e)| p && e != 0)
@@ -162,7 +166,7 @@ fn refinement_never_enters_an_excluded_region() {
         );
         // away from the slab the surface is still right
         let free = |a: &ndarray::Array3<bool>| a.indexed_iter().filter(|((_, j, _), &v)| v && *j < d1 / 2).count();
-        let (got, want) = (free(&r.periosteal_mask), free(&truth.mapv(|v| v != 0)));
+        let (got, want) = (free(r.periosteal_mask.as_ref().unwrap()), free(&truth.mapv(|v| v != 0)));
         assert!(
             (got as f64 / want as f64 - 1.0).abs() < 0.01,
             "level set {level_set}: {got} vs {want} voxels"
@@ -175,7 +179,7 @@ fn eroded_segmentation_grows_outward() {
     let (ph, img, bad, truth) = bad_phantom(-0.3, 0.0);
     let o = options(&ph, Method::Local);
     let r = refine_segmentation(img.view(), bad.view(), NO_SUB, &o, &RefineOptions::default()).unwrap();
-    assert!(dice(&r.periosteal_mask, &truth) > 0.995);
+    assert!(dice(r.periosteal_mask.as_ref().unwrap(), &truth) > 0.995);
 }
 
 #[test]
@@ -240,7 +244,7 @@ fn lobed_bone_with_gross_bumps_converges() {
     let o = options(&ph, regularized(64, None));
     let r = refine_segmentation(img.view(), bad.view(), NO_SUB, &o, &RefineOptions::default()).unwrap();
     assert!(r.converged, "{:?} {:?}", r.history, r.result.info);
-    let after = dice(&r.periosteal_mask, &truth);
+    let after = dice(r.periosteal_mask.as_ref().unwrap(), &truth);
     assert!(after > 0.995, "dice {after}");
     for w in r.history.windows(2) {
         assert!(w[1].rms_displacement < w[0].rms_displacement, "{:?}", r.history);

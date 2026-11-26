@@ -26,6 +26,7 @@ pub(crate) fn parse_options(d: &Bound<'_, PyDict>) -> PyResult<cbm::Options> {
         method,
         init_from_global: req(d, "init_from_global")?,
         keep_profiles: req(d, "keep_profiles")?,
+        reliability: req(d, "reliability")?,
         threads: opt(d, "threads")?,
         neighbour_distance: parse_distance(d)?,
     })
@@ -53,6 +54,7 @@ fn parse_surface(d: &Bound<'_, PyDict>) -> PyResult<cbm::SurfaceOptions> {
         taubin_passband: req(d, "taubin_passband")?,
         taubin_lambda: req(d, "taubin_lambda")?,
         exclude_border: req(d, "exclude_border")?,
+        grid_step: req(d, "grid_step")?,
     })
 }
 
@@ -231,6 +233,7 @@ pub(crate) fn parse_refine(refine: &Bound<'_, PyDict>) -> PyResult<cbm::RefineOp
         smoothing_iterations: req(refine, "smoothing_iterations")?,
         max_step: opt(refine, "max_step")?,
         keep_history: req(refine, "keep_history")?,
+        masks: req(refine, "masks")?,
         verbose: req(refine, "verbose")?,
         label: req(refine, "label")?,
         level_set: req(refine, "level_set")?,

@@ -51,7 +51,7 @@ use rayon::prelude::*;
 use crate::kdtree::KdTree;
 use crate::surface::closest::MeshPoints;
 use crate::surface::mesh::Mesh;
-use crate::surface::nets::{extract_level_set, Extracted};
+use crate::surface::nets::{extract_level_set_coarse, Extracted};
 use crate::surface::voxelize::index_box;
 use crate::util::V3;
 use crate::volume::Geometry;
@@ -65,6 +65,9 @@ pub struct LevelSet {
     pub dims: [usize; 3],
     pub band: f64,
     pub geom: Geometry,
+    /// The surface is extracted on every `step`-th voxel
+    /// ([`SurfaceOptions::grid_step`](crate::options::SurfaceOptions::grid_step)).
+    pub step: usize,
 }
 
 impl LevelSet {
@@ -72,7 +75,7 @@ impl LevelSet {
     /// (physical units) of its bounding box: the sign from rasterising the mesh
     /// (even–odd rule), the magnitude from the exact distance to the mesh,
     /// clamped to `band`.
-    pub fn from_mesh(mesh: &Mesh, dims: [usize; 3], geom: &Geometry, margin: f64, band: f64) -> LevelSet {
+    pub fn from_mesh(mesh: &Mesh, dims: [usize; 3], geom: &Geometry, margin: f64, band: f64, step: usize) -> LevelSet {
         let (lo, hi) = index_box(mesh, dims, geom, margin);
         let shape = (hi[0] - lo[0] + 1, hi[1] - lo[1] + 1, hi[2] - lo[2] + 1);
         log::debug!(
@@ -90,6 +93,7 @@ impl LevelSet {
             dims,
             band,
             geom: *geom,
+            step,
         };
         ls.redistance(mesh, None);
         ls
@@ -107,7 +111,7 @@ impl LevelSet {
 
     /// The zero level as a mesh.
     pub fn extract(&self) -> Extracted {
-        extract_level_set(&self.phi.view(), self.lo, self.dims, &self.geom)
+        extract_level_set_coarse(&self.phi.view(), self.lo, self.dims, &self.geom, self.step)
     }
 
     /// Move the surface: `s[v]` is the displacement of mesh vertex `v` along the
@@ -233,7 +237,7 @@ mod tests {
         let mut mesh = extract_surface(&ball(n, 12.0).view(), &g, 1.0).mesh;
         mesh.taubin_smooth(50, 0.5, 0.1, None);
         let (r0, _) = mean_radius(&mesh, c);
-        let mut ls = LevelSet::from_mesh(&mesh, [n; 3], &g, 4.0, 4.0);
+        let mut ls = LevelSet::from_mesh(&mesh, [n; 3], &g, 4.0, 4.0, 1);
         // re-extraction reproduces the surface
         let e = ls.extract();
         assert!(e.mesh.is_closed_manifold());

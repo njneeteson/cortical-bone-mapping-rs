@@ -39,7 +39,6 @@
 //!   optimization*, Computers in Biology and Medicine, 2025,
 //!   doi:10.1016/j.compbiomed.2025.110636.
 
-
 use super::global::{self, Problem, Role, Smoothing, State};
 use super::{base_roles, local, local_settings, Data, FitConstraints, Nodes, Start};
 use crate::model::{Params, M, NPARAM, RHO_B, RHO_S, SIGMA, T};

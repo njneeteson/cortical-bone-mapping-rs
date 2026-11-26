@@ -72,11 +72,12 @@ pub fn hull_segmentation<T: Voxel>(image: ArrayView3<T>, o: &HullOptions) -> Arr
         m = largest_component(&m, false);
     }
     let hull = slice_hulls(&m);
-    s.done(format_args!(
+    crate::done!(
+        s,
         "{} voxels above the threshold kept, {} in the hull",
         m.iter().filter(|&&v| v).count(),
         hull.iter().filter(|&&v| v).count()
-    ));
+    );
     hull
 }
 

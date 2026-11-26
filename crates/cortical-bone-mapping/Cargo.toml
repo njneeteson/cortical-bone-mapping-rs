@@ -19,5 +19,15 @@ libm.workspace = true
 log.workspace = true
 kiddo = { version = "6.3.1", default-features = false, features = ["multi-threaded"] }
 
+[features]
+# Exposes internal stages to the benchmarks (`benches/`); not for users.
+bench = []
+
 [dev-dependencies]
 proptest = "1"
+criterion = "0.8"
+
+[[bench]]
+name = "volumetric"
+harness = false
+required-features = ["bench"]

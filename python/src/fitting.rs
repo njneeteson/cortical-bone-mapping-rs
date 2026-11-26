@@ -134,9 +134,9 @@ pub(crate) fn refine<'py>(
     let d = PyDict::new(py);
     d.set_item("result", result_dict(py, &r.result)?)?;
     d.set_item("endosteal_vertices", v3_array(py, &r.endosteal.vertices))?;
-    d.set_item("periosteal_mask", r.periosteal_mask.into_pyarray(py))?;
-    d.set_item("endosteal_mask", r.endosteal_mask.into_pyarray(py))?;
-    d.set_item("cortical_mask", r.cortical_mask.into_pyarray(py))?;
+    d.set_item("periosteal_mask", r.periosteal_mask.map(|m| m.into_pyarray(py)))?;
+    d.set_item("endosteal_mask", r.endosteal_mask.map(|m| m.into_pyarray(py)))?;
+    d.set_item("cortical_mask", r.cortical_mask.map(|m| m.into_pyarray(py)))?;
     d.set_item("history", history_list(py, &r.history)?)?;
     let surfs = PyList::empty(py);
     let sfaces = PyList::empty(py);

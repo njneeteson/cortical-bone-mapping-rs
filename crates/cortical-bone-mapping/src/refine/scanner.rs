@@ -161,6 +161,7 @@ impl Shared {
             sigma_start: s.sigma,
             psf: s.psf,
             psf_start: s.psf,
+            skip_reliability: true,
         }
     }
 
@@ -173,6 +174,7 @@ impl Shared {
             density_start: Some(self.density_start),
             sigma_start: s.sigma,
             psf_start: s.psf,
+            skip_reliability: true,
             ..FitConstraints::default()
         }
     }

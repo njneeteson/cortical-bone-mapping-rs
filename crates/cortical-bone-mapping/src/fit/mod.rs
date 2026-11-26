@@ -48,7 +48,7 @@ use crate::options::{Method, Options, RhoCMode, SigmaMode};
 use crate::result::{CbmResult, FitInfo};
 use crate::surface::mesh::Mesh;
 use crate::util::V3;
-use crate::volume::Voxel;
+use crate::volume::{Geometry, Voxel};
 use local::FitSettings;
 use profiles::{sampling_normals, Profiles, SampleLine};
 
@@ -82,6 +82,10 @@ pub struct FitConstraints<'a> {
     pub psf: Option<[f64; 2]>,
     /// Start the volumetric model's PSF from these values (a warm start).
     pub psf_start: Option<[f64; 2]>,
+    /// Skip the volumetric model's reliability outputs (noise, standard
+    /// errors, data shares; the residuals are still computed): refinement's
+    /// intermediate fits, whose outputs only move the surface.
+    pub skip_reliability: bool,
 }
 
 /// The sampled data every method fits.
@@ -172,7 +176,7 @@ fn profile_rho_c<T: Voxel>(
     let (mut profiles, x) = sample_profiles(image, surface, &sub.vertices, &normals, exclude, o);
     let weights = residual_weights(&x, o.model.residual_boost);
     let rho_c = density::cortical_density(&mut profiles, &x, &weights, None, o)?.0;
-    s.done(format_args!("rho_c {rho_c:.1} from {} profiles", sub.vertices.len()));
+    crate::done!(s, "rho_c {rho_c:.1} from {} profiles", sub.vertices.len());
     Ok(rho_c)
 }
 
@@ -217,12 +221,13 @@ pub fn fit_surface_constrained<T: Voxel>(
     let (rho_c, rho_c_node) = density::cortical_density(&mut profiles, &x, &weights, constraints.rho_c, o)?;
     timings.push((
         "sampling".to_string(),
-        st.done(format_args!(
+        crate::done!(
+            st,
             "{} nodes, {} samples per profile, rho_c {rho_c:.1}{}",
             points.len(),
             x.len(),
             if rho_c_node.is_some() { " (per node)" } else { "" }
-        )),
+        ),
     ));
     let data = Data {
         profiles: &profiles,
@@ -247,10 +252,14 @@ pub fn fit_surface_constrained<T: Voxel>(
     let held = held_subset(constraints.fixed, warm_start, &vertex_ids)?;
     timings.push((
         "global fit".to_string(),
-        st.done(format_args!("[m, t, sigma, rho_s, rho_b] = {global_params:.3?}")),
+        crate::done!(st, "[m, t, sigma, rho_s, rho_b] = {global_params:.3?}"),
     ));
     if let Some(h) = &held {
-        log::debug!("{} of {} nodes held at their warm start", h.iter().filter(|&&b| b).count(), h.len());
+        log::debug!(
+            "{} of {} nodes held at their warm start",
+            h.iter().filter(|&&b| b).count(),
+            h.len()
+        );
     }
     let starts =
         |global: &Params, sigma_fixed: Option<&[f64]>| node_starts(global, warm_start, &vertex_ids, sigma_fixed);
@@ -262,7 +271,7 @@ pub fn fit_surface_constrained<T: Voxel>(
         if o.init_from_global {
             global_params = density::fit_one_model(&data, global_params, sigma_fixed.as_deref());
         }
-        timings.push(("psf estimation".to_string(), st.done(format_args!("psf {est:.3?}"))));
+        timings.push(("psf estimation".to_string(), crate::done!(st, "psf {est:.3?}")));
     }
 
     // ---- the chosen method
@@ -280,7 +289,7 @@ pub fn fit_surface_constrained<T: Voxel>(
     let mut params = fit_method(&data, &nodes, &start, constraints, &mut info, &mut timings);
     timings.push((
         format!("{} fit", o.method.name()),
-        st.done(format_args!("method {}", o.method.name())),
+        crate::done!(st, "method {}", o.method.name()),
     ));
 
     // ---- residuals, and per-node densities scaled back
@@ -349,8 +358,16 @@ fn sample_profiles<T: Voxel>(
         profiles.exclude(&ex, geom, points, normals, &line);
     }
     if o.sampling.half_width_inside {
-        let region = surface.voxelize(image.dim(), geom);
-        profiles.limit_inside(&region.view(), geom, points, normals, &line, geom.min_spacing());
+        // the object's interior, rasterised on its bounding box only
+        let (d0, d1, d2) = image.dim();
+        let (lo, hi) = crate::surface::voxelize::index_box(surface, [d0, d1, d2], geom, 0.0);
+        let shape = (hi[0] - lo[0] + 1, hi[1] - lo[1] + 1, hi[2] - lo[2] + 1);
+        let box_geom = Geometry {
+            spacing: geom.spacing,
+            origin: geom.to_physical(lo.map(|v| v as f64)),
+        };
+        let region = surface.voxelize(shape, &box_geom);
+        profiles.limit_inside(&region.view(), lo, geom, points, normals, &line, geom.min_spacing());
     }
     (profiles, line.x)
 }

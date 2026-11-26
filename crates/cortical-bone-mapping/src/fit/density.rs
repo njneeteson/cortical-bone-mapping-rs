@@ -198,7 +198,10 @@ fn estimate_rho_c(data: &Data, maxima: Vec<f64>) -> f64 {
         }
         let count = plateaus.len();
         rc = quantile(plateaus, 0.5);
-        log::debug!("rho_c estimate, round {}: {rc:.1}, the median plateau of {count} of {n} nodes", round + 1);
+        log::debug!(
+            "rho_c estimate, round {}: {rc:.1}, the median plateau of {count} of {n} nodes",
+            round + 1
+        );
     }
     rc
 }

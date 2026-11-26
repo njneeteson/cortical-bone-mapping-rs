@@ -41,8 +41,9 @@
 //!   construction algorithm*, Computer Graphics (SIGGRAPH 87) 21(4):163–169,
 //!   1987.
 
-use ndarray::{Array3, ArrayView3};
+use ndarray::{s, Array3, ArrayView3, Zip};
 
+use crate::segmentation::morphology::scaled_sq_distance;
 use crate::surface::mesh::Mesh;
 use crate::volume::{bounding_box, gaussian_filter, Geometry, Voxel};
 
@@ -130,6 +131,70 @@ fn window<A: Copy>(arr: ArrayView3<'_, A>, origin: [isize; 3]) -> impl Fn([isize
 }
 
 const ISO: f64 = 0.5;
+
+/// [`extract_level_set`] on every `step`-th voxel of the image grid: the
+/// voxels whose indices are multiples of `step` (the same lattice for every
+/// call, so the image's edges stay where they are), as a grid with the
+/// image's origin and `step` times its spacing.
+pub fn extract_level_set_coarse(
+    phi: &ArrayView3<f32>,
+    lo: [usize; 3],
+    dims: [usize; 3],
+    geom: &Geometry,
+    step: usize,
+) -> Extracted {
+    if step <= 1 {
+        return extract_level_set(phi, lo, dims, geom);
+    }
+    let first = lo.map(|l| l.div_ceil(step) * step);
+    let (s0, s1, s2) = phi.dim();
+    if (0..3).any(|a| first[a] >= lo[a] + [s0, s1, s2][a]) {
+        return Extracted::empty();
+    }
+    let lattice = phi.slice(s![
+        (first[0] - lo[0])..;step,
+        (first[1] - lo[1])..;step,
+        (first[2] - lo[2])..;step
+    ]);
+    let coarse = Geometry {
+        spacing: geom.spacing.map(|s| s * step as f64),
+        origin: geom.origin,
+    };
+    extract_level_set(
+        &lattice,
+        first.map(|f| f / step),
+        dims.map(|d| (d - 1) / step + 1),
+        &coarse,
+    )
+}
+
+/// The surface of `mask` on every `step`-th voxel (`step` > 1): the zero
+/// level of the mask's exact signed distance (physical units, between voxel
+/// centres, as the binary extraction places its vertices midway), computed
+/// on the mask's bounding box and extracted by [`extract_level_set_coarse`].
+pub fn extract_surface_coarse<T: Voxel>(mask: &ArrayView3<T>, geom: &Geometry, step: usize) -> Extracted {
+    let Some((lo, hi)) = bounding_box(mask) else {
+        return Extracted::empty();
+    };
+    let (d0, d1, d2) = mask.dim();
+    let dims = [d0, d1, d2];
+    let pad = step + 1;
+    let lo = lo.map(|v| v.saturating_sub(pad));
+    let hi: [usize; 3] = std::array::from_fn(|a| (hi[a] + pad).min(dims[a] - 1));
+    let inside = mask
+        .slice(s![lo[0]..=hi[0], lo[1]..=hi[1], lo[2]..=hi[2]])
+        .mapv(|v| v.to_f64() != 0.0);
+    let inv = geom.spacing.map(|s| 1.0 / s);
+    let to_inside = scaled_sq_distance(&inside, inv);
+    let to_outside = scaled_sq_distance(&inside.mapv(|b| !b), inv);
+    let mut phi = Array3::<f32>::zeros(inside.dim());
+    Zip::from(&mut phi)
+        .and(&inside)
+        .and(&to_inside)
+        .and(&to_outside)
+        .par_for_each(|p, &i, &di, &dout| *p = if i { -dout.sqrt() } else { di.sqrt() });
+    extract_level_set_coarse(&phi.view(), lo, dims, geom, step)
+}
 
 /// Extract the zero level of a signed distance `phi` (negative inside),
 /// stored for the image voxels `lo + index`, as a closed outward-oriented
@@ -373,6 +438,7 @@ fn crossing_mean(vals: &[f64; 8]) -> Option<[f64; 3]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::V3;
 
     fn ball(n: usize, r: f64) -> Array3<u8> {
         let c = (n as f64 - 1.0) / 2.0;
@@ -411,6 +477,64 @@ mod tests {
         let e = extract_surface(&m.view(), &Geometry::new([2.0, 0.5, 0.5]), 0.0);
         assert!(e.mesh.is_closed_manifold());
         assert!(e.border.iter().any(|&b| b));
+        assert!(e.mesh.signed_volume() > 0.0);
+    }
+
+    #[test]
+    fn coarse_grid_sphere_is_closed_round_and_sparser() {
+        let m = ball(64, 25.0);
+        let g = Geometry::new([1.0; 3]);
+        let fine = extract_surface(&m.view(), &g, 0.0).mesh.vertices.len();
+        for step in [2usize, 4] {
+            let e = extract_surface_coarse(&m.view(), &g, step);
+            let mesh = &e.mesh;
+            assert!(mesh.is_closed_manifold(), "step {step}");
+            assert_eq!(mesh.euler_characteristic(), 2);
+            let n = mesh.vertices.len() as f64;
+            let ratio = fine as f64 / n;
+            assert!(
+                ratio > 0.6 * (step * step) as f64,
+                "step {step}: {fine} vs {n} vertices"
+            );
+            // the vertices lie on the binary surface (midway between voxel
+            // centres): compare their radii with the fine extraction's
+            let c = 31.5;
+            let radii = |vs: &[V3]| -> (f64, f64, f64) {
+                let r: Vec<f64> = vs
+                    .iter()
+                    .map(|v| ((v[0] - c).powi(2) + (v[1] - c).powi(2) + (v[2] - c).powi(2)).sqrt())
+                    .collect();
+                let mean = r.iter().sum::<f64>() / r.len() as f64;
+                let (lo, hi) = r.iter().fold((f64::MAX, f64::MIN), |(a, b), &x| (a.min(x), b.max(x)));
+                (mean, lo, hi)
+            };
+            let f = radii(&extract_surface(&m.view(), &g, 0.0).mesh.vertices);
+            let k = radii(&mesh.vertices);
+            assert!(
+                (k.0 - f.0).abs() < 0.25 && k.1 > f.1 - 0.75 && k.2 < f.2 + 0.75,
+                "step {step}: fine (mean, min, max) {f:?}, coarse {k:?}"
+            );
+            assert!(e.border.iter().all(|&b| !b));
+        }
+    }
+
+    #[test]
+    fn coarse_grid_keeps_the_image_edge_as_border() {
+        // a cylinder along axis 0, cut by both ends of the image
+        let m = Array3::from_shape_fn((23, 40, 40), |(_, j, k)| {
+            (((j as f64 - 19.5).powi(2) + (k as f64 - 19.5).powi(2)) <= 144.0) as u8
+        });
+        let g = Geometry::new([0.5, 0.25, 0.25]);
+        let e = extract_surface_coarse(&m.view(), &g, 4);
+        assert!(e.mesh.is_closed_manifold());
+        assert!(e.border.iter().any(|&b| b));
+        // the caps lie at the lattice's ends, within one coarse step of the image's
+        for (v, &b) in e.mesh.vertices.iter().zip(&e.border) {
+            if b {
+                let i = v[0] / 0.5;
+                assert!(i < 4.0 + 1e-9 || i > 22.0 - 4.0 - 1e-9, "cap vertex at slice {i}");
+            }
+        }
         assert!(e.mesh.signed_volume() > 0.0);
     }
 

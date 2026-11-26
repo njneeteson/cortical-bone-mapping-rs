@@ -90,7 +90,7 @@ pub(crate) fn fit(data: &Data, nodes: &Nodes, start: &Start, info: &mut FitInfo)
         info.add_solve(&si);
         node_params = pr.node_params(&st);
         scalars = st.scalars;
-        level.done(format_args!("level {} of {}", lvl + 1, spacings.len()));
+        crate::done!(level, "level {} of {}", lvl + 1, spacings.len());
     }
     node_params
 }

@@ -528,7 +528,10 @@ impl<'p, P: LeastSquares> Solver<'p, P> {
             return Some(Status::Ftol);
         }
         if self.settings.edge_tol > 0.0 && self.edges_settled() {
-            log::debug!("solve stops: the edges moved less than edge_tol {}", self.settings.edge_tol);
+            log::debug!(
+                "solve stops: the edges moved less than edge_tol {}",
+                self.settings.edge_tol
+            );
             self.edge_stop = true;
             return Some(Status::Ftol);
         }

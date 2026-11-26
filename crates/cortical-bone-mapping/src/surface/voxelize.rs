@@ -149,4 +149,39 @@ mod tests {
         assert!((count / want - 1.0).abs() < 0.03, "{count} vs {want}");
         assert!(mask[[12, 12, 12]] && !mask[[0, 0, 0]] && !mask[[12, 12, 21]]);
     }
+
+    /// Voxelising only the mesh's box (with the box's geometry) gives the
+    /// whole-image mask's voxels there, and the rest of the image is empty.
+    #[test]
+    fn voxelizing_the_box_matches_the_whole_image() {
+        let geom = Geometry {
+            spacing: [0.0607, 0.0611, 0.0607],
+            origin: [12.3, -4.56, 7.89],
+        };
+        let dims = [70, 90, 80];
+        for (r, c) in [(1.3, [1.7, 2.3, 2.1]), (0.9, [2.0, 1.1, 3.0])] {
+            let mut m = Mesh::uv_sphere(r, 96, 64);
+            for v in m.vertices.iter_mut() {
+                *v = add(add(*v, c), geom.origin);
+            }
+            let whole = m.voxelize((dims[0], dims[1], dims[2]), &geom);
+            let (lo, hi) = index_box(&m, dims, &geom, 0.0);
+            let shape = (hi[0] - lo[0] + 1, hi[1] - lo[1] + 1, hi[2] - lo[2] + 1);
+            let box_geom = Geometry {
+                spacing: geom.spacing,
+                origin: geom.to_physical(lo.map(|v| v as f64)),
+            };
+            let part = m.voxelize(shape, &box_geom);
+            for ((i, j, k), &w) in whole.indexed_iter() {
+                let inside = (0..3).all(|a| [i, j, k][a] >= lo[a] && [i, j, k][a] <= hi[a]);
+                let p = if inside {
+                    part[[i - lo[0], j - lo[1], k - lo[2]]]
+                } else {
+                    false
+                };
+                assert_eq!(w, p, "voxel {:?}", (i, j, k));
+            }
+            assert!(whole.iter().any(|&b| b));
+        }
+    }
 }

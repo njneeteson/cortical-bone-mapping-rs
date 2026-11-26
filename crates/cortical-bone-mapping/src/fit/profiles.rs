@@ -45,7 +45,7 @@ use ndarray::ArrayView3;
 use rayon::prelude::*;
 
 use crate::util::{add, dot, norm, scale, sub, V3};
-use crate::volume::{convolve_1d, gaussian_kernel, is_set_at, trilinear, Geometry, Voxel};
+use crate::volume::{convolve_1d, gaussian_kernel, is_set_at, is_set_in_box, trilinear, Geometry, Voxel};
 
 /// Restrict the direction of the sampling lines.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
@@ -154,9 +154,13 @@ impl Profiles {
     /// normal: the line leaves `region` (the object's interior) at `x_exit`,
     /// and samples with `x > max(x_exit / 2, min_inside)` get zero weight.
     /// Lines that do not leave the region within the profile are unchanged.
+    /// `region` holds the image's voxels from index `lo` on (a crop around
+    /// the object; outside it is not the object).
+    #[allow(clippy::too_many_arguments)]
     pub fn limit_inside<V: Voxel>(
         &mut self,
         region: &ArrayView3<V>,
+        lo: [usize; 3],
         geom: &Geometry,
         points: &[V3],
         normals: &[V3],
@@ -169,7 +173,7 @@ impl Profiles {
             let mut entered = false;
             let mut exit = None;
             for &x in line.x.iter().filter(|&&x| x > 0.0) {
-                if is_set_at(region, geom, add(p, scale(nrm, x))) {
+                if is_set_in_box(region, lo, geom, add(p, scale(nrm, x))) {
                     entered = true;
                 } else if entered {
                     exit = Some(x);
@@ -315,7 +319,7 @@ mod tests {
             let p = [[15.0, lo as f64 - 0.5, 15.0]];
             let n = [[0.0, 1.0, 0.0]];
             let mut prof = Profiles::sample(&img.view(), &geom, &p, &n, &line, 0.0);
-            prof.limit_inside(&region.view(), &geom, &p, &n, &line, 1.0);
+            prof.limit_inside(&region.view(), [0; 3], &geom, &p, &n, &line, 1.0);
             let used = prof.used_row(0).unwrap();
             let last = line
                 .x

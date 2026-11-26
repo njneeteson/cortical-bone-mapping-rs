@@ -34,6 +34,13 @@ class Options:
         Taubin lambda|mu smoothing with ``1/lambda + 1/mu = passband``.
     exclude_border
         Do not fit vertices on the caps where the mask is cut by the image edge.
+    grid_step
+        Extract the surface on every ``grid_step``-th voxel (1 = every voxel):
+        nodes about ``grid_step`` voxels apart, about ``grid_step**2`` times
+        fewer of them, from the mask's exact signed distance (vertices keep
+        sub-voxel positions). The data are still every voxel. For
+        high-resolution images (HR-pQCT), where the regularisation spans many
+        voxels. Not combined with ``mask_smoothing``.
 
     **Sampling**
 
@@ -211,6 +218,11 @@ class Options:
 
     keep_profiles
         Return the sampled profiles.
+    reliability
+        Compute the volumetric model's reliability outputs
+        (``result.volumetric``: noise, per-node standard error of ``t``, data
+        share, misfit). They are only reported, never used by the fit or by
+        refinement; turn them off when they will not be looked at.
     threads
         Worker threads (``None`` = all cores).
     """
@@ -223,6 +235,7 @@ class Options:
     taubin_passband: float = 0.1
     taubin_lambda: float = 0.5
     exclude_border: bool = True
+    grid_step: int = 1
     # sampling
     outside: float = 2.0
     inside: float = 4.0
@@ -292,6 +305,7 @@ class Options:
     neighbour_distance: Optional[Literal["euclidean", "surface"]] = None
     # other
     keep_profiles: bool = False
+    reliability: bool = True
     threads: Optional[int] = None
 
     def _to_core(self) -> dict:
@@ -394,6 +408,10 @@ class RefineOptions:
         Optional cap on the displacement per iteration.
     keep_history
         Keep the surface of every iteration (:attr:`RefineResult.surfaces`).
+    masks
+        Rasterise the refined surfaces into periosteal, endosteal and
+        cortical masks of the image's shape (``None`` otherwise; the surfaces
+        are always returned).
     verbose
         Print one line to stderr after the initial fit and after every
         iteration (displacement, mean thickness, fit iterations, elapsed time).
@@ -455,6 +473,7 @@ class RefineOptions:
     smoothing_iterations: int = 2
     max_step: Optional[float] = None
     keep_history: bool = False
+    masks: bool = True
     verbose: bool = True
     label: str = ""
     edge_ratio: float = 0.1

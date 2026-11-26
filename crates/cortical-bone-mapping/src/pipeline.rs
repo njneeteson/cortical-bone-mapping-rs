@@ -32,7 +32,7 @@ use crate::fit::fit_surface;
 use crate::options::Options;
 use crate::result::CbmResult;
 use crate::surface::mesh::Mesh;
-use crate::surface::nets::extract_surface;
+use crate::surface::nets::{extract_surface, extract_surface_coarse};
 use crate::volume::Voxel;
 
 /// Run `f` on a pool with `threads` workers (or the global pool).
@@ -98,7 +98,7 @@ pub fn run<T: Voxel, U: Voxel, V: Voxel>(
         );
         let mut res = fit_surface(&image, surf.0, &candidates, options, None)?;
         res.info.timings.insert(0, ("surface".into(), t_surface));
-        let t = run.done(format_args!("{} nodes", res.points.len()));
+        let t = crate::done!(run, "{} nodes", res.points.len());
         log::info!("cortical bone mapping: {} nodes in {t:.1} s", res.points.len());
         Ok(res)
     })?
@@ -108,20 +108,28 @@ pub fn run<T: Voxel, U: Voxel, V: Voxel>(
 pub fn prepare_surface<U: Voxel>(mask: &ArrayView3<U>, options: &Options) -> (Mesh, Vec<bool>) {
     let s = &options.surface;
     let st = crate::stage!("surface nets");
-    let e = extract_surface(mask, &options.geometry, s.mask_smoothing);
-    st.done(format_args!(
-        "{} vertices, {} faces, {} on the image's border",
+    let e = if s.grid_step > 1 {
+        extract_surface_coarse(mask, &options.geometry, s.grid_step)
+    } else {
+        extract_surface(mask, &options.geometry, s.mask_smoothing)
+    };
+    crate::done!(
+        st,
+        "grid step {}: {} vertices, {} faces, {} on the image's border",
+        s.grid_step,
         e.mesh.vertices.len(),
         e.mesh.faces.len(),
         e.border.iter().filter(|&&b| b).count()
-    ));
+    );
     let mut mesh = e.mesh;
     let st = crate::stage!("Taubin smoothing");
     mesh.taubin_smooth(s.taubin_iterations, s.taubin_lambda, s.taubin_passband, None);
-    st.done(format_args!(
+    crate::done!(
+        st,
         "{} iterations, pass-band {}",
-        s.taubin_iterations, s.taubin_passband
-    ));
+        s.taubin_iterations,
+        s.taubin_passband
+    );
     (mesh, e.border)
 }
 

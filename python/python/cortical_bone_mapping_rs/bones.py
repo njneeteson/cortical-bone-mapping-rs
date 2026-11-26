@@ -10,6 +10,7 @@ from typing import Literal, Optional, Sequence, Union
 
 import numpy as np
 
+from ._regions import Region, bounding_box, changed, grow, others
 from ._util import _as_image, _triple
 from .mapping import cortical_bone_mapping, refine_segmentation
 from .options import Options, RefineOptions, _make_options
@@ -200,8 +201,9 @@ def _list_bones(ids, counts, voxel_volume, names):
 def _per_bone(fn, image, labels, spacing, bones, options, per_bone, crop, verbose, kwargs, names=None,
               exclude_of=None, mask_of=None, report=True):
     """``fn`` (mapping or refinement) on each bone of ``bones``, with its
-    overrides from ``per_bone``; ``mask_of`` / ``exclude_of`` give each bone's
-    start and excluded region (default: its label, nothing)."""
+    overrides from ``per_bone``; ``mask_of(b)`` gives each bone's start as a
+    :class:`Region` (default: its label) and ``exclude_of(b, box)`` its
+    excluded voxels within a box of the image (default: none)."""
     lab = np.asarray(labels)
     img = np.asarray(image)
     if img.shape != lab.shape:
@@ -219,32 +221,33 @@ def _per_bone(fn, image, labels, spacing, bones, options, per_bone, crop, verbos
             if "label" not in rest and not (rest.get("refine") and rest["refine"].label):
                 rest["label"] = names[b] if names and b in names else f"bone {b}"  # progress prefix
             rest.setdefault("verbose", verbose)
-        m = lab == b if mask_of is None else mask_of(b)
-        ex = None if exclude_of is None else exclude_of(b)
-        out[b] = (_fit_cropped if crop else _fit_whole)(fn, img, m, ex, o, rest)
+        region = Region.of(lab == b) if mask_of is None else mask_of(b)
+        out[b] = (_fit_cropped if crop else _fit_whole)(fn, img, region, b, exclude_of, o, rest)
     return out
 
 
-def _fit_whole(fn, img, m, ex, o, rest):
-    if ex is not None:
-        rest = dict(rest, exclude=ex)
-    return fn(img, m, options=o, **rest)
+def _fit_whole(fn, img, region, b, exclude_of, o, rest):
+    if exclude_of is not None:
+        rest = dict(rest, exclude=exclude_of(b, tuple(slice(0, n) for n in img.shape)))
+    return fn(img, region.full(), options=o, **rest)
 
 
-def _fit_cropped(fn, img, m, ex, o, rest):
-    """``fn`` on the bounding box of ``m`` plus the sampling range; results
+def _fit_cropped(fn, img, region, b, exclude_of, o, rest):
+    """``fn`` on the region's bounding box plus the sampling range; results
     in the full image."""
-    sp = np.asarray(o.spacing, float)
-    margin = np.ceil((o.outside + o.inside) / sp).astype(int) + 2
-    idx = np.argwhere(m)
-    lo = np.maximum(idx.min(0) - margin, 0)
-    hi = np.minimum(idx.max(0) + margin + 1, img.shape)
-    sl = tuple(slice(int(a), int(c)) for a, c in zip(lo, hi))
-    oc = replace(o, origin=tuple(float(v) for v in np.asarray(o.origin, float) + lo * sp))
-    if ex is not None:
-        rest = dict(rest, exclude=np.ascontiguousarray(ex[sl]))
-    r = fn(np.ascontiguousarray(img[sl]), m[sl], options=oc, **rest)
+    sl = _sampling_box(region.box, o, img.shape)
+    lo = np.array([s.start for s in sl])
+    oc = replace(o, origin=tuple(float(v) for v in np.asarray(o.origin, float) + lo * np.asarray(o.spacing, float)))
+    if exclude_of is not None:
+        rest = dict(rest, exclude=exclude_of(b, sl))
+    r = fn(np.ascontiguousarray(img[sl]), region.within(sl), options=oc, **rest)
     return _uncrop(r, sl, img.shape, o)
+
+
+def _sampling_box(box, o: Options, shape):
+    """``box`` grown by the sampling range (and two voxels), clipped to the image."""
+    margin = np.ceil((o.outside + o.inside) / np.asarray(o.spacing, float)).astype(int) + 2
+    return grow(box, margin, shape)
 
 
 def _uncrop(r, sl, shape, options):
@@ -253,6 +256,8 @@ def _uncrop(r, sl, shape, options):
     and unaffected)."""
     if isinstance(r, RefineResult):
         def full(a):
+            if a is None:
+                return None
             f = np.zeros(shape, dtype=a.dtype)
             f[sl] = a
             return f
@@ -280,13 +285,21 @@ def shared_scanner(image, labels, spacing=None, *, bones=None, options: Optional
     is thicker than the blur).
     """
     o = _make_options(options, spacing, {k: v for k, v in kwargs.items() if k in _OPTION_FIELDS})
+    # only rho_c and the PSF are kept from this fit: no reliability outputs
+    o = replace(o, reliability=False)
     volumetric = o.method == "volumetric"
     psf_free = volumetric and (o.vol_sigma_xy is None or o.vol_sigma_z in ("fit", "tied"))
     if o.rho_c != "estimate" and not psf_free:
         return {}
     lab = np.asarray(labels)
     ids, _ = _bone_ids(lab, bones)
-    r = cortical_bone_mapping(np.asarray(image), np.isin(lab, ids), options=o)
+    img = np.asarray(image)
+    sel = np.isin(lab, ids)
+    # the bones' common box plus the sampling range: nothing outside it is sampled
+    sl = _sampling_box(bounding_box(sel), o, img.shape)
+    lo = np.array([s.start for s in sl])
+    oc = replace(o, origin=tuple(float(v) for v in np.asarray(o.origin, float) + lo * np.asarray(o.spacing, float)))
+    r = cortical_bone_mapping(np.ascontiguousarray(img[sl]), sel[sl], options=oc)
     out = {}
     if o.rho_c == "estimate":
         out["rho_c"] = float(r.rho_c)
@@ -364,24 +377,25 @@ def refine_bones(image, labels, spacing: Union[float, Sequence[float], None] = N
     """
     kwargs = _with_shared(image, labels, spacing, bones, options, verbose, kwargs, shared)
     kw = dict(kwargs, refine=refine) if refine is not None else dict(kwargs)
+    kw["masks"] = True  # each bone's refined region is the next start and the others' exclusion
     lab = np.asarray(labels)
     ids, counts = _bone_ids(lab, bones)
     if verbose:
         _list_bones(ids, counts, np.prod(_make_options(options, spacing, {}).spacing), names)
-    regions = {b: lab == b for b in ids}
-    exclude_of = (lambda b: _others(regions, b, lab.shape)) if exclude_others else None
+    regions = {b: Region.of(lab == b) for b in ids}
+    exclude_of = (lambda b, box: others(regions, b, box)) if exclude_others else None
     rounds = max(1, int(rounds))
     for rnd in range(rounds):
         if rounds > 1:
             _log(verbose, f"round {rnd + 1} of at most {rounds}")
-        prev = {b: r.copy() for b, r in regions.items()}
+        prev = dict(regions)
         out = {}
         # one bone at a time, so that later bones see earlier refined regions
-        for b in sorted(ids, key=lambda b: (int(prev[b].sum()), b)):
+        for b in sorted(ids, key=lambda b: (prev[b].count(), b)):
             out.update(_per_bone(refine_segmentation, image, lab, spacing, [b], options, per_bone, crop, verbose,
                                  kw, names, exclude_of=exclude_of, mask_of=prev.get, report=False))
-            regions[b] = out[b].periosteal_mask
-        change = {b: float((regions[b] ^ prev[b]).sum()) / max(1, int(prev[b].sum())) for b in ids}
+            regions[b] = Region.of(out[b].periosteal_mask)
+        change = {b: changed(regions[b], prev[b]) / max(1, prev[b].count()) for b in ids}
         if rounds > 1:
             _log(verbose, "round %d: region change per bone %s" % (rnd + 1, {
                 (names.get(b, b) if names else b): round(v, 4) for b, v in change.items()}))
@@ -390,11 +404,4 @@ def refine_bones(image, labels, spacing: Union[float, Sequence[float], None] = N
     return out
 
 
-def _others(regions, b, shape):
-    """The union of every region but bone ``b``'s."""
-    ex = np.zeros(shape, dtype=np.uint8)
-    for c, r in regions.items():
-        if c != b:
-            ex |= r.astype(np.uint8)
-    return ex
 

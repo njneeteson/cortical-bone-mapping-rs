@@ -70,7 +70,7 @@
 //! let refine = RefineOptions { verbose: false, ..RefineOptions::default() };
 //! let rr = refine_segmentation(image.view(), rough.view(), None::<ndarray::ArrayView3<u8>>, &opts, &refine)?;
 //! assert!(rr.converged);
-//! let cortex = &rr.cortical_mask; // boolean, the image's shape
+//! let cortex = rr.cortical_mask.as_ref().unwrap(); // boolean, the image's shape
 //! # let _ = cortex;
 //! # Ok(())
 //! # }

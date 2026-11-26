@@ -41,12 +41,13 @@
 //!   Analysis 20(1):249–264, 2015.
 
 pub(crate) mod band;
+#[cfg(feature = "bench")]
+pub mod bench;
 pub(crate) mod problem;
 mod reach;
 mod reliability;
 #[cfg(test)]
 mod tests;
-
 
 use ndarray::ArrayView3;
 
@@ -95,7 +96,8 @@ pub(crate) fn fit_surface<T: Voxel>(
     }
     timings.push((
         "band".to_string(),
-        st.done(format_args!(
+        crate::done!(
+            st,
             "{} nodes, {} fitted faces, {} voxels ({:.1} per node), outside {} / inside {}{}, stride {}",
             nodes.ids.len(),
             nodes.mesh.faces.len(),
@@ -105,7 +107,7 @@ pub(crate) fn fit_surface<T: Voxel>(
             options.sampling.inside,
             if v.adaptive_band.is_some() { " (adaptive)" } else { "" },
             v.voxel_stride
-        )),
+        ),
     ));
     let held = held_subset(c.fixed, warm_start, &nodes.ids)?;
     let fit = Fit::new(&band, &nodes, options, v, *c, held.as_deref());
@@ -118,25 +120,13 @@ pub(crate) fn fit_surface<T: Voxel>(
     let global = fit.global_stage(rho_c, &mut info);
     timings.push((
         "global fit".to_string(),
-        st.done(format_args!(
+        crate::done!(
+            st,
             "rho_c {rho_c:.1}; [m, t, rho_s, rho_b, sigma_xy, sigma_z] = {global:.3?}"
-        )),
+        ),
     ));
-    let st = crate::stage!("volumetric fit");
     let starts = fit.node_starts(&global, warm_start);
-    let x = fit.field_stage(rho_c, &global, &starts, &mut info);
-    timings.push(("volumetric fit".to_string(), st.end()));
-    let st = crate::stage!("outputs and reliability");
-    let out = fit.outputs(rho_c, &global, &x);
-    timings.push((
-        "reliability".to_string(),
-        st.done(format_args!(
-            "psf ({:.3}, {:.3}), median thickness {:.3}",
-            out.scalars[SXY],
-            out.scalars[SZ],
-            crate::util::median(&out.params.iter().map(|p| p[PT]).collect::<Vec<_>>())
-        )),
-    ));
+    let out = fit.field_stage(rho_c, &global, &starts, &mut info, &mut timings);
     timings.append(&mut info.timings);
     info.timings = timings;
     Ok(CbmResult {
@@ -514,35 +504,39 @@ impl<'a, 'c> Fit<'a, 'c> {
             .map(|cv| curvature_operator(cv, &nodes, &self.neighbours, rho_c, global[T].max(1e-6)))
     }
 
-    /// Stage 3: the field fit from `starts`; returns the variables.
-    fn field_stage(&self, rho_c: f64, global: &[f64; NV], starts: &[[f64; 4]], info: &mut FitInfo) -> Vec<f64> {
+    /// Stages 3 and 5: the field fit from `starts`, then the outputs at its
+    /// solution, on the same prepared problem.
+    fn field_stage(
+        &self,
+        rho_c: f64,
+        global: &[f64; NV],
+        starts: &[[f64; 4]],
+        info: &mut FitInfo,
+        timings: &mut Vec<(String, f64)>,
+    ) -> Outputs {
+        let st = crate::stage!("volumetric fit");
         let curv = self.curvature(rho_c, global);
         let pr = self.problem(true, rho_c, global, curv.as_ref());
         let prep = Prepared::new(&pr);
-        let mut x = Vec::with_capacity(prep.lay.fields.len() * starts.len() + prep.lay.globals.len());
-        for &c in &prep.lay.fields {
-            x.extend(starts.iter().map(|s| s[c]));
-        }
-        x.extend(prep.lay.globals.iter().map(|&c| global[c]));
+        let mut x = field_variables(&prep, global, starts);
         let settings = super::global::Settings {
             edge_tol: self.c.edge_tol,
             ..global_settings(self.o)
         };
         let si = minimise(&prep, &mut x, &settings);
         info.add_solve(&si);
-        x
+        timings.push(("volumetric fit".to_string(), st.end()));
+        self.outputs(&prep, global, &x, timings)
     }
 
-    /// Stage 5: node parameters, residuals and reliability at `x` (only the
-    /// residuals for an inexact inner fit, `edge_tol > 0`).
-    fn outputs(&self, rho_c: f64, global: &[f64; NV], x: &[f64]) -> Outputs {
-        let curv = self.curvature(rho_c, global);
-        let pr = self.problem(true, rho_c, global, curv.as_ref());
-        let prep = Prepared::new(&pr);
+    /// Stage 5: node parameters, residuals and (unless not wanted) the
+    /// reliability outputs at `x`.
+    fn outputs(&self, prep: &Prepared, global: &[f64; NV], x: &[f64], timings: &mut Vec<(String, f64)>) -> Outputs {
+        let st = crate::stage!("outputs and reliability");
         let values = prep.node_values(x);
         let scalars: [f64; NV] = std::array::from_fn(|c| values[c].first().copied().unwrap_or(global[c]));
         let axis = self.v.scanner_axis;
-        let params = (0..self.nodes.ids.len())
+        let params: Vec<Params> = (0..self.nodes.ids.len())
             .map(|v| {
                 let a2 = self.nodes.normals[v][axis].powi(2);
                 let sn = (scalars[SXY].powi(2) * (1.0 - a2) + scalars[SZ].powi(2) * a2).sqrt();
@@ -557,12 +551,23 @@ impl<'a, 'c> Fit<'a, 'c> {
                 ]
             })
             .collect();
-        // inexact inner fits of a refinement only need the residuals
-        let rel = if self.c.edge_tol > 0.0 {
-            reliability::residuals_only(&prep, x, global_psf(&scalars), axis)
+        // only the residuals unless the reliability outputs are wanted: not
+        // by the options, nor in refinement's intermediate fits
+        let wanted = self.o.reliability && !self.c.skip_reliability && self.c.edge_tol == 0.0;
+        let rel = if wanted {
+            reliability::assess(prep, x, global_psf(&scalars), axis)
         } else {
-            reliability::assess(&prep, x, global_psf(&scalars), axis)
+            log::debug!("reliability outputs not computed (not wanted, or an intermediate fit): residuals only");
+            reliability::residuals_only(prep, x, global_psf(&scalars), axis)
         };
+        let t = crate::done!(
+            st,
+            "psf ({:.3}, {:.3}), median thickness {:.3}",
+            scalars[SXY],
+            scalars[SZ],
+            crate::util::median(&params.iter().map(|p: &Params| p[PT]).collect::<Vec<_>>())
+        );
+        timings.push(("reliability".to_string(), t));
         Outputs {
             params,
             residual: rel.residual,
@@ -570,6 +575,17 @@ impl<'a, 'c> Fit<'a, 'c> {
             info: rel.info,
         }
     }
+}
+
+/// The field stage's variables: every field channel's node starts, then the
+/// globals.
+fn field_variables(prep: &Prepared, global: &[f64; NV], starts: &[[f64; 4]]) -> Vec<f64> {
+    let mut x = Vec::with_capacity(prep.lay.fields.len() * starts.len() + prep.lay.globals.len());
+    for &c in &prep.lay.fields {
+        x.extend(starts.iter().map(|s| s[c]));
+    }
+    x.extend(prep.lay.globals.iter().map(|&c| global[c]));
+    x
 }
 
 /// The PSF `(σ_xy, σ_z)` of a set of scalars.

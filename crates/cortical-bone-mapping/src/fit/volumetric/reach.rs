@@ -76,7 +76,10 @@ pub(crate) fn node_reach<T: Voxel>(image: &ArrayView3<T>, points: &[V3], normals
         })
         .collect();
     let (low, high) = levels(&profiles, n_out, spec.outside, step);
-    log::debug!("adaptive band: soft-tissue level {low:.1}, bone level {high:.1}, cap {}x", spec.cap);
+    log::debug!(
+        "adaptive band: soft-tissue level {low:.1}, bone level {high:.1}, cap {}x",
+        spec.cap
+    );
     let (outside, inside): (Vec<f64>, Vec<f64>) = profiles
         .par_iter()
         .map(|prof| {

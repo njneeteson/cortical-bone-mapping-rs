@@ -181,12 +181,19 @@ pub fn gaussian_filter(img: &Array3<f64>, sigma: V3) -> Array3<f64> {
 /// Whether the voxel nearest to the physical point `p` is set (non-zero);
 /// points outside the image are not.
 pub fn is_set_at<V: Voxel>(img: &ArrayView3<V>, geom: &Geometry, p: V3) -> bool {
+    is_set_in_box(img, [0; 3], geom, p)
+}
+
+/// [`is_set_at`] for `img` holding the image's voxels from index `lo` on (a
+/// crop): the voxel nearest to `p` in the image's grid `geom`, looked up in
+/// the crop; voxels outside it are not set.
+pub fn is_set_in_box<V: Voxel>(img: &ArrayView3<V>, lo: [usize; 3], geom: &Geometry, p: V3) -> bool {
     let r = geom.to_index(p).map(|v| v.round());
-    if r[0] < 0.0 || r[1] < 0.0 || r[2] < 0.0 {
+    if r[0] < lo[0] as f64 || r[1] < lo[1] as f64 || r[2] < lo[2] as f64 {
         return false;
     }
     let (d0, d1, d2) = img.dim();
-    let (a, b, c) = (r[0] as usize, r[1] as usize, r[2] as usize);
+    let (a, b, c) = (r[0] as usize - lo[0], r[1] as usize - lo[1], r[2] as usize - lo[2]);
     a < d0 && b < d1 && c < d2 && img[[a, b, c]].to_f64() != 0.0
 }
 

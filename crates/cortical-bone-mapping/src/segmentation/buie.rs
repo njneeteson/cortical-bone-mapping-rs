@@ -174,11 +174,12 @@ pub fn buie<T: Voxel>(image: ArrayView3<T>, o: &BuieOptions) -> BuieResult {
             *c = p && n;
             *t = p && !n;
         });
-    s.done(format_args!(
+    crate::done!(
+        s,
         "{} cortical and {} trabecular voxels",
         cortical.iter().filter(|&&v| v).count(),
         trabecular.iter().filter(|&&v| v).count()
-    ));
+    );
     BuieResult {
         periosteal: periosteal.slice(inner).to_owned(),
         cortical,
