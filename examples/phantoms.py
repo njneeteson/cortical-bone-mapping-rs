@@ -10,10 +10,10 @@ refines the same automatic start:
   with a 4 mm closing; the acetabulum's start is excluded while the femur is
   refined.
 
-Writes docs/results/phantoms.json and the docs/images/phantom_* figures.
+Writes examples/results/phantoms.json and the examples/images/phantom_* figures.
 
-    python docs/scripts/phantoms.py            # compute and draw
-    python docs/scripts/phantoms.py --redraw   # redraw from the last run, if the code is unchanged
+    python examples/phantoms.py            # compute and draw
+    python examples/phantoms.py --redraw   # redraw from the last run, if the code is unchanged
 """
 
 import sys

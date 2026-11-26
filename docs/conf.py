@@ -28,6 +28,7 @@ extensions = [
     "sphinx.ext.mathjax",
     "sphinx.ext.viewcode",
     "sphinx_copybutton",
+    "sphinxcontrib.mermaid",
 ]
 
 source_suffix = {".md": "markdown", ".rst": "restructuredtext"}
@@ -35,6 +36,8 @@ exclude_patterns = ["_build", "scripts", "results", "Thumbs.db", ".DS_Store"]
 
 myst_enable_extensions = ["colon_fence", "dollarmath", "deflist"]
 myst_heading_anchors = 3
+# ```mermaid fences render as diagrams here and on GitHub
+myst_fence_as_directive = ["mermaid"]
 
 autodoc_member_order = "bysource"
 autodoc_typehints = "description"

@@ -75,6 +75,10 @@ impl LevelSet {
     pub fn from_mesh(mesh: &Mesh, dims: [usize; 3], geom: &Geometry, margin: f64, band: f64) -> LevelSet {
         let (lo, hi) = index_box(mesh, dims, geom, margin);
         let shape = (hi[0] - lo[0] + 1, hi[1] - lo[1] + 1, hi[2] - lo[2] + 1);
+        log::debug!(
+            "level set: grid {shape:?} at {lo:?} of an image {dims:?} ({} voxels), band {band:.3}",
+            shape.0 * shape.1 * shape.2
+        );
         let sub_geom = Geometry {
             spacing: geom.spacing,
             origin: geom.to_physical(lo.map(|v| v as f64)),

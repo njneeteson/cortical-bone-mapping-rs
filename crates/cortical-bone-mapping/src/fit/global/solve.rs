@@ -109,9 +109,38 @@ pub(crate) trait LeastSquares: Sync {
 
 /// Minimise `problem` from `x` (clamped into the bounds first), updating `x`.
 pub(crate) fn minimise<P: LeastSquares>(problem: &P, x: &mut Vec<f64>, settings: &Settings) -> SolveInfo {
+    let (nfc, ndof, ng) = problem.shape();
+    log::debug!(
+        "solve: {} variables ({nfc} field channels x {ndof} dofs + {ng} globals), \
+         at most {} iterations and {} CG iterations",
+        x.len(),
+        settings.max_iterations,
+        settings.cg_max_total
+    );
     let mut solver = Solver::new(problem, std::mem::take(x), settings);
     let status = solver.run();
     let info = solver.info(status);
+    let level = if status == Status::MaxIterations {
+        log::Level::Warn
+    } else {
+        log::Level::Debug
+    };
+    log::log!(
+        level,
+        "solve: {status:?} after {} iterations ({} CG) in {:.2} s; cost {:.6e} (data {:.6e}, \
+         smoothing {:.6e}, curvature {:.6e}); time: evaluation {:.2} s, products {:.2} s, \
+         preconditioner {:.2} s",
+        info.iterations,
+        info.cg_iterations,
+        info.time_total,
+        info.cost,
+        info.data_cost,
+        info.smoothing_cost,
+        info.curvature_cost,
+        info.time_evaluate,
+        info.time_hessian,
+        info.time_precond
+    );
     *x = solver.x;
     info
 }
@@ -233,6 +262,11 @@ impl<'p, P: LeastSquares> Solver<'p, P> {
         while self.iterations < self.settings.max_iterations {
             let lin = self.linearise();
             if lin.gmax <= self.settings.gtol || !self.free.iter().any(|&f| f) {
+                log::debug!(
+                    "solve stops: scaled gradient {:.2e} <= gtol {:.0e}, or no free variable",
+                    lin.gmax,
+                    self.settings.gtol
+                );
                 return Status::Gtol;
             }
             if let Some(status) = self.damped_step(&lin) {
@@ -289,6 +323,13 @@ impl<'p, P: LeastSquares> Solver<'p, P> {
     fn damped_step(&mut self, lin: &Linearisation) -> Option<Status> {
         loop {
             if self.iterations >= self.settings.max_iterations || self.cg_total >= self.settings.cg_max_total {
+                log::debug!(
+                    "solve stops: budget spent ({} of {} iterations, {} of {} CG iterations)",
+                    self.iterations,
+                    self.settings.max_iterations,
+                    self.cg_total,
+                    self.settings.cg_max_total
+                );
                 return Some(Status::MaxIterations);
             }
             self.iterations += 1;
@@ -299,6 +340,7 @@ impl<'p, P: LeastSquares> Solver<'p, P> {
             let xt = self.project(&delta);
             let step: Vec<f64> = xt.par_iter().zip(self.x.par_iter()).map(|(a, b)| a - b).collect();
             if self.negligible(&step, lin) {
+                log::debug!("solve stops: the step is negligible (xtol {:.0e})", self.settings.xtol);
                 return Some(Status::Xtol);
             }
             let trial = self.try_step(&xt, &step);
@@ -309,6 +351,7 @@ impl<'p, P: LeastSquares> Solver<'p, P> {
             self.mu *= self.nu;
             self.nu *= 2.0;
             if self.mu > 1e16 {
+                log::debug!("solve stops: no acceptable step (damping above 1e16)");
                 return Some(Status::Xtol);
             }
         }
@@ -353,14 +396,19 @@ impl<'p, P: LeastSquares> Solver<'p, P> {
         timed!(self.clock.precond, pre.apply(&r, &self.free, &mut z));
         let mut p = z.clone();
         let mut rz = dotp(&r, &z);
+        let mut why = "iteration limit";
+        let mut k = 0;
         for _ in 0..self.settings.cg_max_iterations {
             if self.cg_total >= self.settings.cg_max_total {
+                why = "total CG budget";
                 break;
             }
             self.cg_total += 1;
+            k += 1;
             self.damped_product(&p, damp);
             let pap = dotp(&p, &self.hv);
             if !(pap > 0.0) {
+                why = "non-positive curvature";
                 break;
             }
             let alpha = rz / pap;
@@ -372,6 +420,7 @@ impl<'p, P: LeastSquares> Solver<'p, P> {
                 .zip(self.hv.par_iter())
                 .for_each(|(rv, &h)| *rv -= alpha * h);
             if dotp(&r, &r).sqrt() <= eta * bnorm {
+                why = "converged";
                 break;
             }
             timed!(self.clock.precond, pre.apply(&r, &self.free, &mut z));
@@ -382,6 +431,10 @@ impl<'p, P: LeastSquares> Solver<'p, P> {
                 .zip(z.par_iter())
                 .for_each(|(pv, &zv)| *pv = zv + beta * *pv);
         }
+        log::trace!(
+            "CG: {k} iterations, stopped by {why}; relative residual {:.2e} (target {eta:.2e})",
+            dotp(&r, &r).sqrt() / bnorm.max(1e-300)
+        );
         delta
     }
 
@@ -430,11 +483,12 @@ impl<'p, P: LeastSquares> Solver<'p, P> {
     /// Progress line (every `progress_every` trial steps).
     fn report(&self, trial: &Trial, gmax: f64, cg: usize) {
         let s = self.settings;
-        if s.progress_every == 0 || !self.iterations.is_multiple_of(s.progress_every) {
+        let progress = s.progress_every > 0 && self.iterations.is_multiple_of(s.progress_every);
+        if !progress && !log::log_enabled!(log::Level::Debug) {
             return;
         }
-        eprintln!(
-            "  fit iteration {}/{}: cost {:.6e} -> {:.6e} ({}), gradient {gmax:.2e}, CG {cg} \
+        let line = format!(
+            "fit iteration {}/{}: cost {:.6e} -> {:.6e} ({}), gradient {gmax:.2e}, CG {cg} \
              ({}/{} total), damping {:.1e}, {:.1} s",
             self.iterations,
             s.max_iterations,
@@ -450,6 +504,10 @@ impl<'p, P: LeastSquares> Solver<'p, P> {
             self.mu,
             self.clock.start.elapsed().as_secs_f64()
         );
+        log::debug!("{line}");
+        if progress {
+            eprintln!("  {line}");
+        }
     }
 
     /// Move to the trial point, relax the damping, and test for convergence
@@ -462,13 +520,25 @@ impl<'p, P: LeastSquares> Solver<'p, P> {
         self.mu *= (1.0 - (2.0 * trial.rho - 1.0).powi(3)).max(1.0 / 3.0);
         self.nu = 2.0;
         if trial.actual <= self.settings.ftol * prev {
+            log::debug!(
+                "solve stops: relative decrease {:.2e} <= ftol {:.0e}",
+                trial.actual / prev.max(1e-300),
+                self.settings.ftol
+            );
             return Some(Status::Ftol);
         }
         if self.settings.edge_tol > 0.0 && self.edges_settled() {
+            log::debug!("solve stops: the edges moved less than edge_tol {}", self.settings.edge_tol);
             self.edge_stop = true;
             return Some(Status::Ftol);
         }
-        self.stalled().then_some(Status::Ftol)
+        let stalled = self.stalled();
+        if stalled {
+            log::debug!(
+                "solve stops: stalled (the last {STALL_WINDOW} steps lowered the cost by less than {STALL_DECREASE:.0e})"
+            );
+        }
+        stalled.then_some(Status::Ftol)
     }
 
     /// The accepted step changed the free nodes' edges by less than `edge_tol` (RMS).

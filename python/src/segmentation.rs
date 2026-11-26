@@ -21,6 +21,7 @@ pub(crate) fn buie<'py>(
     Bound<'py, numpy::PyArray3<bool>>,
     Bound<'py, numpy::PyArray3<bool>>,
 )> {
+    crate::logs::refresh();
     let o = cbm::segmentation::BuieOptions {
         periosteal_threshold: req(opts, "periosteal_threshold")?,
         endosteal_threshold: req(opts, "endosteal_threshold")?,
@@ -53,6 +54,7 @@ pub(crate) fn hull_segmentation<'py>(
     median_kernel: [usize; 3],
     largest_component: bool,
 ) -> PyResult<Bound<'py, numpy::PyArray3<bool>>> {
+    crate::logs::refresh();
     let o = cbm::segmentation::HullOptions {
         threshold,
         median_kernel,
@@ -73,6 +75,7 @@ pub(crate) fn otsu_thresholds(
     classes: usize,
     bins: usize,
 ) -> PyResult<Vec<f64>> {
+    crate::logs::refresh();
     if !(classes == 2 || classes == 3) {
         return Err(PyValueError::new_err("classes must be 2 or 3"));
     }
@@ -97,6 +100,7 @@ pub(crate) fn label_bones<'py>(
     min_size: usize,
     max_bones: Option<usize>,
 ) -> PyResult<(Bound<'py, numpy::PyArray3<u16>>, Vec<usize>)> {
+    crate::logs::refresh();
     let o = cbm::segmentation::BoneLabelOptions {
         threshold,
         median_kernel,
@@ -119,6 +123,7 @@ pub(crate) fn grow_bones<'py>(
     low_threshold: f64,
     median_kernel: [usize; 3],
 ) -> PyResult<Bound<'py, numpy::PyArray3<u16>>> {
+    crate::logs::refresh();
     let l = labels.as_array();
     let r =
         with_image!(image, |img| Ok::<_, PyErr>(py.detach(|| {
@@ -137,6 +142,7 @@ pub(crate) fn bone_hulls<'py>(
     max_distance: Option<f64>,
     closing_radius: Option<f64>,
 ) -> PyResult<Bound<'py, numpy::PyArray3<u16>>> {
+    crate::logs::refresh();
     let l = labels.as_array();
     let r = py.detach(|| cbm::segmentation::bone_hulls(l, spacing, max_distance, closing_radius));
     Ok(r.into_pyarray(py))

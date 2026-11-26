@@ -10,11 +10,11 @@ Python implementation (Bonelab) and with SciPy.
 * SciPy: ``compare_scipy.py``, the same problems solved with
   ``scipy.optimize`` (8 and 32 slices).
 
-Run on an otherwise idle machine. Writes docs/results/benchmarks.json and the
-docs/images/benchmark_* figures.
+Run on an otherwise idle machine. Writes examples/results/benchmarks.json and the
+examples/images/benchmark_* figures.
 
-    python docs/scripts/benchmarks.py /path/to/Bonelab
-    python docs/scripts/benchmarks.py /path/to/Bonelab --redraw   # redraw from the last run, if the code is unchanged
+    python examples/benchmarks.py /path/to/Bonelab
+    python examples/benchmarks.py /path/to/Bonelab --redraw   # redraw from the last run, if the code is unchanged
 """
 
 import json

@@ -114,6 +114,7 @@ pub(crate) fn render(
     density: impl Fn(V3) -> f64 + Sync,
 ) -> Array3<f32> {
     let ss = supersample.max(1);
+    let s = crate::stage!("phantom rendering");
     let (d0, d1, d2) = dims;
     let mut truth = Array3::<f64>::zeros(dims);
     truth
@@ -138,6 +139,7 @@ pub(crate) fn render(
     let blurred = gaussian_filter(&truth, sig);
     drop(truth);
     let n = d0 * d1 * d2;
+    s.done(format_args!("{dims:?} voxels, supersampling {ss}, blur {blur:?}, noise {noise} (seed {seed})"));
     let mut eps = vec![0f32; n];
     eps.par_chunks_mut(65536).enumerate().for_each(|(ci, ch)| {
         let mut r = Rng::new(seed ^ 0xABCD ^ (ci as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));

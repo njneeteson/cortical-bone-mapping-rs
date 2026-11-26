@@ -316,9 +316,10 @@ pub fn fit_all(
     init: &[Params],
     settings: &FitSettings,
 ) -> Vec<LocalFit> {
+    let s = crate::stage!("local fits");
     let wsum: f64 = weights.iter().sum();
     let w: Vec<f64> = weights.iter().map(|v| v / wsum).collect();
-    (0..profiles.n)
+    let fits: Vec<LocalFit> = (0..profiles.n)
         .into_par_iter()
         .map(|i| {
             let p0 = if init.len() == 1 { &init[0] } else { &init[i] };
@@ -333,7 +334,9 @@ pub fn fit_all(
                 }
             }
         })
-        .collect()
+        .collect();
+    s.done(format_args!("{} profiles", fits.len()));
+    fits
 }
 
 /// The local method: fit every node's profile independently from its start.
@@ -350,6 +353,11 @@ pub(crate) fn fit_nodes(data: &Data, start: &Start, info: &mut FitInfo) -> Vec<P
     let n = fits.len();
     info.converged = fits.iter().filter(|f| f.status.converged()).count() as f64 / n as f64;
     info.iterations = fits.iter().map(|f| f.iterations as usize).max().unwrap_or(0);
+    log::debug!(
+        "local fits: {n} nodes, {:.1} % converged, at most {} iterations",
+        100.0 * info.converged,
+        info.iterations
+    );
     fits.iter().map(|f| f.params).collect()
 }
 

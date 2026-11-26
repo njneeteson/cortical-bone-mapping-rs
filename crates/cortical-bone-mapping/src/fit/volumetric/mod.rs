@@ -47,7 +47,6 @@ mod reliability;
 #[cfg(test)]
 mod tests;
 
-use std::time::Instant;
 
 use ndarray::ArrayView3;
 
@@ -79,7 +78,7 @@ pub(crate) fn fit_surface<T: Voxel>(
     warm_start: Option<&[Option<Params>]>,
     c: &FitConstraints,
 ) -> Result<CbmResult, Error> {
-    let t0 = Instant::now();
+    let st = crate::stage!("band");
     let mut timings = Vec::new();
     let (d0, d1, d2) = image.dim();
     let cut = ImageEdge::new([d0, d1, d2], &options.geometry);
@@ -91,9 +90,23 @@ pub(crate) fn fit_surface<T: Voxel>(
     }
     let band = Band::build(image, &surface, &nodes.fitted, nodes.mesh.faces.len(), &spec);
     if band.is_empty() {
+        log::warn!("the volumetric band is empty");
         return Err(Error::NoNodes);
     }
-    timings.push(("band".to_string(), t0.elapsed().as_secs_f64()));
+    timings.push((
+        "band".to_string(),
+        st.done(format_args!(
+            "{} nodes, {} fitted faces, {} voxels ({:.1} per node), outside {} / inside {}{}, stride {}",
+            nodes.ids.len(),
+            nodes.mesh.faces.len(),
+            band.len(),
+            band.len() as f64 / nodes.ids.len() as f64,
+            options.sampling.outside,
+            options.sampling.inside,
+            if v.adaptive_band.is_some() { " (adaptive)" } else { "" },
+            v.voxel_stride
+        )),
+    ));
     let held = held_subset(c.fixed, warm_start, &nodes.ids)?;
     let fit = Fit::new(&band, &nodes, options, v, *c, held.as_deref());
     let mut info = FitInfo {
@@ -101,16 +114,29 @@ pub(crate) fn fit_surface<T: Voxel>(
         ..Default::default()
     };
     let rho_c = fit.rho_c();
-    let tg = Instant::now();
+    let st = crate::stage!("global fit");
     let global = fit.global_stage(rho_c, &mut info);
-    timings.push(("global fit".to_string(), tg.elapsed().as_secs_f64()));
-    let tf = Instant::now();
+    timings.push((
+        "global fit".to_string(),
+        st.done(format_args!(
+            "rho_c {rho_c:.1}; [m, t, rho_s, rho_b, sigma_xy, sigma_z] = {global:.3?}"
+        )),
+    ));
+    let st = crate::stage!("volumetric fit");
     let starts = fit.node_starts(&global, warm_start);
     let x = fit.field_stage(rho_c, &global, &starts, &mut info);
-    timings.push(("volumetric fit".to_string(), tf.elapsed().as_secs_f64()));
-    let tr = Instant::now();
+    timings.push(("volumetric fit".to_string(), st.end()));
+    let st = crate::stage!("outputs and reliability");
     let out = fit.outputs(rho_c, &global, &x);
-    timings.push(("reliability".to_string(), tr.elapsed().as_secs_f64()));
+    timings.push((
+        "reliability".to_string(),
+        st.done(format_args!(
+            "psf ({:.3}, {:.3}), median thickness {:.3}",
+            out.scalars[SXY],
+            out.scalars[SZ],
+            crate::util::median(&out.params.iter().map(|p| p[PT]).collect::<Vec<_>>())
+        )),
+    ));
     timings.append(&mut info.timings);
     info.timings = timings;
     Ok(CbmResult {

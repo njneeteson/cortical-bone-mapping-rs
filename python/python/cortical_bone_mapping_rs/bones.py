@@ -3,6 +3,7 @@ one bone at a time."""
 
 from __future__ import annotations
 
+import logging
 import sys
 from dataclasses import fields, replace
 from typing import Literal, Optional, Sequence, Union
@@ -166,7 +167,11 @@ def _replace_bone(lab, comp, box, pieces):
         next_id += 1
 
 
+_logger = logging.getLogger(__name__)
+
+
 def _log(verbose, message):
+    _logger.info(message)
     if verbose:
         print(message, file=sys.stderr, flush=True)
 

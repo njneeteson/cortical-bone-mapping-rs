@@ -32,6 +32,9 @@
 //! The Python package (`cortical-bone-mapping-rs`) wraps this crate and has a
 //! user guide.
 //!
+//! Every stage logs through the [`log`] facade (debug level: starts, sizes,
+//! durations, solver iterations); see [`logging`].
+//!
 //! # Example
 //!
 //! A phantom shell with a known cortex, measured on its own mask and then
@@ -123,6 +126,7 @@
 pub mod error;
 pub mod fit;
 pub mod kdtree;
+pub mod logging;
 pub mod model;
 pub mod operators;
 pub mod options;

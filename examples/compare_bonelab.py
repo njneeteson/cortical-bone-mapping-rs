@@ -12,9 +12,9 @@ Bonelab is not a dependency; point the script at a checkout:
 
     git clone https://github.com/Bonelab/Bonelab /path/to/Bonelab
     pip install tqdm
-    python docs/scripts/compare_bonelab.py /path/to/Bonelab   # prints the rows
+    python examples/compare_bonelab.py /path/to/Bonelab   # prints the rows
 
-``docs/scripts/benchmarks.py`` runs it with the other benchmarks.
+``examples/benchmarks.py`` runs it with the other benchmarks.
 
 Memory: for Bonelab, the peak of Python-heap allocations during the fit
 (tracemalloc, which includes NumPy/SciPy buffers). Rust allocations are

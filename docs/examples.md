@@ -27,7 +27,7 @@ image cuts the bone) are left out.
 
 ### Distal radius
 
-![Distal radius sections](images/phantom_distal_radius_sections.png)
+![Distal radius sections](../examples/images/phantom_distal_radius_sections.png)
 
 *Distal radius phantom, middle axial slice. Each column is one method.
 Green dashed: true periosteal and endosteal surfaces. Yellow dotted: the
@@ -35,7 +35,7 @@ starting segmentation (convex hull). Red: refined periosteal surface. Blue:
 fitted endosteal surface. Bottom row: the 4 mm white box, enlarged, placed
 where the local fit's endosteum is farthest from the truth.*
 
-![Distal radius thickness maps](images/phantom_distal_radius_maps.png)
+![Distal radius thickness maps](../examples/images/phantom_distal_radius_maps.png)
 
 *Distal radius phantom, the whole surface unrolled: angle around the shaft
 (horizontal) by height (vertical), in 2° bins. Top: fitted cortical
@@ -51,12 +51,12 @@ blue: too thin).*
 
 ### Distal tibia
 
-![Distal tibia sections](images/phantom_distal_tibia_sections.png)
+![Distal tibia sections](../examples/images/phantom_distal_tibia_sections.png)
 
 *Distal tibia phantom, middle axial slice; colours and zoom as for the
 radius.*
 
-![Distal tibia thickness maps](images/phantom_distal_tibia_maps.png)
+![Distal tibia thickness maps](../examples/images/phantom_distal_tibia_maps.png)
 
 *Distal tibia phantom, unrolled as for the radius. Top: fitted thickness.
 Bottom: error, fitted minus true.*
@@ -70,14 +70,14 @@ Bottom: error, fitted minus true.*
 
 ### Proximal femur
 
-![Proximal femur sections](images/phantom_proximal_femur_sections.png)
+![Proximal femur sections](../examples/images/phantom_proximal_femur_sections.png)
 
 *Proximal femur phantom at clinical resolution, middle coronal slice
 (femoral head, neck and shaft; the acetabulum curves around the head). Colours as
 for the radius. Bottom row: the 24 mm white box, enlarged, placed where the local fit's
 endosteum is farthest from the truth.*
 
-![Proximal femur thickness maps](images/phantom_proximal_femur_maps.png)
+![Proximal femur thickness maps](../examples/images/phantom_proximal_femur_maps.png)
 
 *Proximal femur phantom, the refined surface seen from the front. Top:
 fitted cortical thickness. Bottom: error, fitted minus true. The thin dark
@@ -129,7 +129,7 @@ along the scanner axis.
 
 ### Refinement
 
-![Volumetric refinement of both knees](images/knee_refinement.gif)
+![Volumetric refinement of both knees](../examples/images/knee_refinement.gif)
 
 *Volumetric refinement of all eight bones, one frame per move. Each row is
 one knee: coronal, sagittal and axial sections, and a 3D view from the
@@ -142,7 +142,7 @@ start is blanked in the sections (display only). The surfaces move about
 
 ### Final surfaces
 
-![Right knee, every method](images/knee_right_sections.png)
+![Right knee, every method](../examples/images/knee_right_sections.png)
 
 *Right (uninjured) knee, the final surfaces of each method (rows).
 Sections through the femur and patella, and axial through the femoral
@@ -150,11 +150,11 @@ condyles. Yellow dashed: start. Solid, coloured by bone: refined periosteal
 surface. Magenta dotted: fitted endosteal surface (the inner edge of the
 cortex).*
 
-![Left knee, every method](images/knee_left_sections.png)
+![Left knee, every method](../examples/images/knee_left_sections.png)
 
 *Left (injured) knee, as above.*
 
-![Thickness maps](images/knee_thickness.png)
+![Thickness maps](../examples/images/knee_thickness.png)
 
 *Fitted cortical thickness on the refined surfaces of each method (rows),
 each knee from the front and the back, on one colour scale (0–3 mm).*
@@ -242,7 +242,7 @@ results = cbm.refine_bones(image, labels, spacing, bones=[left_femur], options=o
                            names=names, shared=False)   # options: the scan's rho_c and PSF fixed
 ```
 
-![Correction of the left femur](images/knee_correction_left_femur.png)
+![Correction of the left femur](../examples/images/knee_correction_left_femur.png)
 
 *The posteromedial corner of the left femoral condyle, two axial sections
 and a sagittal section through the edit. Top: the automatic result (blue).
@@ -250,7 +250,7 @@ Middle: the mask corrected by hand (yellow dashed), the painted voxels in
 red. Bottom: the surface refined from the correction (blue), with the
 corrected mask (yellow dashed) and the automatic result (white dotted).*
 
-![Refinement from the correction](images/knee_correction_left_femur.gif)
+![Refinement from the correction](../examples/images/knee_correction_left_femur.gif)
 
 *Refinement of the left femur from the hand-corrected mask, one frame per
 move, in the same sections.*
@@ -282,11 +282,11 @@ the painted voxels:
 
 ```bash
 pip install ./python[docs]
-cd docs/scripts
-python phantoms.py                     # docs/results/phantoms.json, docs/images/phantom_*
-python knee.py /path/to/DICOM          # docs/results/knee.json, docs/images/knee_* (the CT is not public)
+cd examples
+python phantoms.py                     # examples/results/phantoms.json, examples/images/phantom_*
+python knee.py /path/to/DICOM          # examples/results/knee.json, examples/images/knee_* (the CT is not public)
 python knee.py /path/to/DICOM --redraw --export OUT_DIR          # the volumetric labels as NIfTI, to correct
-python knee_correction.py /path/to/DICOM AUTOMATIC.nii.gz CORRECTED.nii.gz   # docs/images/knee_correction_*
+python knee_correction.py /path/to/DICOM AUTOMATIC.nii.gz CORRECTED.nii.gz   # examples/images/knee_correction_*
 ```
 
 Each results file records the hash of the code and inputs that produced it;

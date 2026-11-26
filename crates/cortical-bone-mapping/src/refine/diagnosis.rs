@@ -161,7 +161,19 @@ fn sampling_advice(deep: usize, shallow: usize, options: &Options) -> String {
 /// with their trusted neighbours instead of by a meaningless fit.
 pub fn trusted_fits(result: &CbmResult, options: &Options) -> Vec<bool> {
     let med = median(&result.residual);
-    (0..result.n())
-        .map(|k| !failed_tests(result, k, options, med).iter().any(|&f| f))
-        .collect()
+    let failed: Vec<[bool; 6]> = (0..result.n()).map(|k| failed_tests(result, k, options, med)).collect();
+    if log::log_enabled!(log::Level::Debug) {
+        let counts: Vec<String> = REASONS
+            .iter()
+            .enumerate()
+            .map(|(t, r)| format!("{r} {}", failed.iter().filter(|f| f[t]).count()))
+            .collect();
+        log::debug!(
+            "trusted fits: {} of {} (failed: {})",
+            failed.iter().filter(|f| !f.iter().any(|&b| b)).count(),
+            failed.len(),
+            counts.join(", ")
+        );
+    }
+    failed.iter().map(|f| !f.iter().any(|&b| b)).collect()
 }

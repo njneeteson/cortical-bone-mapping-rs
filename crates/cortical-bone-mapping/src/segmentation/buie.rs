@@ -136,6 +136,8 @@ pub struct BuieResult {
 
 /// Buie's dual-threshold segmentation.
 pub fn buie<T: Voxel>(image: ArrayView3<T>, o: &BuieOptions) -> BuieResult {
+    let s = crate::stage!("Buie segmentation");
+    log::debug!("Buie segmentation: image {:?}, {o:?}", image.dim());
     let (d0, d1, d2) = image.dim();
     // pad in-plane by the largest dilation radius (+1 so that the outside is
     // connected around the bone)
@@ -172,6 +174,11 @@ pub fn buie<T: Voxel>(image: ArrayView3<T>, o: &BuieOptions) -> BuieResult {
             *c = p && n;
             *t = p && !n;
         });
+    s.done(format_args!(
+        "{} cortical and {} trabecular voxels",
+        cortical.iter().filter(|&&v| v).count(),
+        trabecular.iter().filter(|&&v| v).count()
+    ));
     BuieResult {
         periosteal: periosteal.slice(inner).to_owned(),
         cortical,

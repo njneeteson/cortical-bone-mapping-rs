@@ -39,7 +39,6 @@
 //!   optimization*, Computers in Biology and Medicine, 2025,
 //!   doi:10.1016/j.compbiomed.2025.110636.
 
-use std::time::Instant;
 
 use super::global::{self, Problem, Role, Smoothing, State};
 use super::{base_roles, local, local_settings, Data, FitConstraints, Nodes, Start};
@@ -71,13 +70,19 @@ pub(crate) fn fit(
     let (o, rho_c, points) = (data.options, data.rho_c, &nodes.mesh.vertices);
     let first = first_estimate(data, start, *init_from_local);
     let (roles, fixed) = roles(data, start, constraints);
+    log::debug!(
+        "regularised fit: {} nodes, lambda {lambda}, sigma_reg {sigma}, {neighbours} neighbours, roles {roles:?},          curvature {}, start from {}",
+        points.len(),
+        curvature.as_ref().map_or("none".to_string(), |c| format!("{:?}", c.mode)),
+        if *init_from_local { "local fits" } else { "the node starts" }
+    );
 
     // penalties, weighted relative to the global model
     let base = lambda * rho_c * rho_c / points.len() as f64;
-    let t_op = Instant::now();
+    let t_op = crate::stage!("smoothing operator");
     let near = Neighbours::new(nodes.mesh, o.distance());
     let op = (*lambda > 0.0).then(|| SmoothingOperator::new(&near, *neighbours, *sigma, *cutoff));
-    timings.push(("smoothing operator".to_string(), t_op.elapsed().as_secs_f64()));
+    timings.push(("smoothing operator".to_string(), t_op.end()));
     let coef = smoothing_weights(data, start, &roles, base);
     let curv = curvature
         .as_ref()

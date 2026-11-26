@@ -40,8 +40,6 @@ pub mod psf;
 pub mod regularized;
 pub mod volumetric;
 
-use std::time::Instant;
-
 use ndarray::ArrayView3;
 
 use crate::error::Error;
@@ -169,10 +167,13 @@ fn profile_rho_c<T: Voxel>(
     o: &Options,
     exclude: Option<ArrayView3<bool>>,
 ) -> Result<f64, Error> {
+    let s = crate::stage!("cortical density from profiles (volumetric model)");
     let (sub, _, normals) = select_nodes(surface, keep, o)?;
     let (mut profiles, x) = sample_profiles(image, surface, &sub.vertices, &normals, exclude, o);
     let weights = residual_weights(&x, o.model.residual_boost);
-    Ok(density::cortical_density(&mut profiles, &x, &weights, None, o)?.0)
+    let rho_c = density::cortical_density(&mut profiles, &x, &weights, None, o)?.0;
+    s.done(format_args!("rho_c {rho_c:.1} from {} profiles", sub.vertices.len()));
+    Ok(rho_c)
 }
 
 /// Fit the model on the nodes `keep` of an (already smoothed) `surface`.
@@ -206,7 +207,7 @@ pub fn fit_surface_constrained<T: Voxel>(
     }
     let o = options;
     let mut timings = Vec::new();
-    let t0 = Instant::now();
+    let st = crate::stage!("sampling");
 
     // ---- the nodes, their profiles and the cortical density
     let (sub, vertex_ids, normals) = select_nodes(&surface, keep, o)?;
@@ -214,7 +215,15 @@ pub fn fit_surface_constrained<T: Voxel>(
     let (mut profiles, x) = sample_profiles(image, &surface, &points, &normals, constraints.exclude, o);
     let weights = residual_weights(&x, o.model.residual_boost);
     let (rho_c, rho_c_node) = density::cortical_density(&mut profiles, &x, &weights, constraints.rho_c, o)?;
-    timings.push(("sampling".to_string(), t0.elapsed().as_secs_f64()));
+    timings.push((
+        "sampling".to_string(),
+        st.done(format_args!(
+            "{} nodes, {} samples per profile, rho_c {rho_c:.1}{}",
+            points.len(),
+            x.len(),
+            if rho_c_node.is_some() { " (per node)" } else { "" }
+        )),
+    ));
     let data = Data {
         profiles: &profiles,
         x: &x,
@@ -233,25 +242,31 @@ pub fn fit_surface_constrained<T: Voxel>(
 
     // ---- the blur, and one model for all profiles
     let (mut psf, mut sigma_fixed) = given_blur(o, &normals);
-    let t1 = Instant::now();
+    let st = crate::stage!("global fit");
     let mut global_params = initial_model(&data, sigma_fixed.as_deref(), constraints.densities);
     let held = held_subset(constraints.fixed, warm_start, &vertex_ids)?;
-    timings.push(("global fit".to_string(), t1.elapsed().as_secs_f64()));
+    timings.push((
+        "global fit".to_string(),
+        st.done(format_args!("[m, t, sigma, rho_s, rho_b] = {global_params:.3?}")),
+    ));
+    if let Some(h) = &held {
+        log::debug!("{} of {} nodes held at their warm start", h.iter().filter(|&&b| b).count(), h.len());
+    }
     let starts =
         |global: &Params, sigma_fixed: Option<&[f64]>| node_starts(global, warm_start, &vertex_ids, sigma_fixed);
     if let SigmaMode::EstimatePsf { model, min_ratio } = &o.model.sigma {
-        let t2 = Instant::now();
+        let st = crate::stage!("psf estimation");
         let est = psf::estimate_from_fits(&data, &normals, &starts(&global_params, None), *model, *min_ratio)?;
         psf = Some(est);
         sigma_fixed = Some(normals.iter().map(|&nr| psf::sigma_along(est, nr)).collect());
         if o.init_from_global {
             global_params = density::fit_one_model(&data, global_params, sigma_fixed.as_deref());
         }
-        timings.push(("psf estimation".to_string(), t2.elapsed().as_secs_f64()));
+        timings.push(("psf estimation".to_string(), st.done(format_args!("psf {est:.3?}"))));
     }
 
     // ---- the chosen method
-    let t3 = Instant::now();
+    let st = crate::stage!("method fit");
     let start = Start {
         global: global_params,
         nodes: starts(&global_params, sigma_fixed.as_deref()),
@@ -263,10 +278,18 @@ pub fn fit_surface_constrained<T: Voxel>(
         normals: &normals,
     };
     let mut params = fit_method(&data, &nodes, &start, constraints, &mut info, &mut timings);
-    timings.push((format!("{} fit", o.method.name()), t3.elapsed().as_secs_f64()));
+    timings.push((
+        format!("{} fit", o.method.name()),
+        st.done(format_args!("method {}", o.method.name())),
+    ));
 
     // ---- residuals, and per-node densities scaled back
     let mut residual = residuals(&data, &params);
+    log::debug!(
+        "median weighted RMS residual {:.2}, median thickness {:.3}",
+        crate::util::median(&residual),
+        crate::util::median(&params.iter().map(|p| p[crate::model::T]).collect::<Vec<_>>())
+    );
     if let Some(node) = &rho_c_node {
         let kept = o.keep_profiles.then_some(&mut profiles);
         scale_to_node_density(node, rho_c, &mut params, &mut residual, kept);
@@ -299,8 +322,10 @@ fn select_nodes(surface: &Mesh, keep: &[bool], o: &Options) -> Result<(Mesh, Vec
     let keep: Vec<bool> = keep.iter().zip(&dirs).map(|(&k, d)| k && d.is_some()).collect();
     let (sub, vertex_ids) = surface.submesh(&keep);
     if vertex_ids.is_empty() {
+        log::warn!("no nodes to fit: none selected, or no valid sampling direction");
         return Err(Error::NoNodes);
     }
+    log::debug!("{} of {} surface vertices are fitted", vertex_ids.len(), keep.len());
     let normals = vertex_ids.iter().map(|&v| dirs[v as usize].unwrap()).collect();
     Ok((sub, vertex_ids, normals))
 }

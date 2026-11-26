@@ -25,8 +25,6 @@
 //!   optimization*, Computers in Biology and Medicine, 2025,
 //!   doi:10.1016/j.compbiomed.2025.110636.
 
-use std::time::Instant;
-
 use ndarray::ArrayView3;
 
 use crate::error::Error;
@@ -76,16 +74,32 @@ pub fn run<T: Voxel, U: Voxel, V: Voxel>(
             )));
         }
     }
+    log::info!(
+        "cortical bone mapping: image {:?}, method {}, sub-mask {}",
+        image.dim(),
+        options.method.name(),
+        sub_mask.is_some()
+    );
+    log::debug!("options: {options:?}");
     with_threads(options.threads, || {
-        let t0 = Instant::now();
+        let run = crate::stage!("cortical bone mapping");
+        let s = crate::stage!("surface");
         let surf = prepare_surface(&mask, options);
         if surf.0.vertices.is_empty() {
+            log::warn!("the mask is empty");
             return Err(Error::EmptyMask);
         }
-        let t_surface = t0.elapsed().as_secs_f64();
+        let t_surface = s.end();
         let candidates = candidate_nodes(&surf.0, &surf.1, sub_mask.as_ref(), options);
+        log::debug!(
+            "{} of {} surface vertices are candidate nodes",
+            candidates.iter().filter(|&&c| c).count(),
+            candidates.len()
+        );
         let mut res = fit_surface(&image, surf.0, &candidates, options, None)?;
         res.info.timings.insert(0, ("surface".into(), t_surface));
+        let t = run.done(format_args!("{} nodes", res.points.len()));
+        log::info!("cortical bone mapping: {} nodes in {t:.1} s", res.points.len());
         Ok(res)
     })?
 }
@@ -93,9 +107,21 @@ pub fn run<T: Voxel, U: Voxel, V: Voxel>(
 /// Extract and smooth the outer surface; returns the mesh and border flags.
 pub fn prepare_surface<U: Voxel>(mask: &ArrayView3<U>, options: &Options) -> (Mesh, Vec<bool>) {
     let s = &options.surface;
+    let st = crate::stage!("surface nets");
     let e = extract_surface(mask, &options.geometry, s.mask_smoothing);
+    st.done(format_args!(
+        "{} vertices, {} faces, {} on the image's border",
+        e.mesh.vertices.len(),
+        e.mesh.faces.len(),
+        e.border.iter().filter(|&&b| b).count()
+    ));
     let mut mesh = e.mesh;
+    let st = crate::stage!("Taubin smoothing");
     mesh.taubin_smooth(s.taubin_iterations, s.taubin_lambda, s.taubin_passband, None);
+    st.done(format_args!(
+        "{} iterations, pass-band {}",
+        s.taubin_iterations, s.taubin_passband
+    ));
     (mesh, e.border)
 }
 

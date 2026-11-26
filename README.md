@@ -6,7 +6,7 @@ periosteal and endosteal surfaces, from CT and HR-pQCT images.
 
 **Documentation: [njneeteson.github.io/cortical-bone-mapping-rs](https://njneeteson.github.io/cortical-bone-mapping-rs/)**
 
-![Volumetric refinement of both knees of a clinical CT](docs/images/knee_refinement.gif)
+![Volumetric refinement of both knees of a clinical CT](examples/images/knee_refinement.gif)
 
 *Refinement of all eight bones of a clinical CT of both knees, from a rough
 automatic segmentation (yellow dashed) to the fitted periosteal surfaces,
@@ -87,7 +87,7 @@ From the [examples](docs/examples.md) and [benchmarks](docs/benchmarks.md):
 cargo test --workspace && cargo clippy --all-targets -- -D warnings
 cd python && maturin develop --release && pytest tests
 nox -s docs                                    # the documentation site, docs/_build/html
-cd docs/scripts && python phantoms.py          # phantom results and figures
+cd examples && python phantoms.py          # phantom results and figures
 python knee.py DICOM_DIR                       # clinical CT (the image is not public)
 python benchmarks.py BONELAB_DIR               # benchmarks
 ```

@@ -17,11 +17,11 @@ Pipeline (the same start for every method):
    ``rho_c`` (and, for the volumetric model, the PSF), and every other bone
    is excluded while one is refined.
 
-Writes docs/results/knee.json and the docs/images/knee_* figures, including
+Writes examples/results/knee.json and the examples/images/knee_* figures, including
 the refinement GIF of the default method.
 
-    python docs/scripts/knee.py /path/to/DICOM            # compute and draw
-    python docs/scripts/knee.py /path/to/DICOM --redraw   # redraw from the last run, if the code is unchanged
+    python examples/knee.py /path/to/DICOM            # compute and draw
+    python examples/knee.py /path/to/DICOM --redraw   # redraw from the last run, if the code is unchanged
 """
 
 import sys

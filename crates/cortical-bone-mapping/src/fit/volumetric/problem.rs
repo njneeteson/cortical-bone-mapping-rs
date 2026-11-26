@@ -729,16 +729,68 @@ impl Correlation {
             .product()
     }
 
+    /// The largest grid difference along each axis at which the correlation
+    /// can still be above [`Self::NEGLIGIBLE`] (one lag of margin against
+    /// rounding: pairs are still tested exactly).
+    pub(crate) fn reach(&self) -> [u32; 3] {
+        let step = self.step.max(1);
+        self.rho.map(|r| {
+            let lag = if r < Self::NEGLIGIBLE {
+                0
+            } else {
+                (Self::NEGLIGIBLE.ln() / r.ln()).floor() as u32 + 1
+            };
+            (lag + 1) * step - 1
+        })
+    }
+
+    /// For every voxel `i`, the voxels `j` (in increasing order) close enough
+    /// along every axis for a non-negligible correlation. The voxels are
+    /// sorted along the axis of their largest spread (a node's voxels form a
+    /// column along its normal), so each voxel looks only at a window of
+    /// the column instead of every pair.
+    fn partners(&self, grids: &[[u32; 3]]) -> Vec<Vec<usize>> {
+        let reach = self.reach();
+        let spread = |k: usize| {
+            let (lo, hi) = grids
+                .iter()
+                .fold((u32::MAX, 0), |(lo, hi), g| (lo.min(g[k]), hi.max(g[k])));
+            hi.saturating_sub(lo)
+        };
+        let axis = (0..3).max_by_key(|&k| spread(k)).unwrap_or(0);
+        let mut order: Vec<usize> = (0..grids.len()).collect();
+        order.sort_by_key(|&i| grids[i][axis]);
+        grids
+            .iter()
+            .map(|gi| {
+                let lo = gi[axis].saturating_sub(reach[axis]);
+                let hi = gi[axis].saturating_add(reach[axis]);
+                let start = order.partition_point(|&j| grids[j][axis] < lo);
+                let end = order.partition_point(|&j| grids[j][axis] <= hi);
+                let mut js: Vec<usize> = order[start..end]
+                    .iter()
+                    .copied()
+                    .filter(|&j| (0..3).all(|k| gi[k].abs_diff(grids[j][k]) <= reach[k]))
+                    .collect();
+                js.sort_unstable();
+                js
+            })
+            .collect()
+    }
+
     /// `C += Σ_ij ρ_ij u_i u_jᵀ` for the vectors `u_i` (rows of `u`, length
-    /// `n`) at grid indices `grids` (white noise: the diagonal only).
+    /// `n`) at grid indices `grids` (white noise: the diagonal only). Only
+    /// the pairs within [`Self::reach`] are visited; the sum, in the same
+    /// order, is that over all pairs with a non-negligible correlation.
     fn covariance(&self, grids: &[[u32; 3]], u: &[f64], n: usize, c: &mut [f64]) {
         let white = self.rho.iter().all(|&r| r < Self::NEGLIGIBLE);
+        let near = if white { Vec::new() } else { self.partners(grids) };
         for (i, gi) in grids.iter().enumerate() {
             let ui = &u[i * n..(i + 1) * n];
-            let partners: Box<dyn Iterator<Item = usize>> = if white {
+            let partners: Box<dyn Iterator<Item = usize> + '_> = if white {
                 Box::new(std::iter::once(i))
             } else {
-                Box::new(0..grids.len())
+                Box::new(near[i].iter().copied())
             };
             for j in partners {
                 let r = self.between(*gi, grids[j]);
@@ -816,4 +868,70 @@ fn sym_matvec(g: &[f64], z: &[f64], n: usize) -> Vec<f64> {
 /// `dst += src`.
 fn add(dst: &mut [f64], src: &[f64]) {
     dst.iter_mut().zip(src).for_each(|(a, &b)| *a += b);
+}
+
+#[cfg(test)]
+mod correlation_tests {
+    use super::Correlation;
+    use crate::util::Rng;
+
+    /// The sum over every pair, as before the windowed search.
+    fn all_pairs(cor: &Correlation, grids: &[[u32; 3]], u: &[f64], n: usize) -> Vec<f64> {
+        let mut c = vec![0.0; n * n];
+        for (i, gi) in grids.iter().enumerate() {
+            for (j, gj) in grids.iter().enumerate() {
+                let r = cor.between(*gi, *gj);
+                if r < Correlation::NEGLIGIBLE {
+                    continue;
+                }
+                for a in 0..n {
+                    for b in 0..n {
+                        c[a * n + b] += r * u[i * n + a] * u[j * n + b];
+                    }
+                }
+            }
+        }
+        c
+    }
+
+    /// A node's voxels: a column along a random direction, a few voxels
+    /// across, with repeated voxels (shared by the node's faces).
+    fn column(rng: &mut Rng, len: usize, step: u32) -> Vec<[u32; 3]> {
+        let dir = [rng.normal(), rng.normal(), rng.normal()];
+        let norm = dir.iter().map(|d| d * d).sum::<f64>().sqrt();
+        let mut g = Vec::new();
+        for s in 0..len {
+            let jitter = [rng.uniform(), rng.uniform(), rng.uniform()];
+            let p: [u32; 3] =
+                std::array::from_fn(|k| ((200.0 + dir[k] / norm * s as f64 + 2.0 * jitter[k]) as u32) * step);
+            g.push(p);
+            if rng.uniform() < 0.3 {
+                g.push(p);
+            }
+        }
+        g
+    }
+
+    #[test]
+    fn windowed_covariance_equals_all_pairs_exactly() {
+        let mut rng = Rng::new(7);
+        let n = 4;
+        for (rho, step) in [
+            ([0.3, 0.5, 0.7], 1),
+            ([0.0, 0.0, 0.9], 1),
+            ([0.95, 0.95, 0.95], 2),
+            ([0.1, 1e-4, 0.6], 3),
+            ([0.001, 0.2, 0.0], 1),
+        ] {
+            let cor = Correlation { rho, step };
+            for len in [1, 5, 60, 300] {
+                let grids = column(&mut rng, len, step);
+                let u: Vec<f64> = (0..grids.len() * n).map(|_| rng.normal()).collect();
+                let mut c = vec![0.0; n * n];
+                cor.covariance(&grids, &u, n, &mut c);
+                let want = all_pairs(&cor, &grids, &u, n);
+                assert_eq!(c, want, "rho {rho:?}, step {step}, {len} voxels");
+            }
+        }
+    }
 }

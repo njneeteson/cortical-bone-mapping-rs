@@ -91,6 +91,8 @@ pub struct BoneLabels {
 /// soft-tissue gap) become one component; raise the threshold, or separate
 /// them by other means, if that happens.
 pub fn label_bones<T: Voxel>(image: ArrayView3<T>, o: &BoneLabelOptions) -> BoneLabels {
+    let s = crate::stage!("label bones");
+    log::debug!("label bones: image {:?}, {o:?}", image.dim());
     let mut m = Array3::from_elem(image.dim(), false);
     Zip::from(&mut m)
         .and(&image)
@@ -107,6 +109,13 @@ pub fn label_bones<T: Voxel>(image: ArrayView3<T>, o: &BoneLabelOptions) -> Bone
         map[c] = (k + 1) as u16;
     }
     let out: Vec<u16> = label.par_iter().map(|&l| map[l as usize]).collect();
+    s.done(format_args!(
+        "{} components, {} kept (at least {} voxels): sizes {:?}",
+        sizes.len().saturating_sub(1),
+        order.len(),
+        o.min_size,
+        order.iter().map(|&c| sizes[c]).collect::<Vec<_>>()
+    ));
     BoneLabels {
         labels: Array3::from_shape_vec(m.dim(), out).unwrap(),
         sizes: order.iter().map(|&c| sizes[c]).collect(),
@@ -127,6 +136,7 @@ pub fn grow_bones<T: Voxel>(
     low_threshold: f64,
     median_kernel: [usize; 3],
 ) -> Array3<u16> {
+    let s = crate::stage!("grow bones");
     let mut low = Array3::from_elem(image.dim(), false);
     Zip::from(&mut low)
         .and(&image)
@@ -149,6 +159,11 @@ pub fn grow_bones<T: Voxel>(
             }
         }
     }
+    let before = labels.iter().filter(|&&l| l != 0).count();
+    let after = out.iter().filter(|&&l| l != 0).count();
+    s.done(format_args!(
+        "low threshold {low_threshold:.1}: {before} -> {after} labelled voxels"
+    ));
     out
 }
 
@@ -186,6 +201,14 @@ pub fn bone_hulls(
 ) -> Array3<u16> {
     let dim = labels.dim();
     let n = labels.iter().copied().max().unwrap_or(0);
+    log::debug!(
+        "bone hulls: {n} bones, image {dim:?}, {}",
+        match (closing_radius, max_distance) {
+            (Some(r), _) => format!("closing radius {r}"),
+            (None, Some(d)) => format!("slice hulls trimmed to {d}"),
+            (None, None) => "slice hulls".to_string(),
+        }
+    );
     let mut owner = Array3::<u16>::zeros(dim);
     let mut best = Array3::from_elem(dim, f32::INFINITY);
     let inv = spacing.map(|s| 1.0 / s);
@@ -194,8 +217,14 @@ pub fn bone_hulls(
         if !mb.iter().any(|&v| v) {
             continue;
         }
+        let s = crate::stage!("bone start");
         let d = scaled_sq_distance(&mb, inv);
         let start = bone_start(&mb, &d, inv, max_distance, closing_radius);
+        s.done(format_args!(
+            "bone {b}: {} thresholded voxels, {} in its start",
+            mb.iter().filter(|&&v| v).count(),
+            start.iter().filter(|&&v| v).count()
+        ));
         Zip::from(&mut owner)
             .and(&mut best)
             .and(&start)
@@ -207,10 +236,12 @@ pub fn bone_hulls(
                 }
             });
     }
+    let s = crate::stage!("separate the starts");
     let mut out = separate(&owner, &labels);
     for b in 1..=n {
         drop_fragments(&mut out, &labels, b);
     }
+    s.end();
     out
 }
 
@@ -283,6 +314,7 @@ fn drop_fragments(out: &mut Array3<u16>, labels: &ArrayView3<u16>, b: u16) {
 /// Slice holes left after the erosion are filled too.
 fn closing(m: &Array3<bool>, d: &Array3<f32>, inv: [f64; 3], r: f64) -> Array3<bool> {
     let r2 = (r * r) as f32;
+    let s = crate::stage!("closing: dilation and enclosed voids");
     // dilation, then fill enclosed background (the outside is the background
     // connected to the in-plane faces, so a bone cut by the first or last
     // slice still gets its marrow filled)
@@ -296,11 +328,15 @@ fn closing(m: &Array3<bool>, d: &Array3<f32>, inv: [f64; 3], r: f64) -> Array3<b
             filled = fill_slice_holes(&filled, axis);
         }
     }
+    s.end();
+    let s = crate::stage!("closing: erosion");
     let outside = filled.mapv(|b| !b);
     // erosion: voxels farther than r from the outside (the image border
     // counts as inside)
     let e = scaled_sq_distance(&outside, inv);
     let mut c = e.mapv(|v| v > r2);
     Zip::from(&mut c).and(m).par_for_each(|c, &b| *c |= b);
-    outer_region(&c.mapv(|b| !b), true).mapv(|b| !b)
+    let out = outer_region(&c.mapv(|b| !b), true).mapv(|b| !b);
+    s.end();
+    out
 }

@@ -5,9 +5,11 @@
 //! classes) lives in the Python package `python/cortical_bone_mapping_rs/`,
 //! which passes a flat dict of options. Images of any common numeric dtype
 //! are sampled in place without conversion; masks arrive as `uint8`.
+//! The crate's log records go to Python's `logging` ([`logs`]).
 
 mod convert;
 mod fitting;
+mod logs;
 mod mesh;
 mod options;
 mod phantoms;
@@ -17,6 +19,7 @@ use pyo3::prelude::*;
 
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    logs::install(m.py())?;
     m.add_function(wrap_pyfunction!(segmentation::otsu_thresholds, m)?)?;
     m.add_function(wrap_pyfunction!(segmentation::label_bones, m)?)?;
     m.add_function(wrap_pyfunction!(segmentation::bone_hulls, m)?)?;

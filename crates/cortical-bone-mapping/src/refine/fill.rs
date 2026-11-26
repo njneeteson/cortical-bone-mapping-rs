@@ -38,7 +38,12 @@ pub(super) fn harmonic_fill(adj: &Adjacency, known: &[bool], vals: &mut [V3]) {
     for &i in &unknown {
         vals[i] = [0.0; 3];
     }
-    let free: Vec<usize> = unknown.into_iter().filter(|&i| anchored[i]).collect();
+    let free: Vec<usize> = unknown.iter().copied().filter(|&i| anchored[i]).collect();
+    log::debug!(
+        "harmonic fill: {} vertices without a trusted displacement, {} of them next to a known one",
+        unknown.len(),
+        free.len()
+    );
     if free.is_empty() {
         return;
     }
@@ -135,11 +140,13 @@ impl Membrane<'_> {
         let mut rz = dots(&r, &z);
         let norm_b = dots(b, b);
         let mut ap = vec![[0.0; 3]; n];
+        let mut iterations = 0;
         for _ in 0..n.max(1) {
             let rr = dots(&r, &r);
             if (0..3).all(|a| rr[a] <= TOLERANCE * TOLERANCE * norm_b[a].max(1e-300)) {
                 break;
             }
+            iterations += 1;
             self.apply(&p, &mut ap);
             let pap = dots(&p, &ap);
             let alpha = [0, 1, 2].map(|a| if pap[a] > 0.0 { rz[a] / pap[a] } else { 0.0 });
@@ -158,6 +165,7 @@ impl Membrane<'_> {
             rz = rz_new;
         }
         debug_assert!(dot(rz, rz).is_finite());
+        log::trace!("harmonic fill: {n} vertices, {iterations} CG iterations");
         u
     }
 }

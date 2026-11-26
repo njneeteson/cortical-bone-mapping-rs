@@ -150,6 +150,17 @@ pub fn refine_segmentation_excluding<T: Voxel, U: Voxel, V: Voxel, W: Voxel>(
         options,
         refine,
     };
+    log::info!(
+        "refinement{}: image {:?}, method {}, level set {}, freezing {}, at most {} moves",
+        if refine.label.is_empty() { String::new() } else { format!(" of {}", refine.label) },
+        image.dim(),
+        options.method.name(),
+        refine.level_set,
+        refine.freeze.is_some(),
+        refine.max_iterations
+    );
+    log::debug!("options: {options:?}");
+    log::debug!("refine options: {refine:?}");
     with_threads(options.threads, || {
         let mut r = Refinement::start(inputs, &mask)?;
         let end = loop {
@@ -285,10 +296,24 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
         let max_spacing = geom.spacing.iter().cloned().fold(0.0, f64::max);
         let locked = locked_axes(&mesh, geom, dims.map(|v| v as f64));
         let pinned = locked.iter().map(|l| l.iter().any(|&b| b)).collect();
+        log::debug!(
+            "surface: {} vertices, {} candidate nodes; tolerance {:.4} (regional {:.4} over {:.3}), \
+             relaxation {}, largest move {:.3}",
+            mesh.vertices.len(),
+            keep.iter().filter(|&&k| k).count(),
+            lim.tol,
+            lim.region_tol,
+            lim.region_radius,
+            lim.alpha,
+            lim.max_move
+        );
         let tl = Instant::now();
         let level_set = refine.level_set.then(|| {
             let band = lim.max_move + 3.0 * max_spacing;
-            initial_level_set(&mesh, dims, band, inp.exclude.as_ref(), options)
+            let s = crate::stage!("level set: initialisation");
+            let ls = initial_level_set(&mesh, dims, band, inp.exclude.as_ref(), options);
+            s.done(format_args!("band {band:.3}"));
+            ls
         });
         if level_set.is_some() {
             clock.since("level set: initialisation", tl);
@@ -303,6 +328,7 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
             format!("refine {}", refine.label)
         };
         let tf = Instant::now();
+        log::debug!("initial fit");
         let first = FitConstraints {
             exclude: inp.exclude,
             ..FitConstraints::default()
@@ -426,7 +452,7 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
 
     /// One progress line about the last fit.
     fn report(&self, st: &IterationStats) {
-        if !self.inp.refine.verbose {
+        if !self.inp.refine.verbose && !log::log_enabled!(log::Level::Debug) {
             return;
         }
         let moving_note = if self.freeze.is_some() {
@@ -434,7 +460,7 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
         } else {
             String::new()
         };
-        eprintln!(
+        let line = format!(
             "{}: {}: displacement RMS {:.3} max {:.3} regional {:.3} (tolerance {:.3} / {:.3}), \
              mean thickness {:.3}, {} untrusted{moving_note}, {}, {:.1} s",
             self.tag,
@@ -449,6 +475,10 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
             self.result.summary(),
             self.t0.elapsed().as_secs_f64()
         );
+        log::debug!("{line}");
+        if self.inp.refine.verbose {
+            eprintln!("{line}");
+        }
     }
 
     /// Converged (a full, converged fit that barely moves the surface), out
@@ -506,6 +536,7 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
     fn move_surface(&mut self, step: &Step, m: &Measured) -> Result<(), Error> {
         let tm = Instant::now();
         let options = self.inp.options;
+        let mv = crate::stage!("move");
         if let Some(ls) = self.level_set.as_mut() {
             let mut stages = Vec::new();
             let (e, map) = move_level_set(ls, &self.mesh, &m.outward, &m.s, self.inp.exclude.as_ref(), &mut stages);
@@ -540,6 +571,12 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
         }
         self.clock.since("moves", tm);
         self.moves += 1;
+        mv.done(format_args!(
+            "move {}: {} vertices, {} frozen",
+            self.moves,
+            self.mesh.vertices.len(),
+            self.state.frozen.iter().filter(|&&f| f).count()
+        ));
         if self.inp.refine.keep_history {
             self.surfaces.push(self.mesh.clone());
         }
@@ -569,6 +606,13 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
         };
         let held = (!full && self.freeze.is_some()).then_some(self.state.held.as_slice());
         let edge_tol = refine.edge_ratio * m.stats.rms_displacement;
+        log::debug!(
+            "refit: {} fit of {} nodes ({} held){}",
+            if full { "full" } else { "inexact" },
+            fit_mask.iter().filter(|&&f| f).count(),
+            held.map_or(0, |h| h.iter().filter(|&&b| b).count()),
+            if full { String::new() } else { format!(", edge tolerance {edge_tol:.4}") }
+        );
         let constraints = self.shared.constraints(self.inp.exclude, full, held, edge_tol);
         let tf = Instant::now();
         let warm = Some(self.state.warm.as_slice());
@@ -614,16 +658,18 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
         self.clock.add_fit(&fit);
         let before = self.shared.scanner;
         let change = self.shared.relax(&fit, refine.scanner_relaxation);
+        let line = format!(
+            "{}: scanner re-fit after pass {}: {:?} -> {:?} (re-fit changed by {:.1}%, tolerance {:.1}%)",
+            self.tag,
+            self.passes.len(),
+            before,
+            self.shared.scanner,
+            100.0 * change,
+            100.0 * refine.scanner_tolerance
+        );
+        log::debug!("{line}");
         if refine.verbose {
-            eprintln!(
-                "{}: scanner re-fit after pass {}: {:?} -> {:?} (re-fit changed by {:.1}%, tolerance {:.1}%)",
-                self.tag,
-                self.passes.len(),
-                before,
-                self.shared.scanner,
-                100.0 * change,
-                100.0 * refine.scanner_tolerance
-            );
+            eprintln!("{line}");
         }
         if change <= refine.scanner_tolerance {
             self.shared.scanner = before;
@@ -665,13 +711,15 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
         self.result = fit_surface_constrained(image, self.mesh.clone(), &self.keep, options, warm, &constraints)?;
         self.clock.since("fits", tf);
         self.clock.add_fit(&self.result);
+        let t = self.t0.elapsed().as_secs_f64();
+        let line = format!(
+            "{}: output fit on the whole surface, {}, {t:.1} s",
+            self.tag,
+            self.result.summary()
+        );
+        log::debug!("{line}");
         if self.inp.refine.verbose {
-            let t = self.t0.elapsed().as_secs_f64();
-            eprintln!(
-                "{}: output fit on the whole surface, {}, {t:.1} s",
-                self.tag,
-                self.result.summary()
-            );
+            eprintln!("{line}");
         }
         Ok(())
     }
@@ -684,13 +732,22 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
             self.output_fit()?;
         }
         let tk = Instant::now();
+        let masks = crate::stage!("masks");
         let periosteal = self.result.surface.clone();
         let endosteal = self.result.displaced_surface(1.0);
         let shape = self.inp.image.dim();
         let [periosteal_mask, endosteal_mask, cortical_mask] =
             region_masks(&periosteal, &endosteal, shape, &options.geometry);
         self.clock.since("masks", tk);
+        masks.done(format_args!(
+            "{} periosteal, {} cortical voxels",
+            periosteal_mask.iter().filter(|&&b| b).count(),
+            cortical_mask.iter().filter(|&&b| b).count()
+        ));
         add_timing(&mut self.clock.0, "total", self.t0.elapsed().as_secs_f64());
+        let level = if end.converged { log::Level::Info } else { log::Level::Warn };
+        log::log!(level, "{tag}: {} ({} moves)", end.message, self.moves);
+        log::debug!("{tag}: time: {}", self.clock.summary(self.t0));
         if self.inp.refine.verbose {
             eprintln!("{tag}: {}", end.message);
             eprintln!("{tag}: time: {}", self.clock.summary(self.t0));

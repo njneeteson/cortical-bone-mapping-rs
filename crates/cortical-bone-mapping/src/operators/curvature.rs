@@ -340,6 +340,7 @@ impl CurvatureOperator {
         coef: [f64; 2],
     ) -> Self {
         let n = points.len();
+        log::debug!("curvature operator: {n} nodes, mode {mode:?}, measure {measure:?}, weights {coef:?}");
         let r = &lap.rows;
         let gather = |x: &[V3], i: usize, diag: f64| -> V3 {
             let mut acc = scale(x[i], diag);

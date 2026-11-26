@@ -42,6 +42,7 @@ pub struct QueryScratch(Option<Scratch>);
 impl Neighbours {
     /// Neighbour queries over the vertices of `mesh` by `distance`.
     pub fn new(mesh: &Mesh, distance: Distance) -> Self {
+        log::debug!("neighbours: {} vertices, {distance:?} distance", mesh.vertices.len());
         match distance {
             Distance::Euclidean => Self::euclidean(&mesh.vertices),
             Distance::Surface => Neighbours::Surface(SurfaceGraph::new(mesh)),

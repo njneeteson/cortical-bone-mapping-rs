@@ -36,6 +36,7 @@ True
 
 
 from . import _core
+from .logs import log_to
 from .bones import map_bones, name_bones, refine_bones, separate_bones, shared_scanner
 from .mapping import cortical_bone_mapping, mask_surface, refine_segmentation
 from .mesh import mesh_curvature, mesh_section, voxelize, write_vtk
@@ -55,6 +56,7 @@ from .segmentation import (
 )
 
 __all__ = [
+    "log_to",
     "Options",
     "RefineOptions",
     "CbmResult",

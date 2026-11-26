@@ -2,7 +2,7 @@
 
     nox                 # rust + python tests
     nox -s tests        # Python tests only
-    nox -s figures      # the phantom results and figures (docs/scripts/phantoms.py)
+    nox -s figures      # the phantom results and figures (examples/phantoms.py)
     nox -s docs         # build the user documentation into docs/_build/html
 """
 
@@ -26,10 +26,10 @@ def tests(session):
 @nox.session
 def figures(session):
     """The phantom results and figures. The knee and benchmark pages need the
-    CT and a Bonelab checkout: ``python docs/scripts/knee.py DICOM_DIR`` and
-    ``python docs/scripts/benchmarks.py BONELAB_DIR``."""
+    CT and a Bonelab checkout: ``python examples/knee.py DICOM_DIR`` and
+    ``python examples/benchmarks.py BONELAB_DIR``."""
     session.install("./python[docs]")
-    session.chdir("docs/scripts")
+    session.chdir("examples")
     session.run("python", "phantoms.py", *session.posargs)
 
 

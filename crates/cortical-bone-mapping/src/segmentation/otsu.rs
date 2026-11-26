@@ -80,6 +80,7 @@ pub fn otsu_thresholds<T: Voxel>(image: ArrayView3<T>, o: &OtsuOptions) -> Vec<f
     let moments = Moments::new(&histogram(&image, floor, lo, w, o.bins), lo, w);
     let cands = moments.candidates(o.classes);
     let Some(best) = cands.iter().map(|c| c.0).max_by(f64::total_cmp) else {
+        log::warn!("Otsu: no candidate thresholds");
         return Vec::new();
     };
     // a threshold anywhere in an empty stretch of the histogram scores the
@@ -89,13 +90,20 @@ pub fn otsu_thresholds<T: Voxel>(image: ArrayView3<T>, o: &OtsuOptions) -> Vec<f
         .filter(|c| c.0 >= best - 1e-12 * best.abs())
         .map(|c| &c.1)
         .collect();
-    (0..o.classes - 1)
+    let out: Vec<f64> = (0..o.classes - 1)
         .map(|a| {
             let lo_i = tied.iter().map(|t| t[a]).min().unwrap();
             let hi_i = tied.iter().map(|t| t[a]).max().unwrap();
             lo + 0.5 * (lo_i + hi_i) as f64 * w
         })
-        .collect()
+        .collect();
+    log::debug!(
+        "Otsu ({} classes, floor {:?}, values {lo:.1} to {hi:.1}, {} bins): thresholds {out:.1?}",
+        o.classes,
+        o.floor,
+        o.bins
+    );
+    out
 }
 
 /// Smallest and largest finite value `≥ floor`.

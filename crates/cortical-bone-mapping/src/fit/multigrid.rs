@@ -55,8 +55,16 @@ pub(crate) fn fit(data: &Data, nodes: &Nodes, start: &Start, info: &mut FitInfo)
     let mut scalars = start.global;
     let near = Neighbours::new(nodes.mesh, o.distance());
     for (lvl, &s) in spacings.iter().enumerate() {
+        let level = crate::stage!("multigrid level");
         let ctrl = select_control_points(&near, s, seed.wrapping_add(lvl as u64));
         let a = interpolation_matrix(&near, &ctrl, *neighbours, s);
+        log::debug!(
+            "multigrid level {}/{}: spacing {s:.3}, {} control points for {} nodes",
+            lvl + 1,
+            spacings.len(),
+            ctrl.len(),
+            node_params.len()
+        );
         let pr = Problem {
             profiles: data.profiles,
             x: data.x,
@@ -82,6 +90,7 @@ pub(crate) fn fit(data: &Data, nodes: &Nodes, start: &Start, info: &mut FitInfo)
         info.add_solve(&si);
         node_params = pr.node_params(&st);
         scalars = st.scalars;
+        level.done(format_args!("level {} of {}", lvl + 1, spacings.len()));
     }
     node_params
 }
