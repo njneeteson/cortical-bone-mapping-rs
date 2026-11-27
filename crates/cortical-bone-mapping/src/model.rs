@@ -51,6 +51,8 @@
 //!   optimization*, Computers in Biology and Medicine, 2025,
 //!   doi:10.1016/j.compbiomed.2025.110636.
 
+use crate::units::{Dimensionless, Intensity, IntensityContrast, Length, Quantity, N1, P1};
+
 /// Index of the cortical mid-line position `m` in a parameter vector.
 pub const M: usize = 0;
 /// Index of the cortical thickness `t`.
@@ -67,48 +69,146 @@ pub const NPARAM: usize = 5;
 /// Parameter names, in index order.
 pub const PARAM_NAMES: [&str; NPARAM] = ["m", "t", "sigma", "rho_s", "rho_b"];
 
-/// A full parameter vector `[m, t, σ, ρs, ρb]`.
+/// A full parameter vector `[m, t, σ, ρs, ρb]`: the solvers' packed storage
+/// of [`ProfileParams`].
 pub type Params = [f64; NPARAM];
+
+/// The model's parameters with their units.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ProfileParams {
+    /// Position of the cortical mid-line along the profile.
+    pub m: Length,
+    /// Cortical thickness.
+    pub t: Length,
+    /// Blur.
+    pub sigma: Length,
+    /// Soft-tissue density.
+    pub rho_s: Intensity,
+    /// Trabecular density.
+    pub rho_b: Intensity,
+}
+
+impl ProfileParams {
+    /// From the packed `[m, t, σ, ρs, ρb]`.
+    #[inline(always)]
+    pub fn from_packed(p: &Params) -> Self {
+        ProfileParams {
+            m: Length::new(p[M]),
+            t: Length::new(p[T]),
+            sigma: Length::new(p[SIGMA]),
+            rho_s: Intensity::new(p[RHO_S]),
+            rho_b: Intensity::new(p[RHO_B]),
+        }
+    }
+
+    /// Packed as `[m, t, σ, ρs, ρb]`.
+    #[inline(always)]
+    pub fn packed(&self) -> Params {
+        [
+            self.m.value(),
+            self.t.value(),
+            self.sigma.value(),
+            self.rho_s.value(),
+            self.rho_b.value(),
+        ]
+    }
+
+    /// The periosteal edge, `m − t/2`.
+    #[inline(always)]
+    pub fn periosteal_edge(&self) -> Length {
+        self.m - self.t * 0.5
+    }
+
+    /// The endosteal edge, `m + t/2`.
+    #[inline(always)]
+    pub fn endosteal_edge(&self) -> Length {
+        self.m + self.t * 0.5
+    }
+}
+
+/// The intensity's change per unit of each parameter.
+pub type IntensityPerLength = Quantity<N1, P1>;
+
+/// The model's gradient with its units (module documentation).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ProfileGradient {
+    pub m: IntensityPerLength,
+    pub t: IntensityPerLength,
+    pub sigma: IntensityPerLength,
+    pub rho_s: Dimensionless,
+    pub rho_b: Dimensionless,
+}
+
+impl ProfileGradient {
+    /// Packed as `[∂f/∂m, ∂f/∂t, ∂f/∂σ, ∂f/∂ρs, ∂f/∂ρb]`.
+    #[inline(always)]
+    pub fn packed(&self) -> Params {
+        [
+            self.m.value(),
+            self.t.value(),
+            self.sigma.value(),
+            self.rho_s.value(),
+            self.rho_b.value(),
+        ]
+    }
+}
 
 const FRAC_1_SQRT_2: f64 = std::f64::consts::FRAC_1_SQRT_2;
 /// 1 / sqrt(2π)
 const INV_SQRT_2PI: f64 = 0.398_942_280_401_432_7;
 
-/// The model density `f(x)` of the module documentation (Treece et al. 2010).
-#[inline]
-pub fn eval(x: f64, p: &Params, rho_c: f64) -> f64 {
-    let (m, t, s, rs, rb) = (p[M], p[T], p[SIGMA], p[RHO_S], p[RHO_B]);
-    let e1 = libm::erf((x - m + 0.5 * t) / s * FRAC_1_SQRT_2);
-    let e2 = libm::erf((x - m - 0.5 * t) / s * FRAC_1_SQRT_2);
-    rs + 0.5 * (rho_c - rs) * (1.0 + e1) + 0.5 * (rb - rho_c) * (1.0 + e2)
+/// `½ [1 + erf(u/√2)]`: the blurred unit step at `u` standard deviations
+/// past its edge.
+#[inline(always)]
+fn blurred_step(u: Dimensionless) -> f64 {
+    0.5 * (1.0 + libm::erf(u.value() * FRAC_1_SQRT_2))
 }
 
-/// `f(x)` and its gradient with respect to `[m, t, σ, ρs, ρb]`, in one pass
-/// (the shared `erf` and normal-density terms are computed once). See the
-/// module documentation for the derivation.
-#[inline]
-pub fn eval_grad(x: f64, p: &Params, rho_c: f64) -> (f64, Params) {
-    let (m, t, s, rs, rb) = (p[M], p[T], p[SIGMA], p[RHO_S], p[RHO_B]);
-    let inv_s = 1.0 / s;
-    let u1 = (x - m + 0.5 * t) * inv_s;
-    let u2 = (x - m - 0.5 * t) * inv_s;
-    let e1 = libm::erf(u1 * FRAC_1_SQRT_2);
-    let e2 = libm::erf(u2 * FRAC_1_SQRT_2);
-    let phi1 = INV_SQRT_2PI * (-0.5 * u1 * u1).exp();
-    let phi2 = INV_SQRT_2PI * (-0.5 * u2 * u2).exp();
-    let a1 = rho_c - rs; // height of the periosteal step
-    let a2 = rb - rho_c; // height of the endosteal step
-    let f = rs + 0.5 * a1 * (1.0 + e1) + 0.5 * a2 * (1.0 + e2);
-    let g1 = a1 * phi1 * inv_s; // ∂/∂(edge position) of step 1, negated
-    let g2 = a2 * phi2 * inv_s;
-    let grad = [
-        -g1 - g2,             // ∂f/∂m
-        0.5 * (g1 - g2),      // ∂f/∂t
-        -(g1 * u1 + g2 * u2), // ∂f/∂σ
-        0.5 * (1.0 - e1),     // ∂f/∂ρs
-        0.5 * (1.0 + e2),     // ∂f/∂ρb
-    ];
+/// The model intensity `f(x)` of the module documentation (Treece et al.
+/// 2010), at distance `x` along the profile.
+#[inline(always)]
+pub fn profile(x: Length, p: &ProfileParams, rho_c: Intensity) -> Intensity {
+    let u1: Dimensionless = (x - p.periosteal_edge()) / p.sigma;
+    let u2: Dimensionless = (x - p.endosteal_edge()) / p.sigma;
+    p.rho_s + (rho_c - p.rho_s) * blurred_step(u1) + (p.rho_b - rho_c) * blurred_step(u2)
+}
+
+/// `f(x)` and its gradient, in one pass (the shared `erf` and
+/// normal-density terms are computed once). See the module documentation
+/// for the derivation.
+#[inline(always)]
+pub fn profile_grad(x: Length, p: &ProfileParams, rho_c: Intensity) -> (Intensity, ProfileGradient) {
+    let u1: Dimensionless = (x - p.periosteal_edge()) / p.sigma;
+    let u2: Dimensionless = (x - p.endosteal_edge()) / p.sigma;
+    let (s1, s2) = (blurred_step(u1), blurred_step(u2));
+    let phi = |u: Dimensionless| INV_SQRT_2PI * (-0.5 * u.value() * u.value()).exp();
+    let a1: IntensityContrast = rho_c - p.rho_s; // height of the periosteal step
+    let a2: IntensityContrast = p.rho_b - rho_c; // height of the endosteal step
+    let f = p.rho_s + a1 * s1 + a2 * s2;
+    // ∂/∂(edge position) of each step, negated
+    let g1: IntensityPerLength = a1 * phi(u1) / p.sigma;
+    let g2: IntensityPerLength = a2 * phi(u2) / p.sigma;
+    let grad = ProfileGradient {
+        m: -g1 - g2,
+        t: (g1 - g2) * 0.5,
+        sigma: -(g1 * u1 + g2 * u2),
+        rho_s: Dimensionless::new(1.0 - s1),
+        rho_b: Dimensionless::new(s2),
+    };
     (f, grad)
+}
+
+/// [`profile`] on packed parameters and plain numbers (the solvers' kernels).
+#[inline(always)]
+pub fn eval(x: f64, p: &Params, rho_c: f64) -> f64 {
+    profile(Length::new(x), &ProfileParams::from_packed(p), Intensity::new(rho_c)).value()
+}
+
+/// [`profile_grad`] on packed parameters and plain numbers.
+#[inline(always)]
+pub fn eval_grad(x: f64, p: &Params, rho_c: f64) -> (f64, Params) {
+    let (f, g) = profile_grad(Length::new(x), &ProfileParams::from_packed(p), Intensity::new(rho_c));
+    (f.value(), g.packed())
 }
 
 /// Residual weights along the profile (Treece et al. 2010):

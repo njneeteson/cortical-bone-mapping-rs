@@ -311,17 +311,9 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
             lim.alpha,
             lim.max_move
         );
-        let tl = Instant::now();
-        let level_set = refine.level_set.then(|| {
-            let band = lim.max_move + 3.0 * max_spacing;
-            let s = crate::stage!("level set: initialisation");
-            let ls = initial_level_set(&mesh, dims, band, inp.exclude.as_ref(), options);
-            crate::done!(s, "band {band:.3}");
-            ls
-        });
-        if level_set.is_some() {
-            clock.since("level set: initialisation", tl);
-        }
+        // the level set is built at the first move (a refinement that ends
+        // after its first fit never needs it)
+        let level_set = None;
         let freeze = refine
             .freeze
             .as_ref()
@@ -395,7 +387,7 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
             fz.thaw_moved(&mut self.state, &step);
         }
         for v in 0..self.mesh.vertices.len() {
-            let fixed_cap = self.level_set.is_some() && self.border[v] && !step.fitted[v];
+            let fixed_cap = self.inp.refine.level_set && self.border[v] && !step.fitted[v];
             if self.state.frozen[v] || fixed_cap {
                 step.disp[v] = [0.0; 3];
                 step.known[v] = true;
@@ -421,7 +413,7 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
         let s: Vec<f64> = (0..nv)
             .map(|v| (-dot(step.disp[v], outward[v])).clamp(-max_move, max_move))
             .collect();
-        let level_set = self.level_set.is_some();
+        let level_set = self.inp.refine.level_set;
         let mag = |v: usize| if level_set { s[v].abs() } else { norm(step.disp[v]) };
         let m2: Vec<f64> = moving_fitted.iter().map(|&v| mag(v).powi(2)).collect();
         let rms = (m2.iter().sum::<f64>() / moving_fitted.len().max(1) as f64).sqrt();
@@ -542,6 +534,18 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
         let tm = Instant::now();
         let options = self.inp.options;
         let mv = crate::stage!("move");
+        if self.inp.refine.level_set && self.level_set.is_none() {
+            let tl = Instant::now();
+            let geom = &options.geometry;
+            let max_spacing = geom.spacing.iter().cloned().fold(0.0, f64::max);
+            let band = self.lim.max_move + 3.0 * max_spacing;
+            let (d0, d1, d2) = self.inp.image.dim();
+            let s = crate::stage!("level set: initialisation");
+            let ls = initial_level_set(&self.mesh, [d0, d1, d2], band, self.inp.exclude.as_ref(), options);
+            crate::done!(s, "band {band:.3}");
+            self.level_set = Some(ls);
+            self.clock.since("level set: initialisation", tl);
+        }
         if let Some(ls) = self.level_set.as_mut() {
             let mut stages = Vec::new();
             let (e, map) = move_level_set(ls, &self.mesh, &m.outward, &m.s, self.inp.exclude.as_ref(), &mut stages);

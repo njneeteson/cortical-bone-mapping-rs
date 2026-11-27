@@ -17,14 +17,20 @@
 //! the edge of the surface), if its closest face is real but not fitted
 //! (outside a sub-mask), if it is excluded (another bone), or if it is
 //! outside the image. Its weight is the 1D residual weight
-//! at its depth ([`crate::model::residual_weight`]), so both models weight
-//! their samples alike. The voxels are stored grouped by face (ragged), with
-//! 24 bytes each, so a Gauss–Newton pass over them runs face by face.
+//! at its depth ([`crate::model::residual_weight`], computed where it is
+//! used from the depth and its face's reach), so both models weight their
+//! samples alike. The voxels are stored grouped by face (ragged), in grid
+//! order within a face, with 20 bytes each, so a Gauss–Newton pass over them
+//! runs face by face. They are generated slice by slice (the rows of a slice
+//! in parallel) into arrays in grid order, which are then reordered by face
+//! one at a time (a stable counting sort), so the build holds at most 16
+//! bytes per voxel more than the band itself.
 //!
-//! The voxels in the outer half of the outside band (`d ≤ −outside/2`), well
-//! clear of the blurred periosteal edge, are also listed by grid index. They
-//! sample soft tissue only, and their residuals measure the noise level and
-//! its spatial correlation (the reliability outputs).
+//! Only for the reliability outputs ([`BandSpec::grid`]): every voxel's grid
+//! index, and the voxels in the outer half of the outside band
+//! (`d ≤ −outside/2`), well clear of the blurred periosteal edge, listed by
+//! grid index. Those sample soft tissue only, and their residuals measure
+//! the noise level and its spatial correlation.
 
 use std::collections::{HashMap, HashSet};
 
@@ -55,6 +61,9 @@ pub(crate) struct BandSpec<'a> {
     /// Per fitted face, its reach `[outside, inside]` (the largest of its
     /// nodes'; [`super::reach`]); `None`: `outside` and `inside` everywhere.
     pub face_reach: Option<Vec<[f64; 2]>>,
+    /// Keep the grid indices and the soft-tissue voxels (the reliability
+    /// outputs need them; nothing else does).
+    pub grid: bool,
 }
 
 /// The band's voxels, grouped by fitted face.
@@ -69,14 +78,19 @@ pub(crate) struct Band {
     pub bary: Vec<[f32; 2]>,
     /// Squared component of the inward normal along the scanner axis.
     pub axial2: Vec<f32>,
-    pub weight: Vec<f32>,
-    /// Grid index of each voxel.
+    /// Residual weight at the surface relative to the band's ends (`γ0`).
+    pub boost: f64,
+    /// Per fitted face, the depth its weights reach (the larger of its
+    /// outside and inside reach).
+    pub weight_reach: Vec<f32>,
+    /// Grid index of each voxel ([`BandSpec::grid`]; empty otherwise).
     pub grid: Vec<[u32; 3]>,
-    /// Soft-tissue voxels (`d ≤ −outside/2`): (grid index, band position).
+    /// Soft-tissue voxels (`d ≤ −outside/2`): (grid index, band position)
+    /// ([`BandSpec::grid`]; empty otherwise).
     pub soft: Vec<([u32; 3], u32)>,
 }
 
-/// One band voxel before grouping.
+/// One band voxel, as a row finds it.
 struct Sample {
     face: u32,
     grid: [u32; 3],
@@ -84,7 +98,6 @@ struct Sample {
     depth: f32,
     bary: [f32; 2],
     axial2: f32,
-    weight: f32,
 }
 
 impl Band {
@@ -98,12 +111,17 @@ impl Band {
         nfaces: usize,
         spec: &BandSpec,
     ) -> Band {
-        let mut samples = samples(image, mesh, fitted, spec);
+        let found = samples(image, mesh, fitted, spec);
         let st = crate::stage!("band: grouping by face");
-        samples.par_sort_unstable_by_key(|s| (s.face, s.grid));
-        let band = group(samples, nfaces, spec.outside);
+        let band = group(found, nfaces, spec);
         st.end();
         band
+    }
+
+    /// The residual weight of voxel `e` of fitted face `f`.
+    #[inline]
+    pub fn weight(&self, f: usize, e: usize) -> f64 {
+        residual_weight(self.depth[e] as f64, self.boost, self.weight_reach[f] as f64)
     }
 
     /// Number of voxels.
@@ -123,8 +141,33 @@ impl Band {
     }
 }
 
-/// Every band voxel, in no particular order.
-fn samples<T: Voxel>(image: &ArrayView3<T>, mesh: &Mesh, fitted: &[Option<u32>], spec: &BandSpec) -> Vec<Sample> {
+/// The band's voxels in grid order, before grouping by face (the grid
+/// indices only with [`BandSpec::grid`]).
+#[derive(Default)]
+struct Found {
+    face: Vec<u32>,
+    value: Vec<f32>,
+    depth: Vec<f32>,
+    bary: Vec<[f32; 2]>,
+    axial2: Vec<f32>,
+    grid: Vec<[u32; 3]>,
+}
+
+impl Found {
+    fn push(&mut self, s: Sample, grid: bool) {
+        self.face.push(s.face);
+        self.value.push(s.value);
+        self.depth.push(s.depth);
+        self.bary.push(s.bary);
+        self.axial2.push(s.axial2);
+        if grid {
+            self.grid.push(s.grid);
+        }
+    }
+}
+
+/// Every band voxel, in grid order.
+fn samples<T: Voxel>(image: &ArrayView3<T>, mesh: &Mesh, fitted: &[Option<u32>], spec: &BandSpec) -> Found {
     let (d0, d1, d2) = image.dim();
     let reach = match &spec.face_reach {
         Some(r) => r
@@ -154,13 +197,18 @@ fn samples<T: Voxel>(image: &ArrayView3<T>, mesh: &Mesh, fitted: &[Option<u32>],
     let far2 = ((reach + 2.0 * h) * (reach + 2.0 * h)) as f32;
     let step = spec.stride.max(1);
     let st = crate::stage!("band: closest points");
-    let out: Vec<Sample> = (lo[0]..=hi[0])
-        .step_by(step)
-        .collect::<Vec<_>>()
-        .into_par_iter()
-        .flat_map_iter(|i| {
-            let mut out = Vec::new();
-            for j in (lo[1]..=hi[1]).step_by(step) {
+    let rows: Vec<usize> = (lo[1]..=hi[1]).step_by(step).collect();
+    let mut out = Found::default();
+    for i in (lo[0]..=hi[0]).step_by(step) {
+        // the rows of a slice in parallel; each slice is appended in grid
+        // order, so only one slice's samples are ever held twice
+        let slice: Vec<Vec<Sample>> = rows
+            .par_iter()
+            .map(|&j| {
+                let mut out = Vec::new();
+                // along the row, the previous query bounds the next one's
+                // nearest vertices (exactly: by its distance plus the step)
+                let (mut bound, mut prev): (Option<f64>, V3) = (None, [0.0; 3]);
                 for k in (lo[2]..=hi[2]).step_by(step) {
                     if near[[i - lo[0], j - lo[1], k - lo[2]]] > far2
                         || spec.exclude.as_ref().is_some_and(|e| e[[i, j, k]])
@@ -168,7 +216,13 @@ fn samples<T: Voxel>(image: &ArrayView3<T>, mesh: &Mesh, fitted: &[Option<u32>],
                         continue;
                     }
                     let q = spec.geom.to_physical([i as f64, j as f64, k as f64]);
-                    let Some(c) = points.closest(q, reach + 2.0 * h) else {
+                    let (found, far) = points.closest_bounded(
+                        q,
+                        reach + 2.0 * h,
+                        bound.map(|b| b + crate::util::dist2(q, prev).sqrt()),
+                    );
+                    (bound, prev) = (far.is_finite().then_some(far), q);
+                    let Some(c) = found else {
                         continue;
                     };
                     if real.on_rim(&c) {
@@ -194,14 +248,16 @@ fn samples<T: Voxel>(image: &ArrayView3<T>, mesh: &Mesh, fitted: &[Option<u32>],
                         depth: depth as f32,
                         bary: [c.bary[0] as f32, c.bary[1] as f32],
                         axial2: (n[spec.axis] * n[spec.axis]) as f32,
-                        weight: residual_weight(depth, spec.boost, reach_out.max(reach_in)) as f32,
                     });
                 }
-            }
-            out
-        })
-        .collect();
-    crate::done!(st, "{} voxels kept, reach {reach:.3}", out.len());
+                out
+            })
+            .collect();
+        for s in slice.into_iter().flatten() {
+            out.push(s, spec.grid);
+        }
+    }
+    crate::done!(st, "{} voxels kept, reach {reach:.3}", out.face.len());
     out
 }
 
@@ -323,38 +379,71 @@ fn inward_normal(q: V3, c: &crate::surface::closest::Closest, depth: f64, mesh: 
     }
 }
 
-/// The band from samples sorted by face.
-fn group(samples: Vec<Sample>, nfaces: usize, outside: f64) -> Band {
-    let n = samples.len();
-    let mut band = Band {
-        offsets: vec![0; nfaces + 1],
-        value: Vec::with_capacity(n),
-        depth: Vec::with_capacity(n),
-        bary: Vec::with_capacity(n),
-        axial2: Vec::with_capacity(n),
-        weight: Vec::with_capacity(n),
-        grid: Vec::with_capacity(n),
-        soft: Vec::new(),
-    };
-    for s in &samples {
-        band.offsets[s.face as usize + 1] += 1;
+/// The band from its voxels in grid order: a stable counting sort by face
+/// (so grid order within a face), each array reordered on its own.
+fn group(found: Found, nfaces: usize, spec: &BandSpec) -> Band {
+    let Found {
+        face,
+        value,
+        depth,
+        bary,
+        axial2,
+        grid,
+    } = found;
+    let n = face.len();
+    assert!(n <= u32::MAX as usize, "more than 2³² band voxels");
+    let mut offsets = vec![0usize; nfaces + 1];
+    for &f in &face {
+        offsets[f as usize + 1] += 1;
     }
     for f in 0..nfaces {
-        band.offsets[f + 1] += band.offsets[f];
+        offsets[f + 1] += offsets[f];
     }
-    for (pos, s) in samples.into_iter().enumerate() {
-        if (s.depth as f64) <= -0.5 * outside {
-            band.soft.push((s.grid, pos as u32));
-        }
-        band.value.push(s.value);
-        band.depth.push(s.depth);
-        band.bary.push(s.bary);
-        band.axial2.push(s.axial2);
-        band.weight.push(s.weight);
-        band.grid.push(s.grid);
+    // where each voxel goes
+    let mut next = offsets[..nfaces].to_vec();
+    let dest: Vec<u32> = face
+        .iter()
+        .map(|&f| {
+            let pos = next[f as usize];
+            next[f as usize] += 1;
+            pos as u32
+        })
+        .collect();
+    drop(face);
+    let weight_reach: Vec<f32> = (0..nfaces)
+        .map(|f| {
+            let [o, i] = spec.face_reach.as_ref().map_or([spec.outside, spec.inside], |r| r[f]);
+            o.max(i) as f32
+        })
+        .collect();
+    let mut band = Band {
+        offsets,
+        value: reorder(value, &dest),
+        depth: reorder(depth, &dest),
+        bary: reorder(bary, &dest),
+        axial2: reorder(axial2, &dest),
+        boost: spec.boost,
+        weight_reach,
+        grid: if spec.grid { reorder(grid, &dest) } else { Vec::new() },
+        soft: Vec::new(),
+    };
+    if spec.grid {
+        band.soft = (0..n)
+            .filter(|&e| (band.depth[e] as f64) <= -0.5 * spec.outside)
+            .map(|e| (band.grid[e], e as u32))
+            .collect();
+        band.soft.sort_unstable_by_key(|s| s.0);
     }
-    band.soft.sort_unstable_by_key(|s| s.0);
     band
+}
+
+/// `out[dest[e]] = src[e]`, freeing `src`.
+fn reorder<T: Copy + Default + Send + Sync>(src: Vec<T>, dest: &[u32]) -> Vec<T> {
+    let mut out = vec![T::default(); src.len()];
+    for (e, &d) in dest.iter().enumerate() {
+        out[d as usize] = src[e];
+    }
+    out
 }
 
 #[cfg(test)]
@@ -416,6 +505,7 @@ mod tests {
             exclude: None,
             stride: 1,
             face_reach: None,
+            grid: true,
         };
         let band = Band::build(&img.view(), &mesh, &fitted, mesh.faces.len(), &spec);
         assert!(band.len() > 1000);

@@ -17,6 +17,7 @@ ndarray.workspace = true
 rayon.workspace = true
 libm.workspace = true
 log.workspace = true
+typenum = "1.18"
 kiddo = { version = "6.3.1", default-features = false, features = ["multi-threaded"] }
 
 [features]
@@ -29,5 +30,10 @@ criterion = "0.8"
 
 [[bench]]
 name = "volumetric"
+harness = false
+required-features = ["bench"]
+
+[[bench]]
+name = "closest"
 harness = false
 required-features = ["bench"]

@@ -60,6 +60,7 @@ impl<'a, T: Voxel> Setup<'a, T> {
     pub fn band(&self) -> BuiltBand {
         let reach = band_reach(&self.image, &self.nodes, self.options, self.v);
         let mut spec = band_spec(self.options, self.v, None);
+        spec.grid = true; // the node-moment benchmarks need the grid
         if self.v.adaptive_band.is_some() {
             spec.face_reach = Some(face_reach(&self.nodes.mesh, &reach));
         }
@@ -156,6 +157,6 @@ impl Parts<'_, '_, '_> {
     /// The per-node moments of the standard errors, for noise with lag-one
     /// correlation `rho` per axis (the band's grid step 1).
     pub fn node_moments(&self, rho: [f64; 3]) -> usize {
-        self.prep.node_moments(&self.x, &Correlation { rho, step: 1 }).w.len()
+        self.prep.node_moments(&self.x, &Correlation { rho, step: 1 }).b.len()
     }
 }

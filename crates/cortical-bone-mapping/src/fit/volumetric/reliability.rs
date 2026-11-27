@@ -49,13 +49,8 @@ pub(super) struct Reliability {
 /// standard errors and data shares cost about a tenth of a fit).
 pub(super) fn residuals_only(prep: &Prepared, x: &[f64], psf: [f64; 2], axis: usize) -> Reliability {
     let n = prep.lay.nodes;
-    let white = Correlation { rho: [0.0; 3], step: 1 };
-    let moments = prep.node_moments(x, &white);
-    let residual = (0..n)
-        .map(|v| (moments.wr2[v] / moments.w[v].max(1e-300)).sqrt())
-        .collect();
     Reliability {
-        residual,
+        residual: node_rms(prep, x),
         info: VolumetricInfo {
             sigma_xy: psf[0],
             sigma_z: psf[1],
@@ -70,6 +65,13 @@ pub(super) fn residuals_only(prep: &Prepared, x: &[f64], psf: [f64; 2], axis: us
             reach: Vec::new(),
         },
     }
+}
+
+/// Each node's RMS residual `√(Σ β w r² / Σ β w)` over the voxels of its
+/// faces at `x`.
+fn node_rms(prep: &Prepared, x: &[f64]) -> Vec<f64> {
+    let (wr2, w) = prep.node_residuals(x);
+    wr2.iter().zip(&w).map(|(a, b)| (a / b.max(1e-300)).sqrt()).collect()
 }
 
 /// Assess the fit `x` of `prep` (PSF `psf` along `axis`).
@@ -99,9 +101,7 @@ pub(super) fn assess(prep: &Prepared, x: &[f64], psf: [f64; 2], axis: usize) -> 
     let lay = &prep.lay;
     let (n, nfc) = (lay.nodes, lay.fields.len());
     let t_field = lay.fields.iter().position(|&c| c == T);
-    let residual: Vec<f64> = (0..n)
-        .map(|v| (moments.wr2[v] / moments.w[v].max(1e-300)).sqrt())
-        .collect();
+    let residual = node_rms(prep, x);
     let std_error_t = (0..n)
         .map(|v| match t_field {
             Some(ti) => {

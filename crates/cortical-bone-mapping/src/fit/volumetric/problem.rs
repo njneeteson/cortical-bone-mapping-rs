@@ -233,7 +233,7 @@ impl<'a> VolumetricProblem<'a> {
             let (d, y, w) = (
                 self.band.depth[e] as f64,
                 self.band.value[e] as f64,
-                self.band.weight[e] as f64 * scale,
+                self.band.weight(f, e) * scale,
             );
             if !derivs {
                 let r = eval(d, &p, self.rho_c) - y;
@@ -551,11 +551,10 @@ impl<'p, 'a> Prepared<'p, 'a> {
 
     /// Per node, from the voxels of its faces at `x`, with `g_i` the
     /// gradient of voxel `i`'s model value in the node's own parameters
-    /// (`β_i ∇f`): the data-only Gauss–Newton block `B = Σ w_i g_i g_iᵀ`,
-    /// the noise covariance of the weighted gradient
+    /// (`β_i ∇f`): the data-only Gauss–Newton block `B = Σ w_i g_i g_iᵀ`
+    /// and the noise covariance of the weighted gradient
     /// `C = Σ_ij ρ_ij (w_i g_i)(w_j g_j)ᵀ` for noise correlated as `noise`
-    /// (unit variance), and `Σ β w r²`, `Σ β w` (the node's share of the
-    /// weighted squared residual).
+    /// (unit variance).
     pub fn node_moments(&self, x: &[f64], noise: &Correlation) -> NodeMoments {
         let (n, nfc) = (self.lay.nodes, self.lay.fields.len());
         let val = self.problem.values(&self.lay, x);
@@ -566,16 +565,37 @@ impl<'p, 'a> Prepared<'p, 'a> {
         let mut out = NodeMoments {
             b: Vec::with_capacity(n * nfc * nfc),
             c: Vec::with_capacity(n * nfc * nfc),
-            wr2: Vec::with_capacity(n),
-            w: Vec::with_capacity(n),
         };
         for m in per_node {
             out.b.extend(m.b);
             out.c.extend(m.c);
-            out.wr2.push(m.wr2);
-            out.w.push(m.w);
         }
         out
+    }
+
+    /// Per node at `x`, `(Σ β w r², Σ β w)` over the voxels of its faces
+    /// (the node's share of the weighted squared residual), for the per-node
+    /// residuals.
+    pub fn node_residuals(&self, x: &[f64]) -> (Vec<f64>, Vec<f64>) {
+        let p = self.problem;
+        let val = p.values(&self.lay, x);
+        (0..self.lay.nodes)
+            .into_par_iter()
+            .map(|v| {
+                let (mut wr2, mut w) = (0.0, 0.0);
+                for &(f, s) in self.incident.of(v) {
+                    let (f, s) = (f as usize, s as usize);
+                    for e in p.band.of(f) {
+                        let (q, _, beta) = p.voxel(&val, f, e);
+                        let r = eval(p.band.depth[e] as f64, &q, p.rho_c) - p.band.value[e] as f64;
+                        let bw = beta[s] * p.band.weight(f, e);
+                        wr2 += bw * r * r;
+                        w += bw;
+                    }
+                }
+                (wr2, w)
+            })
+            .unzip()
     }
 
     /// [`Prepared::node_moments`] of node `v`.
@@ -585,8 +605,6 @@ impl<'p, 'a> Prepared<'p, 'a> {
         let mut m = NodeMoment {
             b: vec![0.0; nfc * nfc],
             c: vec![0.0; nfc * nfc],
-            wr2: 0.0,
-            w: 0.0,
         };
         // the node's voxels: grid index and weighted gradient w g
         let (mut grids, mut wg) = (Vec::new(), Vec::new());
@@ -594,8 +612,8 @@ impl<'p, 'a> Prepared<'p, 'a> {
             let (f, s) = (f as usize, s as usize);
             for e in p.band.of(f) {
                 let (q, _, beta) = p.voxel(val, f, e);
-                let (d, y, w) = (p.band.depth[e] as f64, p.band.value[e] as f64, p.band.weight[e] as f64);
-                let (fv, grad) = eval_grad(d, &q, p.rho_c);
+                let (d, w) = (p.band.depth[e] as f64, p.band.weight(f, e));
+                let (_, grad) = eval_grad(d, &q, p.rho_c);
                 let g: Vec<f64> = self
                     .lay
                     .fields
@@ -607,8 +625,6 @@ impl<'p, 'a> Prepared<'p, 'a> {
                         m.b[i * nfc + j] += w * g[i] * g[j];
                     }
                 }
-                m.wr2 += beta[s] * w * (fv - y).powi(2);
-                m.w += beta[s] * w;
                 grids.push(p.band.grid[e]);
                 wg.extend(g.iter().map(|gi| w * gi));
             }
@@ -662,10 +678,19 @@ impl LeastSquares for Prepared<'_, '_> {
     }
 
     fn cost(&self, x: &[f64]) -> f64 {
+        self.cost_parts(x).total
+    }
+
+    fn cost_parts(&self, x: &[f64]) -> Costs {
         let terms = self.problem.all_faces(&self.lay, x, false);
         let data = det_sum(terms.len(), |f| terms[f].cost);
-        let (s, c, _) = self.problem.penalties(&self.lay, x, None);
-        data + s + c
+        let (smoothing, curvature, _) = self.problem.penalties(&self.lay, x, None);
+        Costs {
+            total: data + smoothing + curvature,
+            data,
+            smoothing,
+            curvature,
+        }
     }
 
     fn linearise(&self, x: &[f64]) -> (Costs, Vec<f64>, Lin) {
@@ -704,6 +729,36 @@ impl LeastSquares for Prepared<'_, '_> {
             .map(|v| val.node(M, v) - 0.5 * val.node(T, v))
             .collect()
     }
+
+    /// A node's weight is that of its faces' voxels, each shared by its
+    /// barycentric coordinate (`Σ β_v w / V`, the cost's normalisation).
+    fn data_weights(&self) -> (Vec<f64>, f64) {
+        let p = self.problem;
+        let scale = 1.0 / p.band.len().max(1) as f64;
+        let per_face: Vec<[f64; 3]> = (0..p.faces.len())
+            .into_par_iter()
+            .map(|f| {
+                let mut s = [0.0; 3];
+                for e in p.band.of(f) {
+                    let b = p.band.bary[e];
+                    let beta = [b[0] as f64, b[1] as f64, 1.0 - b[0] as f64 - b[1] as f64];
+                    let w = p.band.weight(f, e) * scale;
+                    for k in 0..3 {
+                        s[k] += beta[k] * w;
+                    }
+                }
+                s
+            })
+            .collect();
+        let mut node = vec![0.0; self.lay.nodes];
+        for (f, s) in per_face.iter().enumerate() {
+            for (k, &v) in p.faces[f].iter().enumerate() {
+                node[v as usize] += s[k];
+            }
+        }
+        let total = det_sum(per_face.len(), |f| per_face[f].iter().sum());
+        (node, total)
+    }
 }
 
 /// Per-node data moments ([`Prepared::node_moments`]).
@@ -711,17 +766,12 @@ pub(crate) struct NodeMoments {
     /// `B` and `C` over the node's own parameters (`nfc × nfc` per node).
     pub b: Vec<f64>,
     pub c: Vec<f64>,
-    /// `Σ β w r²` and `Σ β w`.
-    pub wr2: Vec<f64>,
-    pub w: Vec<f64>,
 }
 
 /// One node's [`NodeMoments`].
 struct NodeMoment {
     b: Vec<f64>,
     c: Vec<f64>,
-    wr2: f64,
-    w: f64,
 }
 
 /// Separable exponential noise correlation: `ρ_ij = Π_a ρ_a^{|Δ_a|/step}`

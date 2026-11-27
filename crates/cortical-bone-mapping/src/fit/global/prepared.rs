@@ -113,6 +113,10 @@ impl LeastSquares for Prepared<'_, '_> {
         let params = self.problem.node_params(&self.state(x));
         params.iter().map(|p| p[M] - 0.5 * p[T]).collect()
     }
+
+    fn data_weights(&self) -> (Vec<f64>, f64) {
+        self.problem.data_weights(&self.lay)
+    }
 }
 
 /// Panics unless the state has one value per field channel and dof.

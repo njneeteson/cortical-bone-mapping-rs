@@ -144,7 +144,7 @@ What each stage produces, and roughly what it costs:
 |---|---|---|
 | surface nets | `Mesh` | one vertex per grid cell the boundary crosses (about one per boundary voxel); two triangles per vertex |
 | profiles (1D) | `Profiles` | `n × M` `f32`, `M = (outside + inside) / resolution + 1` |
-| band (volumetric) | `Band` | 24 bytes per voxel within `[−outside, inside]` of the surface |
+| band (volumetric) | `Band` | 20 bytes per voxel within `[−outside, inside]` of the surface (32 with the reliability outputs, which need each voxel's grid index); its build holds 36 more per voxel of the slices not yet placed |
 | smoothing operator `ω` | `SmoothingOperator` | 8 bytes per neighbour per node (`reg_neighbours`) |
 | solver state | variables, gradient, blocks | tens of doubles per node |
 | result | `CbmResult` | 5 parameters, residual, point and normal per node; the surface |
@@ -165,7 +165,7 @@ flowchart TB
     acc{"ρ > 10⁻⁴?"}
     damp["μ ← μν, ν ← 2ν"]
     accept["accept; relax μ; linearise"]
-    stop{"ftol, edge_tol,<br/>stall, xtol?"}
+    stop{"step below xtol near a stationary point,<br/>edge_tol, or stall?"}
     budget{"iterations or<br/>CG budget spent?"}
     done(["converged"])
     unconv(["stopped unconverged"])

@@ -66,7 +66,7 @@ def test_local_fit_matches_scipy_on_noisy_profiles():
     profiles = np.stack([model(x, p) for p in truths]) + rng.normal(0, 40, (n, len(x)))
     init = np.array([0.0, 1.0, 0.1, 0.0, 0.0])
     ours = cbm.fit_profiles(profiles, x, init=init, rho_c=RHO_C, residual_boost=5.0,
-                            lower=LOWER, upper=UPPER, ftol=1e-12, gtol=1e-12, max_iterations=500)
+                            lower=LOWER, upper=UPPER, ftol=1e-12, gtol=1e-12, xtol=1e-12, max_iterations=500)
     worse = 0
     for i in range(n):
         ref_p, ref_c = scipy_fit(profiles[i].astype(np.float32).astype(float), x, w, init)

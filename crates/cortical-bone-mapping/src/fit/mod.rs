@@ -44,9 +44,10 @@ use ndarray::ArrayView3;
 
 use crate::error::Error;
 use crate::model::{eval, residual_weights, Params, NPARAM, RHO_B, RHO_S, SIGMA};
-use crate::options::{Method, Options, RhoCMode, SigmaMode};
+use crate::options::{Method, Options, SigmaMode};
 use crate::result::{CbmResult, FitInfo};
 use crate::surface::mesh::Mesh;
+use crate::units::{Intensity, IntensityContrast};
 use crate::util::V3;
 use crate::volume::{Geometry, Voxel};
 use local::FitSettings;
@@ -121,6 +122,18 @@ pub(crate) struct Start<'a> {
     pub held: Option<&'a [bool]>,
 }
 
+/// The contrast of the cortex against soft tissue, `ρc − ρs` (`ρs` from the
+/// global model), which weights the penalties: unlike `ρc` alone it does not
+/// depend on where the image's units put their zero. Its magnitude, should
+/// the global soft tissue be denser than `ρc`.
+pub(crate) fn cortical_contrast(rho_c: f64, rho_s: f64) -> IntensityContrast {
+    let contrast = (Intensity::new(rho_c) - Intensity::new(rho_s)).abs();
+    if !(contrast.value() > 0.0) {
+        log::warn!("the cortex has no contrast against soft tissue (rho_c {rho_c}, rho_s {rho_s}): no regularisation");
+    }
+    contrast
+}
+
 /// Roles of `[m, t, σ, ρs, ρb]` in the global methods: a single global value
 /// or a field ([`ModelOptions::global`](crate::options::ModelOptions::global)).
 pub(crate) fn base_roles(o: &Options) -> [global::Role; NPARAM] {
@@ -148,36 +161,15 @@ pub(crate) fn local_settings(o: &Options, free_sigma: bool) -> FitSettings {
 pub(crate) fn global_settings(o: &Options) -> global::Settings {
     global::Settings {
         max_iterations: o.solver.max_iterations,
-        ftol: o.solver.ftol,
         gtol: o.solver.gtol,
         xtol: o.solver.xtol,
         cg_max_iterations: o.solver.cg_max_iterations,
         cg_tolerance: o.solver.cg_tolerance,
+        cg_forcing: o.solver.cg_forcing,
         cg_max_total: o.solver.cg_max_total,
         progress_every: o.solver.progress_every,
         edge_tol: 0.0,
     }
-}
-
-/// The estimated cortical density ([`RhoCMode::Estimate`]) from the profiles
-/// of the nodes `keep`, for the volumetric model: the 1D estimate looks for
-/// cortex thick enough to show its density along every profile, where the
-/// volumetric fit's own voxels were dominated by thin cortex on clinical CT
-/// and its estimates were low.
-fn profile_rho_c<T: Voxel>(
-    image: &ArrayView3<T>,
-    surface: &Mesh,
-    keep: &[bool],
-    o: &Options,
-    exclude: Option<ArrayView3<bool>>,
-) -> Result<f64, Error> {
-    let s = crate::stage!("cortical density from profiles (volumetric model)");
-    let (sub, _, normals) = select_nodes(surface, keep, o)?;
-    let (mut profiles, x) = sample_profiles(image, surface, &sub.vertices, &normals, exclude, o);
-    let weights = residual_weights(&x, o.model.residual_boost);
-    let rho_c = density::cortical_density(&mut profiles, &x, &weights, None, o)?.0;
-    crate::done!(s, "rho_c {rho_c:.1} from {} profiles", sub.vertices.len());
-    Ok(rho_c)
 }
 
 /// Fit the model on the nodes `keep` of an (already smoothed) `surface`.
@@ -203,11 +195,24 @@ pub fn fit_surface_constrained<T: Voxel>(
     constraints: &FitConstraints,
 ) -> Result<CbmResult, Error> {
     if let Method::Volumetric(v) = &options.method {
+        // from the nodes' 1D profiles: the estimated cortical density (the 1D
+        // estimate looks for cortex thick enough to show its density along
+        // every profile, where the volumetric fit's own voxels were dominated
+        // by thin cortex on clinical CT and its estimates were low) and,
+        // optionally, the start (`volumetric::start`)
+        let given = constraints.rho_c;
+        let ps =
+            volumetric::start::profile_start(image, &surface, keep, options, v, constraints, warm_start.is_some())?;
         let mut c = *constraints;
-        if c.rho_c.is_none() && options.model.rho_c_mode == RhoCMode::Estimate {
-            c.rho_c = Some(profile_rho_c(image, &surface, keep, options, constraints.exclude)?);
+        c.rho_c = given.or(ps.rho_c);
+        if c.psf.is_none() && c.psf_start.is_none() {
+            c.psf_start = ps.psf;
         }
-        return volumetric::fit_surface(image, surface, keep, options, v, warm_start, &c);
+        if c.densities.is_none() && c.density_start.is_none() {
+            c.density_start = ps.densities;
+        }
+        let warm = ps.warm.as_deref().or(warm_start);
+        return volumetric::fit_surface(image, surface, keep, options, v, warm, &c);
     }
     let o = options;
     let mut timings = Vec::new();

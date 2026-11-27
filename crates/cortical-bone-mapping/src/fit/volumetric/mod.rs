@@ -46,6 +46,7 @@ pub mod bench;
 pub(crate) mod problem;
 mod reach;
 mod reliability;
+pub(crate) mod start;
 #[cfg(test)]
 mod tests;
 
@@ -57,13 +58,14 @@ use self::reach::{node_reach, uniform_reach, Reach, ReachSpec};
 use super::global::{minimise, Role};
 use super::profiles::{sampling_normals, NormalConstraint};
 use super::regularized::curvature_operator;
-use super::{global_settings, held_subset, FitConstraints, Nodes};
+use super::{cortical_contrast, global_settings, held_subset, FitConstraints, Nodes};
 use crate::error::Error;
 use crate::model::{Params, M as PM, RHO_B as PRB, RHO_S as PRS, SIGMA as PS, T as PT};
 use crate::operators::{CurvatureOperator, Neighbours, SmoothingOperator};
 use crate::options::{AxialBlur, Options, VolumetricOptions};
 use crate::result::{CbmResult, FitInfo, VolumetricInfo};
 use crate::surface::mesh::Mesh;
+use crate::units::{Length, Quantity, N2, P2};
 use crate::util::{dot, scale, V3};
 use crate::volume::{Geometry, Voxel};
 
@@ -86,6 +88,7 @@ pub(crate) fn fit_surface<T: Voxel>(
     let nodes = FitNodes::new(&surface, keep, options.sampling.normal_constraint, &cut)?;
     let reach = band_reach(image, &nodes, options, v);
     let mut spec = band_spec(options, v, c.exclude);
+    spec.grid = reliability_wanted(options, c);
     if v.adaptive_band.is_some() {
         spec.face_reach = Some(face_reach(&nodes.mesh, &reach));
     }
@@ -289,7 +292,14 @@ fn band_spec<'a>(o: &'a Options, v: &VolumetricOptions, exclude: Option<ArrayVie
         exclude,
         stride: v.voxel_stride,
         face_reach: None,
+        grid: false,
     }
+}
+
+/// Whether the reliability outputs are wanted: by the options, and not in
+/// refinement's intermediate fits.
+fn reliability_wanted(o: &Options, c: &FitConstraints) -> bool {
+    o.reliability && !c.skip_reliability && c.edge_tol == 0.0
 }
 
 /// What the stages of one fit share.
@@ -411,11 +421,15 @@ impl<'a, 'c> Fit<'a, 'c> {
     ) -> VolumetricProblem<'p> {
         let (roles, tied) = self.roles(fields);
         // the regularised method's weights: λ/N on the densities (relative to
-        // ρc), λ ρc² / (N t0²) on m and t (relative to the global thickness)
+        // the contrast), λ (ρc − ρs)² / (N t0²) on m and t (relative to the
+        // global thickness), so that the smoothing costs have the units of
+        // the data cost (squared contrast)
         let nn = self.nodes.ids.len() as f64;
         let kappa = self.v.lambda / nn;
-        let t0 = scalars[T].max(1e-6);
-        let kappa_edges = self.v.edge_lambda * rho_c * rho_c / (nn * t0 * t0);
+        let t0 = Length::new(scalars[T].max(1e-6));
+        let contrast = cortical_contrast(rho_c, scalars[RHO_S]);
+        let kappa_edges: Quantity<N2, P2> = contrast * contrast * self.v.edge_lambda / (t0 * t0 * nn);
+        let kappa_edges = kappa_edges.value();
         VolumetricProblem {
             band: self.band,
             faces: &self.nodes.mesh.faces,
@@ -498,10 +512,10 @@ impl<'a, 'c> Fit<'a, 'c> {
             mesh: &self.nodes.mesh,
             normals: &self.nodes.normals,
         };
-        self.v
-            .curvature
-            .as_ref()
-            .map(|cv| curvature_operator(cv, &nodes, &self.neighbours, rho_c, global[T].max(1e-6)))
+        self.v.curvature.as_ref().map(|cv| {
+            let contrast = cortical_contrast(rho_c, global[RHO_S]);
+            curvature_operator(cv, &nodes, &self.neighbours, contrast, global[T].max(1e-6))
+        })
     }
 
     /// Stages 3 and 5: the field fit from `starts`, then the outputs at its
@@ -551,10 +565,8 @@ impl<'a, 'c> Fit<'a, 'c> {
                 ]
             })
             .collect();
-        // only the residuals unless the reliability outputs are wanted: not
-        // by the options, nor in refinement's intermediate fits
-        let wanted = self.o.reliability && !self.c.skip_reliability && self.c.edge_tol == 0.0;
-        let rel = if wanted {
+        // only the residuals unless the reliability outputs are wanted
+        let rel = if reliability_wanted(self.o, &self.c) {
             reliability::assess(prep, x, global_psf(&scalars), axis)
         } else {
             log::debug!("reliability outputs not computed (not wanted, or an intermediate fit): residuals only");

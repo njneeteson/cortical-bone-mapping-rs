@@ -96,10 +96,17 @@ class Options:
     **Solver**
 
     max_iterations, ftol, gtol, xtol
-        Levenberg-Marquardt stopping criteria (per node for the local method,
-        per problem for the global methods).
-    cg_max_iterations, cg_tolerance
-        Conjugate-gradient inner solves of the global methods.
+        Levenberg-Marquardt stopping criteria, all dimensionless and
+        independent of the number of nodes and of the units of lengths and
+        image values: ``gtol`` the largest cosine between a variable's
+        Jacobian column and its residuals; ``xtol`` the smallest step, as the
+        largest change it makes in the predictions in units of the noise (the
+        RMS residual); ``ftol`` the relative cost decrease that ends a local
+        (per-profile) fit.
+    cg_max_iterations, cg_tolerance, cg_forcing
+        Conjugate-gradient inner solves of the global methods: each stops at
+        the relative residual ``min(cg_forcing, sqrt(g))`` (``g`` the scaled
+        gradient), but not below ``cg_tolerance``.
     cg_max_total
         CG iterations allowed over one global solve; a fit that exhausts it is
         flagged (``info["budget_exhausted"]``) and stops refinement.
@@ -202,6 +209,11 @@ class Options:
         edge (outward through bright bone into soft tissue, or inward through
         soft tissue to bone), up to this multiple of ``outside`` / ``inside``;
         ``None`` = the sampling range everywhere.
+    vol_init_from_local
+        Start every node from its own 1D (local) fit, and the PSF from those
+        fits' blur on thick-cortex nodes, instead of from one model fitted to
+        all band voxels (which can collapse the cortex where it varies a lot
+        over the bone and the band reaches deep into trabecular bone).
 
     **Neighbourhoods**
 
@@ -262,9 +274,10 @@ class Options:
     max_iterations: int = 100
     ftol: float = 1e-8
     gtol: float = 1e-8
-    xtol: float = 1e-10
+    xtol: float = 1e-3
     cg_max_iterations: int = 200
     cg_tolerance: float = 1e-3
+    cg_forcing: float = 0.1
     cg_max_total: int = 2000
     progress_every: int = 1
     # method
@@ -298,6 +311,7 @@ class Options:
     vol_edge_lambda: float = 1.0
     vol_global_soft_tissue: bool = False
     vol_adaptive_band: Optional[float] = None
+    vol_init_from_local: bool = False
     vol_curvature: Optional[Literal["absolute", "variation", "change"]] = "change"
     vol_curvature_weight: float = 0.3
     vol_voxel_stride: int = 1

@@ -136,6 +136,7 @@ pub mod refine;
 pub mod result;
 pub mod segmentation;
 pub mod surface;
+pub mod units;
 pub mod util;
 pub mod volume;
 

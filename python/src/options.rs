@@ -122,6 +122,7 @@ fn parse_solver(d: &Bound<'_, PyDict>) -> PyResult<cbm::SolverOptions> {
         xtol: req(d, "xtol")?,
         cg_max_iterations: req(d, "cg_max_iterations")?,
         cg_tolerance: req(d, "cg_tolerance")?,
+        cg_forcing: req(d, "cg_forcing")?,
         cg_max_total: req(d, "cg_max_total")?,
         progress_every: req(d, "progress_every")?,
     })
@@ -168,6 +169,7 @@ fn parse_volumetric(d: &Bound<'_, PyDict>) -> PyResult<cbm::VolumetricOptions> {
         edge_lambda: req(d, "vol_edge_lambda")?,
         global_soft_tissue: req(d, "vol_global_soft_tissue")?,
         adaptive_band: opt(d, "vol_adaptive_band")?,
+        init_from_local: req(d, "vol_init_from_local")?,
         curvature: parse_curvature(d, "vol_curvature", "vol_curvature_weight")?,
         voxel_stride: req(d, "vol_voxel_stride")?,
     })

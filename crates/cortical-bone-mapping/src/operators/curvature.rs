@@ -126,6 +126,14 @@ pub enum CurvatureMeasure {
     Total,
 }
 
+/// The smallest second moment of a Gaussian Laplacian's row, relative to that
+/// of a flat, isotropic neighbourhood at its scale (`2σ²`), for the row to
+/// measure curvature: below it the neighbourhood (e.g. a few nearly
+/// coincident nodes of a small fragment) samples less than half the scale,
+/// and the row's entries (`∝ 1/M2`) would measure curvature at a far finer
+/// scale, with gradients no representable step can follow.
+const MIN_SECOND_MOMENT: f64 = 0.25;
+
 /// A discrete surface Laplace–Beltrami operator in the form
 /// `(L x)_i = diag_i x_i + Σ_k L_ik x_k` (off-diagonal entries row-wise),
 /// such that `½ L S ≈ H n` (mean-curvature normal) for surface positions.
@@ -193,10 +201,22 @@ impl SurfaceLaplacian {
             .collect();
         let mut rows = SparseRows::from_rows(rows, n);
         let diag = normalise_by_second_moment(&mut rows, points);
+        // a row's second moment relative to that of a flat, isotropic
+        // neighbourhood at σ (2σ²): about 1 for a sound row, ½ at an open edge
+        let rel: Vec<f64> = diag.iter().map(|&d| 2.0 / (-d * sigma * sigma)).collect();
+        let interior: Vec<bool> = rel.iter().map(|&r| r >= MIN_SECOND_MOMENT).collect();
+        let dropped = interior.iter().filter(|&&a| !a).count();
+        if dropped > 0 {
+            let lo = rel.iter().copied().fold(f64::INFINITY, f64::min);
+            log::debug!(
+                "gaussian Laplacian at σ {sigma:.4}: {dropped} of {n} rows sample less than the scale (second \
+                 moment below {MIN_SECOND_MOMENT} × 2σ², smallest {lo:.3e}); they have no curvature residual"
+            );
+        }
         SurfaceLaplacian {
             rows,
             diag,
-            interior: vec![true; points.len()],
+            interior,
             weighted: true,
         }
     }
