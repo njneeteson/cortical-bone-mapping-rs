@@ -114,7 +114,7 @@ fn synthesise(s: &mut Setup, roles: [Role; NV], tied: bool, x: &[f64]) {
     let p = problem(s, roles, tied);
     let prep = Prepared::new(&p);
     let values = prep.model_values(x);
-    s.band.value = values.iter().map(|&v| v as f32).collect();
+    s.band.set_values(&values);
 }
 
 const ROLE_SETS: [([Role; NV], bool); 4] = [

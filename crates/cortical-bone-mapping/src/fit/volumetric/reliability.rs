@@ -153,7 +153,7 @@ fn noise(prep: &Prepared, x: &[f64]) -> (f64, [f64; 3], u32) {
     let r: Vec<f64> = positions
         .iter()
         .zip(&model)
-        .map(|(&e, &m)| band.value[e as usize] as f64 - m)
+        .map(|(&e, &m)| band.value(e as usize) - m)
         .collect();
     if r.is_empty() {
         return (f64::NAN, [0.0; 3], 1);

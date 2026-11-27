@@ -44,6 +44,7 @@ pub(crate) mod band;
 #[cfg(feature = "bench")]
 pub mod bench;
 pub(crate) mod problem;
+mod quantise;
 mod reach;
 mod reliability;
 pub(crate) mod start;

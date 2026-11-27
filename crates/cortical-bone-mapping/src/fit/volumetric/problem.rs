@@ -194,15 +194,14 @@ impl<'a> VolumetricProblem<'a> {
     /// barycentric weights.
     #[inline]
     fn voxel(&self, val: &Values, f: usize, e: usize) -> (Params, [f64; 2], [f64; 3]) {
-        let b = self.band.bary[e];
-        let beta = [b[0] as f64, b[1] as f64, 1.0 - b[0] as f64 - b[1] as f64];
+        let beta = self.band.bary(e);
         let tri = self.faces[f];
         let mut p = [0.0; 5];
         for &(c, pc) in &NODE_PARAMS {
             p[pc] = (0..3).map(|s| beta[s] * val.node(c, tri[s] as usize)).sum();
         }
         let (sxy, sz) = (val.scalar(SXY), val.scalar(SZ));
-        let a2 = self.band.axial2[e] as f64;
+        let a2 = self.band.axial2(e);
         let sn = (sxy * sxy * (1.0 - a2) + sz * sz * a2).sqrt();
         p[PS] = sn;
         let dsn = if self.tied {
@@ -230,11 +229,7 @@ impl<'a> VolumetricProblem<'a> {
         let mut j = vec![0.0; nz];
         for e in self.band.of(f) {
             let (p, dsn, beta) = self.voxel(val, f, e);
-            let (d, y, w) = (
-                self.band.depth[e] as f64,
-                self.band.value[e] as f64,
-                self.band.weight(f, e) * scale,
-            );
+            let (d, y, w) = (self.band.depth(e), self.band.value(e), self.band.weight(f, e) * scale);
             if !derivs {
                 let r = eval(d, &p, self.rho_c) - y;
                 out.cost += 0.5 * w * r * r;
@@ -522,7 +517,7 @@ impl<'p, 'a> Prepared<'p, 'a> {
             .map(|f| {
                 p.band
                     .of(f)
-                    .map(|e| eval(p.band.depth[e] as f64, &p.voxel(&val, f, e).0, p.rho_c))
+                    .map(|e| eval(p.band.depth(e), &p.voxel(&val, f, e).0, p.rho_c))
                     .collect()
             })
             .collect();
@@ -544,7 +539,7 @@ impl<'p, 'a> Prepared<'p, 'a> {
             .map(|&e| {
                 let e = e as usize;
                 let f = p.band.offsets.partition_point(|&o| o <= e) - 1;
-                eval(p.band.depth[e] as f64, &p.voxel(&val, f, e).0, p.rho_c)
+                eval(p.band.depth(e), &p.voxel(&val, f, e).0, p.rho_c)
             })
             .collect()
     }
@@ -587,7 +582,7 @@ impl<'p, 'a> Prepared<'p, 'a> {
                     let (f, s) = (f as usize, s as usize);
                     for e in p.band.of(f) {
                         let (q, _, beta) = p.voxel(&val, f, e);
-                        let r = eval(p.band.depth[e] as f64, &q, p.rho_c) - p.band.value[e] as f64;
+                        let r = eval(p.band.depth(e), &q, p.rho_c) - p.band.value(e);
                         let bw = beta[s] * p.band.weight(f, e);
                         wr2 += bw * r * r;
                         w += bw;
@@ -612,7 +607,7 @@ impl<'p, 'a> Prepared<'p, 'a> {
             let (f, s) = (f as usize, s as usize);
             for e in p.band.of(f) {
                 let (q, _, beta) = p.voxel(val, f, e);
-                let (d, w) = (p.band.depth[e] as f64, p.band.weight(f, e));
+                let (d, w) = (p.band.depth(e), p.band.weight(f, e));
                 let (_, grad) = eval_grad(d, &q, p.rho_c);
                 let g: Vec<f64> = self
                     .lay
@@ -740,8 +735,7 @@ impl LeastSquares for Prepared<'_, '_> {
             .map(|f| {
                 let mut s = [0.0; 3];
                 for e in p.band.of(f) {
-                    let b = p.band.bary[e];
-                    let beta = [b[0] as f64, b[1] as f64, 1.0 - b[0] as f64 - b[1] as f64];
+                    let beta = p.band.bary(e);
                     let w = p.band.weight(f, e) * scale;
                     for k in 0..3 {
                         s[k] += beta[k] * w;

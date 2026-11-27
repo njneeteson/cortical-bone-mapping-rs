@@ -1,8 +1,9 @@
 # Examples
 
 Every method refining an automatic segmentation, on phantoms with exact
-ground truth and on a clinical CT of both knees. All methods start from the
-same segmentation and use the same options apart from the method.
+ground truth and on a clinical CT of both knees, and the regularised method
+on an HR-pQCT proximal tibia against its provided masks. All methods start
+from the same segmentation and use the same options apart from the method.
 
 | method | in the figures |
 |---|---|
@@ -223,6 +224,63 @@ Median fitted cortical thickness, mm (5th–95th percentile):
   follows the brighter condyle about 3 mm inside it; a quick correction by
   hand fixes it (below).
 
+## HR-pQCT proximal tibia
+
+An XtremeCT II scan of a right proximal tibia (60.7 µm voxels; TRIKNEE,
+participant 22, scan 1), used with the participant's permission; the image
+is not in the repository. It comes with cortical and trabecular masks and
+the periarticular analysis regions below the medial and lateral contact
+surfaces. We compare in those regions, each column of them extended up
+through the articular surface to 1 mm above the bone, where the reference
+cortex is the subchondral plate.
+
+| step | call | here |
+|---|---|---|
+| slab | the regions' slices, 6 mm below, 6 mm above the bone | 468 × 1267 × 1573 voxels |
+| bones | `label_bones(image, 320)` (mg HA/cm³), the tibia by overlap with the provided mask | |
+| start | `bone_hulls(closing_radius=4.0)` | bone Dice 0.987 in the region |
+| refinement | `refine_bones` on the tibia, the other bones excluded, at most 15 moves | 1D regularised |
+
+Settings: the knee preset at 60.7 µm with profiles 5 mm out and 5 mm in,
+`ρc` estimated (754 mg HA/cm³), unconstrained normals, the surface on every
+4th voxel (`grid_step=4`, about 180 000 nodes), `reg_sigma` 25 voxels
+(1.52 mm) with neighbours reaching 3 σ.
+
+![Sections where the masks disagree most](../examples/images/hrpqct_periarticular_regularized.png)
+
+*The six sections (three coronal, three sagittal, 10 mm windows) where the
+refined labels disagree most with the provided ones. Left: the provided
+masks; middle: the refined masks (1D regularised); right: where the labels
+(cortex green, trabecular blue, background) differ, in the region.*
+
+![The refined surface with the sections](../examples/images/hrpqct_periarticular_context.png)
+
+*The refined periosteal surface over the region, translucent, with the six
+sections in place.*
+
+| | 1D regularised |
+|---|---:|
+| moves | 15, **not converged** |
+| run time | 15 min |
+| bone Dice (start 0.987) | 0.981 |
+| trabecular Dice | 0.898 |
+| cortex Dice | 0.360 |
+| Ct.Th in the region (provided: 0.80 mm) | 2.21 mm |
+
+- The periosteal surface is placed well (bone Dice 0.98), but the cortex is
+  not: the fitted cortex reaches two to three times deeper than the provided
+  subchondral plate. Under the plate lies dense subchondral trabecular bone,
+  and at this resolution the three-level model, with one trabecular density
+  per node, takes it as cortex.
+- The refined surface sits slightly below the provided one along the
+  articular surface (the thin red line above the cortex), and folds into
+  the bone where the plateau turns at its margin (section 5).
+- The local method (no regularisation) diverges here: every move is larger
+  than the last, the untrusted fits grow from 510 to 24 500 in 12 moves and
+  the surface roughens from 188 000 to over a million nodes. The volumetric
+  method is not shown yet: its refinement on HR-pQCT still needs work (each
+  move rebuilds a band of about 345 million voxels on this slab).
+
 ## Correcting a segmentation
 
 Where the automatic segmentation misses bone, the mask can be corrected
@@ -287,6 +345,7 @@ python phantoms.py                     # examples/results/phantoms.json, example
 python knee.py /path/to/DICOM          # examples/results/knee.json, examples/images/knee_* (the CT is not public)
 python knee.py /path/to/DICOM --redraw --export OUT_DIR          # the volumetric labels as NIfTI, to correct
 python knee_correction.py /path/to/DICOM AUTOMATIC.nii.gz CORRECTED.nii.gz   # examples/images/knee_correction_*
+python hrpqct_periarticular.py /path/to/TRIKNEE TRIKNEE_22_TR_1      # examples/results/hrpqct_periarticular.json, examples/images/hrpqct_periarticular_* (not public)
 ```
 
 Each results file records the hash of the code and inputs that produced it;

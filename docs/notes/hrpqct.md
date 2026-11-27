@@ -9,7 +9,31 @@ right proximal tibia of participant 22, scans TR_1–3, used with the
 participant's permission). Newest first. Each entry says what was found,
 what was decided, and why.
 
-## Where things stand (end of 2026-11-26)
+## Where things stand (2026-11-27, before merging)
+
+- **Example for users:** `examples/hrpqct_periarticular.py`, the
+  "HR-pQCT proximal tibia" section of the examples page. 1D regularised
+  refinement from our own start, compared with the provided masks in the
+  periarticular regions:
+  - 15 moves (not converged), 15 min;
+  - bone Dice 0.981, trabecular 0.898, cortex 0.360;
+  - Ct.Th 2.21 mm against 0.80 mm: the dense subchondral trabecular bone is
+    taken as cortex.
+  The local method diverges there; the volumetric method is left out until
+  its refinement is tuned.
+- **Done since the entry below:**
+  - the compact band (9 bytes per voxel), validated;
+  - the band built without a second copy;
+  - the narrow-band level set (initialisation 404 → 57 s, ~61 s per move
+    against ~110 s);
+  - the active-contour idea recorded in `extension_ideas/`.
+- **Next** (also in the user's to-do list): refinement's surface motion
+  (re-binarising with fold cleanup, a smoothing option between fits,
+  step sizes from control theory, convergence on "the masks stop
+  changing"); the regularisation's strength and the subchondral cortex;
+  then the volumetric method on HR-pQCT.
+
+## Where things stood (end of 2026-11-26)
 
 Test case throughout: the tall slab of TR_1 (256 slices, ±128 around the
 mask's mid-height), `grid_step` 4 (139 820 nodes), σ_reg 25 voxels
@@ -108,6 +132,58 @@ records the peak after loading and after the fit).
    benchmarks) whose results and provenance changed.
 
 ## 2026-11-26
+
+### Refinement's level set (2026-11-27)
+
+- **Found.** On the periarticular slab (468 × 1267 × 1573) the level set
+  took 404 s to initialise and about 82 s per move, against 3–14 s per 1D
+  fit: its band was the largest move allowed (half the sampling range plus
+  3 voxels, 2.68 mm) while the moves were 0.01–0.5 mm, and the
+  initialisation searched the closest point for every voxel of the box.
+- **Decided** (exact): the band follows the moves, `max|s|` plus
+  `√3 · grid_step + 1` voxels (the extraction reads `φ` at the corners of
+  the cells the surface crosses); widened with exact distances only on the
+  voxels it newly covers (found by a distance transform of the sign),
+  narrowed by clamping; the level set tracks how far the surface moved since
+  the clamped voxels were refreshed. Test: the same surfaces as a band wide
+  enough for every move, over a sequence of varying moves in and out.
+  Initialisation on the periarticular slab: 404 → 57 s.
+- **Why the level set at all** (the user's question): moving the same
+  vertices tangled the mesh over the knee's intercondylar notch from a hull
+  start (`refinement_experiments.md`, removed in the docs cleanup; git
+  `d40bf70`); it bought validity of the mesh, not accuracy. Next (user):
+  re-binarising the moved mesh (with fold cleanup and winding-number
+  rasterisation) as a cheaper remesh, a smoothing option between fits, and
+  control-theory step sizes; never keeping the same nodes while they move.
+- **Local method on HR-pQCT diverges.** From our start on the periarticular
+  slab, every move was larger than the last (RMS 0.30 → 0.52 mm over 12
+  moves, largest 2.5 mm), the untrusted fits grew from 510 to 24 500 and
+  the re-extracted surface from 188 000 to 1.05 million nodes: unregularised
+  per-node fits on HR-pQCT noise roughen the surface, which then gets
+  rougher. Expected; the example shows the regularised method only.
+
+### Compact band storage (2026-11-27)
+
+- **Done.** The band stores 9 bytes per voxel: the intensity and the depth as
+  16-bit codes (over the image's range in the band's box, and over the
+  band's depth range), the two barycentric coordinates as 16 bits each, the
+  axial normal component² as 8 bits (`fit/volumetric/quantise.rs`); the
+  computation reads them back as f64. The build appends a group of 8
+  slices at a time (rows in parallel) and reorders by face one array at a
+  time.
+- **Validated** on the tall slab against the f32 band (same settings, 100
+  iterations each): thickness per node differs by a median of 0.002 µm, at
+  most 0.05 µm; cortex Dice between the two 0.99999; Ct.Th, correlation and
+  Dice against the reference identical. The band build on the benchmark:
+  5.62 s (5.68 s before the build changes). Run time unchanged (575 against
+  586 s: evaluations are not memory-bound).
+- **Memory** of the diagnostic run: peak 13.6 GB (18.25 GB with the f32
+  band and its double copy), of which 9.4 GB is the script's loading (the
+  full-size AIM, its float crop, the provided masks) before any fit: the
+  example scripts are now the larger part.
+- **Not done:** the per-node data share run was stopped in the standard
+  errors (correlated noise 0.73–0.77 per axis; the process at 18.5 GB): the
+  data share needs a route that does not compute the standard errors.
 
 ### Priority (from the user)
 

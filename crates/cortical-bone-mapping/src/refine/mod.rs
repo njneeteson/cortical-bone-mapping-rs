@@ -534,17 +534,30 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
         let tm = Instant::now();
         let options = self.inp.options;
         let mv = crate::stage!("move");
+        // the level set's band: this move's largest displacement and a margin
+        // of grid steps (`LevelSet::set_band`)
+        let max_spacing = options.geometry.spacing.iter().cloned().fold(0.0, f64::max);
+        let band =
+            m.s.iter().fold(0.0f64, |a, &v| a.max(v.abs())) + band_margin(options.surface.grid_step) * max_spacing;
         if self.inp.refine.level_set && self.level_set.is_none() {
             let tl = Instant::now();
-            let geom = &options.geometry;
-            let max_spacing = geom.spacing.iter().cloned().fold(0.0, f64::max);
-            let band = self.lim.max_move + 3.0 * max_spacing;
             let (d0, d1, d2) = self.inp.image.dim();
             let s = crate::stage!("level set: initialisation");
-            let ls = initial_level_set(&self.mesh, [d0, d1, d2], band, self.inp.exclude.as_ref(), options);
+            let ls = initial_level_set(
+                &self.mesh,
+                [d0, d1, d2],
+                band,
+                self.lim.max_move,
+                self.inp.exclude.as_ref(),
+                options,
+            );
             crate::done!(s, "band {band:.3}");
             self.level_set = Some(ls);
             self.clock.since("level set: initialisation", tl);
+        } else if let Some(ls) = self.level_set.as_mut() {
+            let tb = Instant::now();
+            ls.set_band(&self.mesh, band);
+            self.clock.since("level set: band", tb);
         }
         if let Some(ls) = self.level_set.as_mut() {
             let mut stages = Vec::new();
@@ -798,16 +811,30 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
     }
 }
 
+/// Voxels of margin around the level set's box beyond the largest moves.
+const LEVEL_SET_MARGIN: f64 = 3.0;
+
+/// Voxels of margin in the level set's band beyond a move's largest
+/// displacement: the extraction reads `φ` at the corners of the cells the
+/// surface crosses, within `√3` extraction-grid steps (`grid_step` voxels
+/// each) of it, and one voxel more for the distances' rounding.
+fn band_margin(grid_step: usize) -> f64 {
+    3f64.sqrt() * grid_step as f64 + 1.0
+}
+
 /// The level set of the starting surface, over the image grid within reach
-/// of the profiles and `band` of moves; `exclude` voxels kept outside.
+/// of the profiles and of the largest moves allowed (exact within `band`);
+/// `exclude` voxels kept outside.
 fn initial_level_set(
     mesh: &Mesh,
     dims: [usize; 3],
     band: f64,
+    max_move: f64,
     exclude: Option<&ArrayView3<bool>>,
     options: &Options,
 ) -> LevelSet {
-    let margin = options.sampling.outside + options.sampling.inside + band;
+    let max_spacing = options.geometry.spacing.iter().cloned().fold(0.0, f64::max);
+    let margin = options.sampling.outside + options.sampling.inside + max_move + LEVEL_SET_MARGIN * max_spacing;
     let mut ls = LevelSet::from_mesh(mesh, dims, &options.geometry, margin, band, options.surface.grid_step);
     if let Some(e) = exclude {
         let mut changed = Array3::from_elem(ls.phi.dim(), false);

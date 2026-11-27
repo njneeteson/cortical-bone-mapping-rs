@@ -27,6 +27,7 @@ use ndarray::Array3;
 use rayon::prelude::*;
 
 use super::mesh::Mesh;
+use crate::segmentation::morphology::scaled_sq_distance;
 use crate::util::V3;
 use crate::volume::Geometry;
 
@@ -50,6 +51,37 @@ impl Mesh {
         crossings.par_sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.partial_cmp(&b.1).unwrap()));
         fill_columns(&crossings, shape)
     }
+}
+
+/// Squared physical distance of every voxel to the nearest boundary voxel of
+/// `inside` (a voxel with a 6-neighbour on the other side; with `edges`, also
+/// one on the edge of the box). The surface a mask was rasterised from passes
+/// within a voxel diagonal of its boundary, so a voxel farther than `r + 2h`
+/// from the boundary is farther than `r` from the surface: a cheap test that
+/// saves the closest-point search there.
+pub(crate) fn boundary_distance2(inside: &Array3<bool>, spacing: [f64; 3], edges: bool) -> Array3<f32> {
+    let (n0, n1, n2) = inside.dim();
+    let boundary = Array3::from_shape_fn((n0, n1, n2), |(i, j, k)| {
+        let v = inside[[i, j, k]];
+        let differs = |a: usize, b: usize, c: usize| inside[[a, b, c]] != v;
+        let at_edge = i == 0 || j == 0 || k == 0 || i + 1 == n0 || j + 1 == n1 || k + 1 == n2;
+        if at_edge {
+            return edges
+                || (i > 0 && differs(i - 1, j, k))
+                || (i + 1 < n0 && differs(i + 1, j, k))
+                || (j > 0 && differs(i, j - 1, k))
+                || (j + 1 < n1 && differs(i, j + 1, k))
+                || (k > 0 && differs(i, j, k - 1))
+                || (k + 1 < n2 && differs(i, j, k + 1));
+        }
+        differs(i - 1, j, k)
+            || differs(i + 1, j, k)
+            || differs(i, j - 1, k)
+            || differs(i, j + 1, k)
+            || differs(i, j, k - 1)
+            || differs(i, j, k + 1)
+    });
+    scaled_sq_distance(&boundary, spacing.map(|h| 1.0 / h))
 }
 
 /// The box of image indices (`lo..=hi`, clipped to an image of `dims`)
