@@ -93,7 +93,6 @@ fn field_fit_recovers_per_node_parameters() {
         &mut st,
         &Settings {
             max_iterations: 200,
-            ftol: 1e-12,
             gtol: 1e-10,
             ..Default::default()
         },

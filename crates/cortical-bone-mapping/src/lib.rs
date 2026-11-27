@@ -32,6 +32,9 @@
 //! The Python package (`cortical-bone-mapping-rs`) wraps this crate and has a
 //! user guide.
 //!
+//! Every stage logs through the [`log`] facade (debug level: starts, sizes,
+//! durations, solver iterations); see [`logging`].
+//!
 //! # Example
 //!
 //! A phantom shell with a known cortex, measured on its own mask and then
@@ -67,7 +70,7 @@
 //! let refine = RefineOptions { verbose: false, ..RefineOptions::default() };
 //! let rr = refine_segmentation(image.view(), rough.view(), None::<ndarray::ArrayView3<u8>>, &opts, &refine)?;
 //! assert!(rr.converged);
-//! let cortex = &rr.cortical_mask; // boolean, the image's shape
+//! let cortex = rr.cortical_mask.as_ref().unwrap(); // boolean, the image's shape
 //! # let _ = cortex;
 //! # Ok(())
 //! # }
@@ -123,6 +126,7 @@
 pub mod error;
 pub mod fit;
 pub mod kdtree;
+pub mod logging;
 pub mod model;
 pub mod operators;
 pub mod options;
@@ -132,6 +136,7 @@ pub mod refine;
 pub mod result;
 pub mod segmentation;
 pub mod surface;
+pub mod units;
 pub mod util;
 pub mod volume;
 

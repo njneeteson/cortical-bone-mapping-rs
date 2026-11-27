@@ -27,6 +27,7 @@ use ndarray::Array3;
 use rayon::prelude::*;
 
 use super::mesh::Mesh;
+use crate::segmentation::morphology::scaled_sq_distance;
 use crate::util::V3;
 use crate::volume::Geometry;
 
@@ -50,6 +51,37 @@ impl Mesh {
         crossings.par_sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.partial_cmp(&b.1).unwrap()));
         fill_columns(&crossings, shape)
     }
+}
+
+/// Squared physical distance of every voxel to the nearest boundary voxel of
+/// `inside` (a voxel with a 6-neighbour on the other side; with `edges`, also
+/// one on the edge of the box). The surface a mask was rasterised from passes
+/// within a voxel diagonal of its boundary, so a voxel farther than `r + 2h`
+/// from the boundary is farther than `r` from the surface: a cheap test that
+/// saves the closest-point search there.
+pub(crate) fn boundary_distance2(inside: &Array3<bool>, spacing: [f64; 3], edges: bool) -> Array3<f32> {
+    let (n0, n1, n2) = inside.dim();
+    let boundary = Array3::from_shape_fn((n0, n1, n2), |(i, j, k)| {
+        let v = inside[[i, j, k]];
+        let differs = |a: usize, b: usize, c: usize| inside[[a, b, c]] != v;
+        let at_edge = i == 0 || j == 0 || k == 0 || i + 1 == n0 || j + 1 == n1 || k + 1 == n2;
+        if at_edge {
+            return edges
+                || (i > 0 && differs(i - 1, j, k))
+                || (i + 1 < n0 && differs(i + 1, j, k))
+                || (j > 0 && differs(i, j - 1, k))
+                || (j + 1 < n1 && differs(i, j + 1, k))
+                || (k > 0 && differs(i, j, k - 1))
+                || (k + 1 < n2 && differs(i, j, k + 1));
+        }
+        differs(i - 1, j, k)
+            || differs(i + 1, j, k)
+            || differs(i, j - 1, k)
+            || differs(i, j + 1, k)
+            || differs(i, j, k - 1)
+            || differs(i, j, k + 1)
+    });
+    scaled_sq_distance(&boundary, spacing.map(|h| 1.0 / h))
 }
 
 /// The box of image indices (`lo..=hi`, clipped to an image of `dims`)
@@ -148,5 +180,40 @@ mod tests {
         let want = 4.0 / 3.0 * std::f64::consts::PI * 512.0;
         assert!((count / want - 1.0).abs() < 0.03, "{count} vs {want}");
         assert!(mask[[12, 12, 12]] && !mask[[0, 0, 0]] && !mask[[12, 12, 21]]);
+    }
+
+    /// Voxelising only the mesh's box (with the box's geometry) gives the
+    /// whole-image mask's voxels there, and the rest of the image is empty.
+    #[test]
+    fn voxelizing_the_box_matches_the_whole_image() {
+        let geom = Geometry {
+            spacing: [0.0607, 0.0611, 0.0607],
+            origin: [12.3, -4.56, 7.89],
+        };
+        let dims = [70, 90, 80];
+        for (r, c) in [(1.3, [1.7, 2.3, 2.1]), (0.9, [2.0, 1.1, 3.0])] {
+            let mut m = Mesh::uv_sphere(r, 96, 64);
+            for v in m.vertices.iter_mut() {
+                *v = add(add(*v, c), geom.origin);
+            }
+            let whole = m.voxelize((dims[0], dims[1], dims[2]), &geom);
+            let (lo, hi) = index_box(&m, dims, &geom, 0.0);
+            let shape = (hi[0] - lo[0] + 1, hi[1] - lo[1] + 1, hi[2] - lo[2] + 1);
+            let box_geom = Geometry {
+                spacing: geom.spacing,
+                origin: geom.to_physical(lo.map(|v| v as f64)),
+            };
+            let part = m.voxelize(shape, &box_geom);
+            for ((i, j, k), &w) in whole.indexed_iter() {
+                let inside = (0..3).all(|a| [i, j, k][a] >= lo[a] && [i, j, k][a] <= hi[a]);
+                let p = if inside {
+                    part[[i - lo[0], j - lo[1], k - lo[2]]]
+                } else {
+                    false
+                };
+                assert_eq!(w, p, "voxel {:?}", (i, j, k));
+            }
+            assert!(whole.iter().any(|&b| b));
+        }
     }
 }

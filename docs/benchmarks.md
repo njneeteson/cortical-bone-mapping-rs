@@ -17,7 +17,7 @@ original Python implementation (Bonelab) and by SciPy.
 Time of the whole pipeline (surface, sampling, initial and final fits) and
 peak heap memory above the input image and mask, counted by the allocator.
 
-![Run time and memory against size](images/benchmark_scaling.png)
+![Run time and memory against size](../examples/images/benchmark_scaling.png)
 
 *Run time (left) and peak memory (right) against the number of surface
 nodes, both on log scales, for every method. "64" and "500" are the
@@ -83,7 +83,7 @@ for the fit only.
   `scipy.optimize.least_squares` (local; timed on 1000 nodes and scaled) and
   L-BFGS-B with an analytic gradient run to convergence (regularised).
 
-![Fit time against Bonelab and SciPy](images/benchmark_reference.png)
+![Fit time against Bonelab and SciPy](../examples/images/benchmark_reference.png)
 
 *Fit time of the same 32 736 profiles by Bonelab, SciPy and this package
 (log scale). SciPy has no multigrid implementation here.*
@@ -129,8 +129,8 @@ per bone), from the automatic start:
 ```bash
 pip install ./python[docs]
 git clone https://github.com/Bonelab/Bonelab /path/to/Bonelab && pip install tqdm
-cd docs/scripts
-python benchmarks.py /path/to/Bonelab     # docs/results/benchmarks.json, docs/images/benchmark_*
+cd examples
+python benchmarks.py /path/to/Bonelab     # examples/results/benchmarks.json, examples/images/benchmark_*
 ```
 
 Run on an otherwise idle machine; times vary with the processor.

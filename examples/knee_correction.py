@@ -4,13 +4,13 @@ The volumetric refinement of the clinical knee (``knee.py``) was exported as a
 NIfTI label map (``knee.py DICOM_DIR --redraw --export DIR``), corrected by
 hand in ITK-SNAP, and saved. This script refines the corrected bones again
 from the corrected labels, with the scan's cortical density and PSF held at
-the values the knee run estimated (``docs/results/knee.json``) and every
+the values the knee run estimated (``examples/results/knee.json``) and every
 other bone excluded.
 
-Writes docs/results/knee_correction.json and, per corrected bone, the
-docs/images/knee_correction_* figure and GIF.
+Writes examples/results/knee_correction.json and, per corrected bone, the
+examples/images/knee_correction_* figure and GIF.
 
-    python docs/scripts/knee_correction.py DICOM_DIR AUTOMATIC.nii.gz CORRECTED.nii.gz [--redraw]
+    python examples/knee_correction.py DICOM_DIR AUTOMATIC.nii.gz CORRECTED.nii.gz [--redraw]
 """
 
 import hashlib

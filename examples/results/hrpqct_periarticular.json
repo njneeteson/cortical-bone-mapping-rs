@@ -1,0 +1,65 @@
+{
+  "provenance": {
+    "source_hash": "33ef45cd7ca22197",
+    "commit": "584a332",
+    "uncommitted_changes": true,
+    "version": "0.1.0",
+    "date": "2026-11-27",
+    "machine": "Windows 11, AMD64 Family 26 Model 68 Stepping 0, AuthenticAMD",
+    "inputs": {
+      "voxel": 0.0607,
+      "threshold": 320.0,
+      "closing": 4.0,
+      "settings": {
+        "rho_c": "estimate",
+        "normal_constraint": "none",
+        "progress_every": 0,
+        "grid_step": 4,
+        "inside": 5.0,
+        "reg_sigma": 1.5174999999999998,
+        "reg_cutoff": 3.0,
+        "reliability": false
+      },
+      "methods": {
+        "regularized": {}
+      },
+      "refine": {
+        "refine_iterations": 15
+      },
+      "region_above": 1.0,
+      "scan": "TRIKNEE_22_TR_1"
+    }
+  },
+  "spacing_mm": [
+    0.060697999999999995,
+    0.0607,
+    0.0607
+  ],
+  "slab_shape": [
+    468,
+    1267,
+    1573
+  ],
+  "slab_start": [
+    30,
+    0,
+    217
+  ],
+  "region_voxels": 64742943,
+  "start_s": 116.5,
+  "start_dice_bone": 0.9872484601939925,
+  "ref_ct_th_mm": 0.7989867925643921,
+  "methods": {
+    "regularized": {
+      "time_s": 909.6,
+      "moves": 15,
+      "converged": false,
+      "nodes": 182354,
+      "rho_c": 754.1345825195312,
+      "dice_bone": 0.98108045220761,
+      "dice_cortex": 0.3600874526432307,
+      "dice_trabecular": 0.8979117329961556,
+      "ct_th_mm": 2.2057764530181885
+    }
+  }
+}

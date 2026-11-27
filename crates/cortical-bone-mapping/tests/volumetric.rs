@@ -98,9 +98,57 @@ fn refinement_with_the_volumetric_model_snaps_to_the_periosteum() {
     let o = options(&ph, volumetric_tied());
     let r = refine_segmentation(img.view(), bad.view(), NO_SUB, &o, &RefineOptions::default()).unwrap();
     assert!(r.converged);
-    let (before, after) = (dice(&bad.mapv(|v| v != 0), &truth), dice(&r.periosteal_mask, &truth));
+    let (before, after) = (
+        dice(&bad.mapv(|v| v != 0), &truth),
+        dice(r.periosteal_mask.as_ref().unwrap(), &truth),
+    );
     assert!(before < 0.92 && after > 0.995, "dice {before} -> {after}");
     assert!(periosteal_error(&ph, &r.result) < 0.02);
     assert!(thickness_error(&ph, &r.result).1 < 0.03);
     assert!(r.result.volumetric.is_some());
+}
+
+#[test]
+fn reliability_outputs_can_be_skipped_without_changing_the_fit() {
+    let ph = cylinder(40.0, 1);
+    let (img, mask) = ph.generate();
+    let o = options(&ph, volumetric_tied());
+    let with = run(img.view(), mask.view(), NO_SUB, &o).unwrap();
+    let without = run(
+        img.view(),
+        mask.view(),
+        NO_SUB,
+        &Options {
+            reliability: false,
+            ..o
+        },
+    )
+    .unwrap();
+    assert_eq!(with.params, without.params);
+    assert_eq!(with.residual, without.residual);
+    let info = without.volumetric.as_ref().unwrap();
+    assert!(info.std_error_t.iter().all(|v| v.is_nan()) && info.noise_sd.is_nan());
+    assert!(with.volumetric.as_ref().unwrap().noise_sd.is_finite());
+}
+
+#[test]
+fn starting_from_local_fits_recovers_the_cortex_as_well() {
+    let ph = cylinder(40.0, 5);
+    let (img, mask) = ph.generate();
+    let o = options(&ph, volumetric_tied());
+    let mut ol = o.clone();
+    if let Method::Volumetric(v) = &mut ol.method {
+        v.init_from_local = true;
+    }
+    let global = run(img.view(), mask.view(), NO_SUB, &o).unwrap();
+    let local = run(img.view(), mask.view(), NO_SUB, &ol).unwrap();
+    let (_, rmse_g) = thickness_error(&ph, &global);
+    let (bias_l, rmse_l) = thickness_error(&ph, &local);
+    assert!(
+        rmse_l <= 1.1 * rmse_g + 1e-3,
+        "rmse {rmse_l} from local fits vs {rmse_g} from one model"
+    );
+    assert!(bias_l.abs() < 0.01, "bias {bias_l}");
+    let psf = local.volumetric.as_ref().unwrap().sigma_xy;
+    assert!((psf - 0.12).abs() < 0.02, "sigma_xy {psf}");
 }

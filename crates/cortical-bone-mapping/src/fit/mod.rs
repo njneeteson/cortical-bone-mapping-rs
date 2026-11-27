@@ -40,17 +40,16 @@ pub mod psf;
 pub mod regularized;
 pub mod volumetric;
 
-use std::time::Instant;
-
 use ndarray::ArrayView3;
 
 use crate::error::Error;
 use crate::model::{eval, residual_weights, Params, NPARAM, RHO_B, RHO_S, SIGMA};
-use crate::options::{Method, Options, RhoCMode, SigmaMode};
+use crate::options::{Method, Options, SigmaMode};
 use crate::result::{CbmResult, FitInfo};
 use crate::surface::mesh::Mesh;
+use crate::units::{Intensity, IntensityContrast};
 use crate::util::V3;
-use crate::volume::Voxel;
+use crate::volume::{Geometry, Voxel};
 use local::FitSettings;
 use profiles::{sampling_normals, Profiles, SampleLine};
 
@@ -84,6 +83,10 @@ pub struct FitConstraints<'a> {
     pub psf: Option<[f64; 2]>,
     /// Start the volumetric model's PSF from these values (a warm start).
     pub psf_start: Option<[f64; 2]>,
+    /// Skip the volumetric model's reliability outputs (noise, standard
+    /// errors, data shares; the residuals are still computed): refinement's
+    /// intermediate fits, whose outputs only move the surface.
+    pub skip_reliability: bool,
 }
 
 /// The sampled data every method fits.
@@ -119,6 +122,18 @@ pub(crate) struct Start<'a> {
     pub held: Option<&'a [bool]>,
 }
 
+/// The contrast of the cortex against soft tissue, `ρc − ρs` (`ρs` from the
+/// global model), which weights the penalties: unlike `ρc` alone it does not
+/// depend on where the image's units put their zero. Its magnitude, should
+/// the global soft tissue be denser than `ρc`.
+pub(crate) fn cortical_contrast(rho_c: f64, rho_s: f64) -> IntensityContrast {
+    let contrast = (Intensity::new(rho_c) - Intensity::new(rho_s)).abs();
+    if !(contrast.value() > 0.0) {
+        log::warn!("the cortex has no contrast against soft tissue (rho_c {rho_c}, rho_s {rho_s}): no regularisation");
+    }
+    contrast
+}
+
 /// Roles of `[m, t, σ, ρs, ρb]` in the global methods: a single global value
 /// or a field ([`ModelOptions::global`](crate::options::ModelOptions::global)).
 pub(crate) fn base_roles(o: &Options) -> [global::Role; NPARAM] {
@@ -146,33 +161,15 @@ pub(crate) fn local_settings(o: &Options, free_sigma: bool) -> FitSettings {
 pub(crate) fn global_settings(o: &Options) -> global::Settings {
     global::Settings {
         max_iterations: o.solver.max_iterations,
-        ftol: o.solver.ftol,
         gtol: o.solver.gtol,
         xtol: o.solver.xtol,
         cg_max_iterations: o.solver.cg_max_iterations,
         cg_tolerance: o.solver.cg_tolerance,
+        cg_forcing: o.solver.cg_forcing,
         cg_max_total: o.solver.cg_max_total,
         progress_every: o.solver.progress_every,
         edge_tol: 0.0,
     }
-}
-
-/// The estimated cortical density ([`RhoCMode::Estimate`]) from the profiles
-/// of the nodes `keep`, for the volumetric model: the 1D estimate looks for
-/// cortex thick enough to show its density along every profile, where the
-/// volumetric fit's own voxels were dominated by thin cortex on clinical CT
-/// and its estimates were low.
-fn profile_rho_c<T: Voxel>(
-    image: &ArrayView3<T>,
-    surface: &Mesh,
-    keep: &[bool],
-    o: &Options,
-    exclude: Option<ArrayView3<bool>>,
-) -> Result<f64, Error> {
-    let (sub, _, normals) = select_nodes(surface, keep, o)?;
-    let (mut profiles, x) = sample_profiles(image, surface, &sub.vertices, &normals, exclude, o);
-    let weights = residual_weights(&x, o.model.residual_boost);
-    Ok(density::cortical_density(&mut profiles, &x, &weights, None, o)?.0)
 }
 
 /// Fit the model on the nodes `keep` of an (already smoothed) `surface`.
@@ -198,15 +195,28 @@ pub fn fit_surface_constrained<T: Voxel>(
     constraints: &FitConstraints,
 ) -> Result<CbmResult, Error> {
     if let Method::Volumetric(v) = &options.method {
+        // from the nodes' 1D profiles: the estimated cortical density (the 1D
+        // estimate looks for cortex thick enough to show its density along
+        // every profile, where the volumetric fit's own voxels were dominated
+        // by thin cortex on clinical CT and its estimates were low) and,
+        // optionally, the start (`volumetric::start`)
+        let given = constraints.rho_c;
+        let ps =
+            volumetric::start::profile_start(image, &surface, keep, options, v, constraints, warm_start.is_some())?;
         let mut c = *constraints;
-        if c.rho_c.is_none() && options.model.rho_c_mode == RhoCMode::Estimate {
-            c.rho_c = Some(profile_rho_c(image, &surface, keep, options, constraints.exclude)?);
+        c.rho_c = given.or(ps.rho_c);
+        if c.psf.is_none() && c.psf_start.is_none() {
+            c.psf_start = ps.psf;
         }
-        return volumetric::fit_surface(image, surface, keep, options, v, warm_start, &c);
+        if c.densities.is_none() && c.density_start.is_none() {
+            c.density_start = ps.densities;
+        }
+        let warm = ps.warm.as_deref().or(warm_start);
+        return volumetric::fit_surface(image, surface, keep, options, v, warm, &c);
     }
     let o = options;
     let mut timings = Vec::new();
-    let t0 = Instant::now();
+    let st = crate::stage!("sampling");
 
     // ---- the nodes, their profiles and the cortical density
     let (sub, vertex_ids, normals) = select_nodes(&surface, keep, o)?;
@@ -214,7 +224,16 @@ pub fn fit_surface_constrained<T: Voxel>(
     let (mut profiles, x) = sample_profiles(image, &surface, &points, &normals, constraints.exclude, o);
     let weights = residual_weights(&x, o.model.residual_boost);
     let (rho_c, rho_c_node) = density::cortical_density(&mut profiles, &x, &weights, constraints.rho_c, o)?;
-    timings.push(("sampling".to_string(), t0.elapsed().as_secs_f64()));
+    timings.push((
+        "sampling".to_string(),
+        crate::done!(
+            st,
+            "{} nodes, {} samples per profile, rho_c {rho_c:.1}{}",
+            points.len(),
+            x.len(),
+            if rho_c_node.is_some() { " (per node)" } else { "" }
+        ),
+    ));
     let data = Data {
         profiles: &profiles,
         x: &x,
@@ -233,25 +252,35 @@ pub fn fit_surface_constrained<T: Voxel>(
 
     // ---- the blur, and one model for all profiles
     let (mut psf, mut sigma_fixed) = given_blur(o, &normals);
-    let t1 = Instant::now();
+    let st = crate::stage!("global fit");
     let mut global_params = initial_model(&data, sigma_fixed.as_deref(), constraints.densities);
     let held = held_subset(constraints.fixed, warm_start, &vertex_ids)?;
-    timings.push(("global fit".to_string(), t1.elapsed().as_secs_f64()));
+    timings.push((
+        "global fit".to_string(),
+        crate::done!(st, "[m, t, sigma, rho_s, rho_b] = {global_params:.3?}"),
+    ));
+    if let Some(h) = &held {
+        log::debug!(
+            "{} of {} nodes held at their warm start",
+            h.iter().filter(|&&b| b).count(),
+            h.len()
+        );
+    }
     let starts =
         |global: &Params, sigma_fixed: Option<&[f64]>| node_starts(global, warm_start, &vertex_ids, sigma_fixed);
     if let SigmaMode::EstimatePsf { model, min_ratio } = &o.model.sigma {
-        let t2 = Instant::now();
+        let st = crate::stage!("psf estimation");
         let est = psf::estimate_from_fits(&data, &normals, &starts(&global_params, None), *model, *min_ratio)?;
         psf = Some(est);
         sigma_fixed = Some(normals.iter().map(|&nr| psf::sigma_along(est, nr)).collect());
         if o.init_from_global {
             global_params = density::fit_one_model(&data, global_params, sigma_fixed.as_deref());
         }
-        timings.push(("psf estimation".to_string(), t2.elapsed().as_secs_f64()));
+        timings.push(("psf estimation".to_string(), crate::done!(st, "psf {est:.3?}")));
     }
 
     // ---- the chosen method
-    let t3 = Instant::now();
+    let st = crate::stage!("method fit");
     let start = Start {
         global: global_params,
         nodes: starts(&global_params, sigma_fixed.as_deref()),
@@ -263,10 +292,18 @@ pub fn fit_surface_constrained<T: Voxel>(
         normals: &normals,
     };
     let mut params = fit_method(&data, &nodes, &start, constraints, &mut info, &mut timings);
-    timings.push((format!("{} fit", o.method.name()), t3.elapsed().as_secs_f64()));
+    timings.push((
+        format!("{} fit", o.method.name()),
+        crate::done!(st, "method {}", o.method.name()),
+    ));
 
     // ---- residuals, and per-node densities scaled back
     let mut residual = residuals(&data, &params);
+    log::debug!(
+        "median weighted RMS residual {:.2}, median thickness {:.3}",
+        crate::util::median(&residual),
+        crate::util::median(&params.iter().map(|p| p[crate::model::T]).collect::<Vec<_>>())
+    );
     if let Some(node) = &rho_c_node {
         let kept = o.keep_profiles.then_some(&mut profiles);
         scale_to_node_density(node, rho_c, &mut params, &mut residual, kept);
@@ -299,8 +336,10 @@ fn select_nodes(surface: &Mesh, keep: &[bool], o: &Options) -> Result<(Mesh, Vec
     let keep: Vec<bool> = keep.iter().zip(&dirs).map(|(&k, d)| k && d.is_some()).collect();
     let (sub, vertex_ids) = surface.submesh(&keep);
     if vertex_ids.is_empty() {
+        log::warn!("no nodes to fit: none selected, or no valid sampling direction");
         return Err(Error::NoNodes);
     }
+    log::debug!("{} of {} surface vertices are fitted", vertex_ids.len(), keep.len());
     let normals = vertex_ids.iter().map(|&v| dirs[v as usize].unwrap()).collect();
     Ok((sub, vertex_ids, normals))
 }
@@ -324,8 +363,16 @@ fn sample_profiles<T: Voxel>(
         profiles.exclude(&ex, geom, points, normals, &line);
     }
     if o.sampling.half_width_inside {
-        let region = surface.voxelize(image.dim(), geom);
-        profiles.limit_inside(&region.view(), geom, points, normals, &line, geom.min_spacing());
+        // the object's interior, rasterised on its bounding box only
+        let (d0, d1, d2) = image.dim();
+        let (lo, hi) = crate::surface::voxelize::index_box(surface, [d0, d1, d2], geom, 0.0);
+        let shape = (hi[0] - lo[0] + 1, hi[1] - lo[1] + 1, hi[2] - lo[2] + 1);
+        let box_geom = Geometry {
+            spacing: geom.spacing,
+            origin: geom.to_physical(lo.map(|v| v as f64)),
+        };
+        let region = surface.voxelize(shape, &box_geom);
+        profiles.limit_inside(&region.view(), lo, geom, points, normals, &line, geom.min_spacing());
     }
     (profiles, line.x)
 }

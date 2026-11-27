@@ -100,6 +100,48 @@ impl KdTree {
         }
     }
 
+    /// [`Self::knn`] when the `k` nearest are known to lie within `bound` of
+    /// `q` (e.g. a neighbouring query's `k`-th distance plus the distance
+    /// between the two): the same result, from a search confined to that
+    /// ball. Falls back to the unbounded search if fewer than `k` points lie
+    /// within it.
+    pub fn knn_bounded(&self, q: V3, k: usize, bound: f64) -> Vec<(u32, f64)> {
+        let (Some(tree), n) = (&self.tree, self.pts.len()) else {
+            return Vec::new();
+        };
+        if k == 0 {
+            return Vec::new();
+        }
+        let r2 = bound * bound * (1.0 + 4.0 * MARGIN) + f64::MIN_POSITIVE;
+        let mut ask = (k + 2).min(n);
+        loop {
+            let found = tree
+                .query(&q)
+                .nearest_n::<SquaredEuclidean<f64>>(NonZeroUsize::new(ask).unwrap())
+                .within(r2)
+                .execute();
+            if found.len() < k {
+                return self.knn(q, k, None);
+            }
+            let farthest = found.last().map_or(0.0, |r| r.distance);
+            let mut out: Vec<(u32, f64)> = found
+                .iter()
+                .map(|r| (r.item, dist2(q, self.pts[r.item as usize])))
+                .collect();
+            out.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+            // complete as in `knn`, or when every point of the ball is in
+            let all_in_ball = found.len() < ask;
+            let complete = ask == n
+                || all_in_ball
+                || (out.len() > k && farthest > out[k - 1].1 * (1.0 + MARGIN) + f64::MIN_POSITIVE);
+            if complete {
+                out.truncate(k);
+                return out;
+            }
+            ask = (2 * ask).min(n);
+        }
+    }
+
     /// The nearest point, smallest index among exact ties: the library's
     /// nearest, unless another point is as close within its rounding, in
     /// which case the general query decides.
@@ -199,6 +241,35 @@ mod tests {
                 .filter(|c| c.1 <= 2.25)
                 .collect();
             assert_eq!(out, want);
+        }
+    }
+
+    /// Along a line of queries (and on a lattice, with ties), the search
+    /// bounded by the previous query's `k`-th distance plus the step returns
+    /// exactly the unbounded result; so does a bound too small to hold `k`
+    /// points (the fallback).
+    #[test]
+    fn bounded_knn_equals_knn() {
+        let lattice: Vec<V3> = (0..12)
+            .flat_map(|i| (0..12).flat_map(move |j| (0..6).map(move |k| [i as f64, j as f64, 0.5 * k as f64])))
+            .collect();
+        for pts in [cloud(3000, 7), lattice] {
+            let tree = KdTree::new(&pts);
+            for k in [1, 4, 9] {
+                let mut bound: Option<f64> = None;
+                let mut prev = [0.0; 3];
+                for s in 0..400 {
+                    let q = [0.025 * s as f64, 1.5 + 0.01 * s as f64, 2.0];
+                    let want = tree.knn(q, k, None);
+                    if let Some(b) = bound {
+                        let b = b + crate::util::dist2(q, prev).sqrt();
+                        assert_eq!(tree.knn_bounded(q, k, b), want, "query {s}, k {k}");
+                    }
+                    assert_eq!(tree.knn_bounded(q, k, 1e-6), want, "fallback, query {s}, k {k}");
+                    bound = Some(want[k - 1].1.sqrt());
+                    prev = q;
+                }
+            }
         }
     }
 

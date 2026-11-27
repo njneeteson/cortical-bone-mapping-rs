@@ -48,16 +48,25 @@ The global methods minimise
 
 $$
 L = \frac{1}{2NM}\sum_{ij}\gamma_j(\hat f_{ij} - f_{ij})^2
-  + \frac{\lambda\rho_c^2}{2N}\left[\frac{\lVert\omega m\rVert^2}{t_0^2} + \frac{\lVert\omega t\rVert^2}{t_0^2}
+  + \frac{\lambda(\rho_c - \rho_{s0})^2}{2N}\left[\frac{\lVert\omega m\rVert^2}{t_0^2} + \frac{\lVert\omega t\rVert^2}{t_0^2}
   + \frac{\lVert\omega\sigma\rVert^2}{\sigma_0^2}\right]
 $$
 
 - $\omega x_i = x_i - \sum_k g(d_{ik})x_k / \sum_k g(d_{ik})$ over the `reg_neighbours`
   nearest nodes, with a Gaussian $g$ of standard deviation `reg_sigma`.
-- $t_0$, $\sigma_0$ come from the initial fit.
+- $t_0$, $\sigma_0$, $\rho_{s0}$ come from the initial fit.
+- The penalty is weighted by the squared contrast of the cortex against soft
+  tissue. Our 2025 paper weights it by $\rho_c^2$, which depends on where the
+  image's units put their zero; in calibrated mg HA/cm³ or in HU, where soft
+  tissue is near 0, the two nearly agree.
 - Solved by bounded Gauss–Newton / Levenberg–Marquardt with matrix-free
   preconditioned conjugate gradients; the local fit by bounded
   Levenberg–Marquardt with analytic derivatives.
+- Stopping tests are dimensionless and per variable: the largest cosine
+  between a variable's Jacobian column and its own residuals (`gtol`), and
+  the largest change a step makes in any node's predictions, in units of the
+  noise (`xtol`). They do not depend on the number of nodes, the length unit,
+  or the units of the image values and their zero.
 - Results are bitwise identical across runs and thread counts.
 
 ## Volumetric model
@@ -139,7 +148,8 @@ $$
 | | Bonelab (Python) | this package |
 |---|---|---|
 | optimiser | SciPy L-BFGS-B (global), TRF with numerical Jacobian (local) | Gauss–Newton/LM + PCG (global), bounded LM with analytic Jacobian (local) |
-| regularised loss | penalty scaled by $\rho_c^2/t_0$ in the loss but $\rho_c^2/t_0^2$ in the gradient | $\rho_c^2/t_0^2$ in both |
+| regularised loss | penalty scaled by $\rho_c^2/t_0$ in the loss but $\rho_c^2/t_0^2$ in the gradient | $(\rho_c - \rho_{s0})^2/t_0^2$ in both |
+| stopping tests | SciPy's `ftol`, `gtol`, relative to the whole problem | per variable, in units of the noise |
 | local residual weights | $\gamma^2$ | $\gamma$, as the global methods |
 | $\omega$ neighbours | $k$ including the node | $k$ excluding it, with a distance cut-off |
 | surface | PyVista contour + windowed-sinc smoothing | surface nets + Taubin λ\|μ |

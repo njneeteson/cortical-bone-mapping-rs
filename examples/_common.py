@@ -1,4 +1,4 @@
-"""Shared by the documentation scripts: provenance of results, figure style,
+"""Shared by the example scripts: provenance of results, figure style,
 and 3D rendering.
 
 Provenance. Every results file records the code it was computed with: a hash
@@ -21,10 +21,10 @@ from pathlib import Path
 
 import numpy as np
 
-ROOT = Path(__file__).resolve().parents[2]
-DOCS = ROOT / "docs"
-IMAGES = DOCS / "images"
-RESULTS = DOCS / "results"
+ROOT = Path(__file__).resolve().parents[1]
+EXAMPLES = ROOT / "examples"
+IMAGES = EXAMPLES / "images"
+RESULTS = EXAMPLES / "results"
 SOURCES = [ROOT / "crates" / "cortical-bone-mapping" / "src", ROOT / "python" / "python", ROOT / "python" / "src"]
 
 # ------------------------------------------------------------------ provenance
@@ -37,7 +37,8 @@ def source_hash(script: str, inputs: dict) -> str:
     """Hash of the library sources, the calling script's computing part
     (everything above its ``FIGURES_MARKER`` line; drawing code cannot change
     results) and its inputs. Line endings are normalised, so that a checkout
-    with CRLF endings (git on Windows) hashes the same."""
+    with CRLF endings (git on Windows) hashes the same, and the script is
+    hashed as code: its comments and docstrings are left out."""
     h = hashlib.sha256()
     for base in SOURCES:
         for f in sorted(base.rglob("*")):
@@ -45,9 +46,24 @@ def source_hash(script: str, inputs: dict) -> str:
                 h.update(f.relative_to(ROOT).as_posix().encode())
                 h.update(f.read_bytes().replace(b"\r\n", b"\n"))
     text = Path(script).read_bytes().replace(b"\r\n", b"\n").decode("utf-8")
-    h.update(text.split(FIGURES_MARKER)[0].encode())
+    h.update(_code(text.split(FIGURES_MARKER)[0]).encode())
     h.update(json.dumps(inputs, sort_keys=True, default=str).encode())
     return h.hexdigest()[:16]
+
+
+def _code(source: str) -> str:
+    """Python source as its syntax tree, without docstrings (comments are
+    not in the tree)."""
+    import ast
+
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if (isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and body
+                and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)):
+            node.body = body[1:] or [ast.Pass()]
+    return ast.dump(tree)
 
 
 def provenance(script: str, inputs: dict) -> dict:

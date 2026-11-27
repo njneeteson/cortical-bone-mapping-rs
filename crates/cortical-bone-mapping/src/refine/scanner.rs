@@ -115,7 +115,7 @@ impl Shared {
         let global_densities = options.model.global[RHO_S] || options.model.global[RHO_B];
         let volumetric_global = matches!(&options.method, Method::Volumetric(v) if v.global_densities);
         let held_densities = freezing && (regularized && global_densities || volumetric_global);
-        Shared {
+        let shared = Shared {
             scanner: ScannerState {
                 psf: first.volumetric.as_ref().map(|v| [v.sigma_xy, v.sigma_z]),
                 sigma: (options.model.global[SIGMA] && regularized).then(|| first.mean_sigma()),
@@ -123,7 +123,13 @@ impl Shared {
             },
             densities: held_densities.then(|| first.mean_densities()),
             density_start: first.mean_densities(),
-        }
+        };
+        log::debug!(
+            "scanner parameters held from the first fit: {:?}; densities held {:?}",
+            shared.scanner,
+            shared.densities
+        );
+        shared
     }
 
     /// Carry the densities over from a fit as a warm start.
@@ -155,6 +161,7 @@ impl Shared {
             sigma_start: s.sigma,
             psf: s.psf,
             psf_start: s.psf,
+            skip_reliability: true,
         }
     }
 
@@ -167,6 +174,7 @@ impl Shared {
             density_start: Some(self.density_start),
             sigma_start: s.sigma,
             psf_start: s.psf,
+            skip_reliability: true,
             ..FitConstraints::default()
         }
     }

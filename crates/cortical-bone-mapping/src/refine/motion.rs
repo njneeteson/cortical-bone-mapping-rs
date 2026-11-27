@@ -177,5 +177,15 @@ pub(super) fn move_level_set(
         })
         .collect();
     timings.push(("level set: state transfer", tc.elapsed().as_secs_f64()));
+    log::debug!(
+        "level set move: {} -> {} vertices; {}",
+        mesh.vertices.len(),
+        e.mesh.vertices.len(),
+        timings
+            .iter()
+            .map(|(n, t)| format!("{n} {t:.3} s"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     (e, map)
 }

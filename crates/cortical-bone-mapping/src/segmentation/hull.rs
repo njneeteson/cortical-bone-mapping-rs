@@ -59,6 +59,8 @@ impl Default for HullOptions {
 /// [`refine_segmentation`](crate::refine::refine_segmentation), not a
 /// segmentation in its own right.
 pub fn hull_segmentation<T: Voxel>(image: ArrayView3<T>, o: &HullOptions) -> Array3<bool> {
+    let s = crate::stage!("hull segmentation");
+    log::debug!("hull segmentation: image {:?}, {o:?}", image.dim());
     let mut m = Array3::from_elem(image.dim(), false);
     Zip::from(&mut m)
         .and(&image)
@@ -69,7 +71,14 @@ pub fn hull_segmentation<T: Voxel>(image: ArrayView3<T>, o: &HullOptions) -> Arr
     if o.largest_component {
         m = largest_component(&m, false);
     }
-    slice_hulls(&m)
+    let hull = slice_hulls(&m);
+    crate::done!(
+        s,
+        "{} voxels above the threshold kept, {} in the hull",
+        m.iter().filter(|&&v| v).count(),
+        hull.iter().filter(|&&v| v).count()
+    );
+    hull
 }
 
 /// The convex hull of every slice (along axis 0) of a binary mask.

@@ -18,6 +18,7 @@ pub(crate) fn phantom<'py>(
     py: Python<'py>,
     spec: &Bound<'py, PyDict>,
 ) -> PyResult<(Bound<'py, numpy::PyArray3<f32>>, Bound<'py, numpy::PyArray3<u8>>)> {
+    crate::logs::refresh();
     use cbm::phantoms::shell::{Shape, ShellPhantom};
     let shape = match req::<String>(spec, "shape")?.as_str() {
         "cylinder" => Shape::Cylinder,
@@ -108,6 +109,7 @@ pub(crate) fn bone_phantom<'py>(
     Bound<'py, numpy::PyArray3<bool>>,
     Bound<'py, numpy::PyArray3<bool>>,
 )> {
+    crate::logs::refresh();
     let ph = bone_phantom_from(spec)?;
     let (img, p, e) = py.detach(|| ph.generate());
     Ok((img.into_pyarray(py), p.into_pyarray(py), e.into_pyarray(py)))
@@ -124,6 +126,7 @@ pub(crate) fn bone_phantom_edges<'py>(
     x0: f64,
     x1: f64,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    crate::logs::refresh();
     let ph = bone_phantom_from(spec)?;
     let p = points.as_array();
     let n = normals.as_array();
@@ -144,6 +147,7 @@ pub(crate) fn bone_phantom_labels<'py>(
     py: Python<'py>,
     spec: &Bound<'py, PyDict>,
 ) -> PyResult<Bound<'py, numpy::PyArray3<u8>>> {
+    crate::logs::refresh();
     let ph = bone_phantom_from(spec)?;
     Ok(py.detach(|| ph.labels()).into_pyarray(py))
 }
@@ -216,6 +220,7 @@ pub(crate) fn femur_phantom<'py>(
     Bound<'py, numpy::PyArray3<u8>>,
     Bound<'py, numpy::PyArray3<u8>>,
 )> {
+    crate::logs::refresh();
     let ph = femur_phantom_from(spec)?;
     let (img, p, e) = py.detach(|| ph.generate());
     Ok((img.into_pyarray(py), p.into_pyarray(py), e.into_pyarray(py)))
@@ -232,6 +237,7 @@ pub(crate) fn femur_phantom_edges<'py>(
     x0: f64,
     x1: f64,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    crate::logs::refresh();
     let ph = femur_phantom_from(spec)?;
     let (pv, nv) = lines(&points, &normals)?;
     let e = py.detach(|| ph.edges_along(&pv, &nv, x0, x1));
@@ -259,6 +265,7 @@ pub(crate) fn site_phantom<'py>(
     site: &str,
     seed: u64,
 ) -> PyResult<(&'static str, Bound<'py, PyDict>)> {
+    crate::logs::refresh();
     use cbm::phantoms::sites::{Site, SitePhantom};
     let s = Site::from_name(site).ok_or_else(|| {
         let names: Vec<&str> = Site::ALL.iter().map(|s| s.name()).collect();

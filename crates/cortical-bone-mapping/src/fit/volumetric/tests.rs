@@ -36,6 +36,7 @@ fn setup() -> Setup {
         exclude: None,
         stride: 1,
         face_reach: None,
+        grid: true,
     };
     let band = Band::build(&img.view(), &mesh, &fitted, mesh.faces.len(), &spec);
     let near = Neighbours::new(&mesh, Distance::Surface);
@@ -113,7 +114,7 @@ fn synthesise(s: &mut Setup, roles: [Role; NV], tied: bool, x: &[f64]) {
     let p = problem(s, roles, tied);
     let prep = Prepared::new(&p);
     let values = prep.model_values(x);
-    s.band.value = values.iter().map(|&v| v as f32).collect();
+    s.band.set_values(&values);
 }
 
 const ROLE_SETS: [([Role; NV], bool); 4] = [

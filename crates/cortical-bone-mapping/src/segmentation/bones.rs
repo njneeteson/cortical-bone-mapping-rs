@@ -40,8 +40,9 @@
 //!   1982.
 
 use std::collections::VecDeque;
+use std::ops::Range;
 
-use ndarray::{Array3, ArrayView3, Zip};
+use ndarray::{s, Array3, ArrayView3, ArrayViewMut3, Zip};
 use rayon::prelude::*;
 
 use super::hull::slice_hulls;
@@ -91,6 +92,8 @@ pub struct BoneLabels {
 /// soft-tissue gap) become one component; raise the threshold, or separate
 /// them by other means, if that happens.
 pub fn label_bones<T: Voxel>(image: ArrayView3<T>, o: &BoneLabelOptions) -> BoneLabels {
+    let s = crate::stage!("label bones");
+    log::debug!("label bones: image {:?}, {o:?}", image.dim());
     let mut m = Array3::from_elem(image.dim(), false);
     Zip::from(&mut m)
         .and(&image)
@@ -107,6 +110,14 @@ pub fn label_bones<T: Voxel>(image: ArrayView3<T>, o: &BoneLabelOptions) -> Bone
         map[c] = (k + 1) as u16;
     }
     let out: Vec<u16> = label.par_iter().map(|&l| map[l as usize]).collect();
+    crate::done!(
+        s,
+        "{} components, {} kept (at least {} voxels): sizes {:?}",
+        sizes.len().saturating_sub(1),
+        order.len(),
+        o.min_size,
+        order.iter().map(|&c| sizes[c]).collect::<Vec<_>>()
+    );
     BoneLabels {
         labels: Array3::from_shape_vec(m.dim(), out).unwrap(),
         sizes: order.iter().map(|&c| sizes[c]).collect(),
@@ -127,6 +138,7 @@ pub fn grow_bones<T: Voxel>(
     low_threshold: f64,
     median_kernel: [usize; 3],
 ) -> Array3<u16> {
+    let s = crate::stage!("grow bones");
     let mut low = Array3::from_elem(image.dim(), false);
     Zip::from(&mut low)
         .and(&image)
@@ -149,6 +161,13 @@ pub fn grow_bones<T: Voxel>(
             }
         }
     }
+    let labelled = |a: &ArrayView3<u16>| a.iter().filter(|&&l| l != 0).count();
+    crate::done!(
+        s,
+        "low threshold {low_threshold:.1}: {} -> {} labelled voxels",
+        labelled(&labels),
+        labelled(&out.view())
+    );
     out
 }
 
@@ -186,18 +205,47 @@ pub fn bone_hulls(
 ) -> Array3<u16> {
     let dim = labels.dim();
     let n = labels.iter().copied().max().unwrap_or(0);
+    log::debug!(
+        "bone hulls: {n} bones, image {dim:?}, {}",
+        match (closing_radius, max_distance) {
+            (Some(r), _) => format!("closing radius {r}"),
+            (None, Some(d)) => format!("slice hulls trimmed to {d}"),
+            (None, None) => "slice hulls".to_string(),
+        }
+    );
     let mut owner = Array3::<u16>::zeros(dim);
     let mut best = Array3::from_elem(dim, f32::INFINITY);
     let inv = spacing.map(|s| 1.0 / s);
+    // each bone's start lies within its bounding box grown by the closing
+    // radius (or trimming distance): work on that box plus a voxel, whose
+    // outer ring is background like the rest of the image
+    let reach = closing_radius.unwrap_or(0.0).max(max_distance.unwrap_or(0.0));
+    let pad = spacing.map(|s| (reach / s).ceil() as usize + 1);
+    let full = [dim.0, dim.1, dim.2];
+    let boxes: Vec<Option<[Range<usize>; 3]>> = bounding_boxes(&labels, n)
+        .into_iter()
+        .map(|bx| {
+            bx.map(|bx| std::array::from_fn(|a| bx[a].start.saturating_sub(pad[a])..(bx[a].end + pad[a]).min(full[a])))
+        })
+        .collect();
     for b in 1..=n {
-        let mb = labels.mapv(|l| l == b);
-        if !mb.iter().any(|&v| v) {
+        let Some(r) = &boxes[b as usize] else {
             continue;
-        }
+        };
+        let sl = s![r[0].clone(), r[1].clone(), r[2].clone()];
+        let s = crate::stage!("bone start");
+        let mb = labels.slice(sl).mapv(|l| l == b);
         let d = scaled_sq_distance(&mb, inv);
         let start = bone_start(&mb, &d, inv, max_distance, closing_radius);
-        Zip::from(&mut owner)
-            .and(&mut best)
+        crate::done!(
+            s,
+            "bone {b}: box {:?} of {dim:?}, {} thresholded voxels, {} in its start",
+            mb.dim(),
+            mb.iter().filter(|&&v| v).count(),
+            start.iter().filter(|&&v| v).count()
+        );
+        Zip::from(owner.slice_mut(sl))
+            .and(best.slice_mut(sl))
             .and(&start)
             .and(&d)
             .par_for_each(|o, bst, &h, &dv| {
@@ -207,11 +255,36 @@ pub fn bone_hulls(
                 }
             });
     }
+    let s = crate::stage!("separate the starts");
     let mut out = separate(&owner, &labels);
     for b in 1..=n {
-        drop_fragments(&mut out, &labels, b);
+        // a bone's region lies within its padded box
+        if let Some(r) = &boxes[b as usize] {
+            let sl = s![r[0].clone(), r[1].clone(), r[2].clone()];
+            drop_fragments(out.slice_mut(sl), labels.slice(sl), b);
+        }
     }
+    s.end();
     out
+}
+
+/// The bounding box (index ranges per axis) of every label `1..=n`, in one
+/// pass; `None` for a label that does not occur.
+fn bounding_boxes(labels: &ArrayView3<u16>, n: u16) -> Vec<Option<[Range<usize>; 3]>> {
+    let mut lo = vec![[usize::MAX; 3]; n as usize + 1];
+    let mut hi = vec![[0usize; 3]; n as usize + 1];
+    for ((i, j, k), &l) in labels.indexed_iter() {
+        if l != 0 {
+            let (a, b) = (&mut lo[l as usize], &mut hi[l as usize]);
+            for (axis, p) in [i, j, k].into_iter().enumerate() {
+                a[axis] = a[axis].min(p);
+                b[axis] = b[axis].max(p + 1);
+            }
+        }
+    }
+    (0..=n as usize)
+        .map(|l| (lo[l][0] != usize::MAX).then(|| std::array::from_fn(|a| lo[l][a]..hi[l][a])))
+        .collect()
 }
 
 /// One bone's start (`mb`, squared distance map `d`): its slice hulls or
@@ -255,7 +328,7 @@ fn separate(owner: &Array3<u16>, labels: &ArrayView3<u16>) -> Array3<u16> {
 
 /// Keep only the pieces of bone `b`'s region that contain some of its
 /// thresholded bone (assigning and separating can cut off small fragments).
-fn drop_fragments(out: &mut Array3<u16>, labels: &ArrayView3<u16>, b: u16) {
+fn drop_fragments(mut out: ArrayViewMut3<u16>, labels: ArrayView3<u16>, b: u16) {
     let mb = out.mapv(|v| v == b);
     let (comp, sizes) = label_components(&mb, false);
     if sizes.len() <= 2 {
@@ -283,6 +356,7 @@ fn drop_fragments(out: &mut Array3<u16>, labels: &ArrayView3<u16>, b: u16) {
 /// Slice holes left after the erosion are filled too.
 fn closing(m: &Array3<bool>, d: &Array3<f32>, inv: [f64; 3], r: f64) -> Array3<bool> {
     let r2 = (r * r) as f32;
+    let s = crate::stage!("closing: dilation and enclosed voids");
     // dilation, then fill enclosed background (the outside is the background
     // connected to the in-plane faces, so a bone cut by the first or last
     // slice still gets its marrow filled)
@@ -296,11 +370,107 @@ fn closing(m: &Array3<bool>, d: &Array3<f32>, inv: [f64; 3], r: f64) -> Array3<b
             filled = fill_slice_holes(&filled, axis);
         }
     }
+    s.end();
+    let s = crate::stage!("closing: erosion");
     let outside = filled.mapv(|b| !b);
     // erosion: voxels farther than r from the outside (the image border
     // counts as inside)
     let e = scaled_sq_distance(&outside, inv);
     let mut c = e.mapv(|v| v > r2);
     Zip::from(&mut c).and(m).par_for_each(|c, &b| *c |= b);
-    outer_region(&c.mapv(|b| !b), true).mapv(|b| !b)
+    let out = outer_region(&c.mapv(|b| !b), true).mapv(|b| !b);
+    s.end();
+    out
+}
+
+#[cfg(test)]
+mod crop_tests {
+    use super::*;
+    use crate::util::Rng;
+
+    /// [`bone_hulls`] as it was before cropping: every bone on the whole image.
+    fn whole_image(
+        labels: ArrayView3<u16>,
+        spacing: [f64; 3],
+        max_distance: Option<f64>,
+        closing_radius: Option<f64>,
+    ) -> Array3<u16> {
+        let dim = labels.dim();
+        let n = labels.iter().copied().max().unwrap_or(0);
+        let mut owner = Array3::<u16>::zeros(dim);
+        let mut best = Array3::from_elem(dim, f32::INFINITY);
+        let inv = spacing.map(|s| 1.0 / s);
+        for b in 1..=n {
+            let mb = labels.mapv(|l| l == b);
+            if !mb.iter().any(|&v| v) {
+                continue;
+            }
+            let d = scaled_sq_distance(&mb, inv);
+            let start = bone_start(&mb, &d, inv, max_distance, closing_radius);
+            Zip::from(&mut owner)
+                .and(&mut best)
+                .and(&start)
+                .and(&d)
+                .for_each(|o, bst, &h, &dv| {
+                    if h && dv < *bst {
+                        *bst = dv;
+                        *o = b;
+                    }
+                });
+        }
+        let mut out = separate(&owner, &labels);
+        for b in 1..=n {
+            drop_fragments(out.view_mut(), labels, b);
+        }
+        out
+    }
+
+    /// Hollow, dented blobs (marrow, concavities, a break), some cut by the
+    /// image's edges, close enough for their starts to compete.
+    fn scene(seed: u64) -> Array3<u16> {
+        let mut rng = Rng::new(seed);
+        let dim = (14, 48, 52);
+        let blobs: Vec<([f64; 3], f64, [f64; 3])> = (0..4)
+            .map(|_| {
+                let c = [
+                    rng.uniform() * 14.0,
+                    8.0 + rng.uniform() * 32.0,
+                    8.0 + rng.uniform() * 36.0,
+                ];
+                let r = 5.0 + rng.uniform() * 5.0;
+                let dent = [rng.normal(), rng.normal(), rng.normal()];
+                (c, r, dent)
+            })
+            .collect();
+        Array3::from_shape_fn(dim, |(i, j, k)| {
+            let p = [i as f64, j as f64, k as f64];
+            for (b, (c, r, dent)) in blobs.iter().enumerate() {
+                let v = [p[0] - c[0], p[1] - c[1], p[2] - c[2]];
+                let d = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                let dented = r - 2.5 * (v[1] * dent[1] + v[2] * dent[2]).max(0.0) / r;
+                let in_break = v[1].abs() < 1.5 && v[2] > 0.0;
+                if d <= dented && d >= 0.6 * dented && !in_break {
+                    return b as u16 + 1;
+                }
+            }
+            0
+        })
+    }
+
+    #[test]
+    fn cropping_to_each_bone_changes_nothing() {
+        for seed in 1..6 {
+            let labels = scene(seed);
+            for spacing in [[1.0, 1.0, 1.0], [1.3, 0.8, 1.0]] {
+                for (md, cr) in [(None, None), (Some(3.0), None), (None, Some(3.0)), (None, Some(5.5))] {
+                    let got = bone_hulls(labels.view(), spacing, md, cr);
+                    let want = whole_image(labels.view(), spacing, md, cr);
+                    assert!(
+                        got == want,
+                        "seed {seed}, spacing {spacing:?}, trim {md:?}, closing {cr:?}"
+                    );
+                }
+            }
+        }
+    }
 }

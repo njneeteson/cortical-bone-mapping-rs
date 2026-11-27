@@ -95,9 +95,22 @@ impl<'m> MeshPoints<'m> {
     /// `None` if the nearest vertex is farther than `reach` (or there is no
     /// vertex).
     pub fn closest(&self, q: V3, reach: f64) -> Option<Closest> {
-        let nn = self.tree.knn(q, NEAREST, None);
+        self.closest_bounded(q, reach, None).0
+    }
+
+    /// [`Self::closest`], with the search for the nearest vertices confined
+    /// to `bound` of `q` when given (exact if they lie within it: a
+    /// neighbouring query's [`NEAREST`]-th vertex distance plus the distance
+    /// between the two queries), and the [`NEAREST`]-th vertex distance of
+    /// `q`, the bound for the next query (∞ without vertices).
+    pub fn closest_bounded(&self, q: V3, reach: f64, bound: Option<f64>) -> (Option<Closest>, f64) {
+        let nn = match bound {
+            Some(b) => self.tree.knn_bounded(q, NEAREST, b),
+            None => self.nearest_vertices(q),
+        };
+        let far = nn.last().map_or(f64::INFINITY, |v| v.1.sqrt());
         if nn.is_empty() || nn[0].1.sqrt() > reach {
-            return None;
+            return (None, far);
         }
         let mut best: Option<Closest> = None;
         for &(v, _) in &nn {
@@ -115,7 +128,12 @@ impl<'m> MeshPoints<'m> {
                 }
             }
         }
-        best
+        (best, far)
+    }
+
+    /// The `NEAREST` vertices nearest to `q`, as `(index, squared distance)`.
+    pub fn nearest_vertices(&self, q: V3) -> Vec<(u32, f64)> {
+        self.tree.knn(q, NEAREST, None)
     }
 }
 

@@ -49,13 +49,8 @@ pub(super) struct Reliability {
 /// standard errors and data shares cost about a tenth of a fit).
 pub(super) fn residuals_only(prep: &Prepared, x: &[f64], psf: [f64; 2], axis: usize) -> Reliability {
     let n = prep.lay.nodes;
-    let white = Correlation { rho: [0.0; 3], step: 1 };
-    let moments = prep.node_moments(x, &white);
-    let residual = (0..n)
-        .map(|v| (moments.wr2[v] / moments.w[v].max(1e-300)).sqrt())
-        .collect();
     Reliability {
-        residual,
+        residual: node_rms(prep, x),
         info: VolumetricInfo {
             sigma_xy: psf[0],
             sigma_z: psf[1],
@@ -72,20 +67,41 @@ pub(super) fn residuals_only(prep: &Prepared, x: &[f64], psf: [f64; 2], axis: us
     }
 }
 
+/// Each node's RMS residual `√(Σ β w r² / Σ β w)` over the voxels of its
+/// faces at `x`.
+fn node_rms(prep: &Prepared, x: &[f64]) -> Vec<f64> {
+    let (wr2, w) = prep.node_residuals(x);
+    wr2.iter().zip(&w).map(|(a, b)| (a / b.max(1e-300)).sqrt()).collect()
+}
+
 /// Assess the fit `x` of `prep` (PSF `psf` along `axis`).
 pub(super) fn assess(prep: &Prepared, x: &[f64], psf: [f64; 2], axis: usize) -> Reliability {
     let band = prep.problem.band;
+    let st = crate::stage!("noise");
     let (noise_sd, rho, step) = noise(prep, x);
+    crate::done!(
+        st,
+        "sd {noise_sd:.2}, lag-one correlation per axis {rho:.3?} (grid step {step}), from {} soft-tissue voxels",
+        band.soft.len()
+    );
     let factor = rho.iter().map(|&r| (1.0 + r) / (1.0 - r)).product::<f64>();
-    let moments = prep.node_moments(x, &Correlation { rho, step });
+    let st = crate::stage!("node moments (standard errors)");
+    let cor = Correlation { rho, step };
+    let moments = prep.node_moments(x, &cor);
+    crate::done!(
+        st,
+        "{} nodes; correlated pairs within {:?} grid steps",
+        prep.lay.nodes,
+        cor.reach()
+    );
+    let st = crate::stage!("data share");
     let (_, _, lin) = prep.linearise(x);
     let share = prep.data_share(&lin);
+    st.end();
     let lay = &prep.lay;
     let (n, nfc) = (lay.nodes, lay.fields.len());
     let t_field = lay.fields.iter().position(|&c| c == T);
-    let residual: Vec<f64> = (0..n)
-        .map(|v| (moments.wr2[v] / moments.w[v].max(1e-300)).sqrt())
-        .collect();
+    let residual = node_rms(prep, x);
     let std_error_t = (0..n)
         .map(|v| match t_field {
             Some(ti) => {
@@ -137,7 +153,7 @@ fn noise(prep: &Prepared, x: &[f64]) -> (f64, [f64; 3], u32) {
     let r: Vec<f64> = positions
         .iter()
         .zip(&model)
-        .map(|(&e, &m)| band.value[e as usize] as f64 - m)
+        .map(|(&e, &m)| band.value(e as usize) - m)
         .collect();
     if r.is_empty() {
         return (f64::NAN, [0.0; 3], 1);

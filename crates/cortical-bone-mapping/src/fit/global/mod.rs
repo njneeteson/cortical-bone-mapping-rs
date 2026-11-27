@@ -107,15 +107,20 @@ pub struct State {
 pub struct Settings {
     /// Maximum number of linear solves (accepted and rejected trial steps).
     pub max_iterations: usize,
-    pub ftol: f64,
+    /// Largest scaled gradient at convergence (dimensionless; [`solve()`]).
     pub gtol: f64,
+    /// Smallest step, as a change of the predictions in units of the noise
+    /// (dimensionless; [`solve()`]).
     pub xtol: f64,
     /// Maximum CG iterations per linear solve.
     pub cg_max_iterations: usize,
     /// Relative CG residual reached near convergence. Solves stop at the
-    /// looser forcing term `min(0.1, sqrt(g))` (`g` the scaled gradient)
-    /// while far from it (inexact Newton).
+    /// looser forcing term `min(cg_forcing, sqrt(g))` (`g` the scaled
+    /// gradient) while far from it (inexact Newton).
     pub cg_tolerance: f64,
+    /// The loosest relative CG residual of a linear solve (the forcing
+    /// term's cap).
+    pub cg_forcing: f64,
     /// Maximum CG iterations over the whole solve: bounds the work when the
     /// problem is badly posed (status `MaxIterations`).
     pub cg_max_total: usize,
@@ -133,12 +138,12 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             max_iterations: 100,
-            ftol: 1e-6,
             gtol: 1e-6,
-            xtol: 1e-10,
+            xtol: 1e-3,
             cg_max_iterations: 200,
             cg_max_total: 2000,
             cg_tolerance: 1e-3,
+            cg_forcing: 0.1,
             progress_every: 0,
             edge_tol: 0.0,
         }

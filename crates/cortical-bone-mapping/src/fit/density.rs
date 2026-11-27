@@ -68,7 +68,7 @@ pub(crate) fn cortical_density(
     given: Option<f64>,
     o: &Options,
 ) -> Result<(f64, Option<Vec<f64>>), Error> {
-    Ok(match o.model.rho_c_mode {
+    let out = match o.model.rho_c_mode {
         RhoCMode::Fixed => (given.unwrap_or(o.model.rho_c), None),
         RhoCMode::Estimate => match given {
             Some(rc) => (rc, None),
@@ -98,7 +98,14 @@ pub(crate) fn cortical_density(
             });
             (rc, Some(node))
         }
-    })
+    };
+    log::debug!(
+        "cortical density ({:?}{}): rho_c {:.1}",
+        o.model.rho_c_mode,
+        if given.is_some() { ", given" } else { "" },
+        out.0
+    );
+    Ok(out)
 }
 
 /// The maximum of each profile over the samples used (the per-node density of
@@ -159,7 +166,8 @@ fn estimate_rho_c(data: &Data, maxima: Vec<f64>) -> f64 {
     let (profiles, x, o) = (data.profiles, data.x, data.options);
     let n = profiles.n;
     let mut rc = quantile(maxima, 0.9);
-    for _ in 0..2 {
+    log::debug!("rho_c estimate: start from the 90th percentile of the profile maxima, {rc:.1}");
+    for round in 0..2 {
         let d = Data { rho_c: rc, ..*data };
         let g = fit_one_model(&d, o.model.init, None);
         let fits = local::fit_all(profiles, x, data.weights, rc, &vec![g; n], &local_settings(o, true));
@@ -182,9 +190,18 @@ fn estimate_rho_c(data: &Data, maxima: Vec<f64>) -> f64 {
             })
             .collect();
         if plateaus.len() < 10 {
+            log::warn!(
+                "rho_c estimate: only {} of {n} nodes show a cortical plateau (cortex wider than 4 sigma);                  keeping {rc:.1}",
+                plateaus.len()
+            );
             break;
         }
+        let count = plateaus.len();
         rc = quantile(plateaus, 0.5);
+        log::debug!(
+            "rho_c estimate, round {}: {rc:.1}, the median plateau of {count} of {n} nodes",
+            round + 1
+        );
     }
     rc
 }

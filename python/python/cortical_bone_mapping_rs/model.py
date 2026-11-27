@@ -39,7 +39,7 @@ def fit_profiles(
     max_iterations: int = 100,
     ftol: float = 1e-8,
     gtol: float = 1e-8,
-    xtol: float = 1e-10,
+    xtol: float = 1e-3,
 ) -> dict:
     """Fit the profile model independently to each row of ``profiles``.
 

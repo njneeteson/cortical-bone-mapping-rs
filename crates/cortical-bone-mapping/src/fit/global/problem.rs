@@ -59,6 +59,27 @@ impl<'a> Problem<'a> {
         }
     }
 
+    /// The data weight of every dof (`Σ_j w_ij` of its node, or `Aᵀ` of the
+    /// nodes' for multigrid control points) and of all samples, in the
+    /// cost's normalisation (the solver's stopping tests).
+    pub(super) fn data_weights(&self, lay: &Layout) -> (Vec<f64>, f64) {
+        let w = self.scaled_weights();
+        let node: Vec<f64> = (0..lay.n)
+            .into_par_iter()
+            .map(|i| self.profiles.row_weights(i, &w).iter().sum())
+            .collect();
+        let total = det_sum(lay.n, |i| node[i]);
+        let dof = match self.interp {
+            Some(a) => {
+                let mut out = vec![0.0; a.ncols];
+                a.apply_t(&node, &mut out);
+                out
+            }
+            None => node,
+        };
+        (dof, total)
+    }
+
     /// Node values of one field channel's dofs (`A v` or `v`).
     fn to_nodes(&self, lay: &Layout, dofs: &[f64]) -> Vec<f64> {
         match self.interp {

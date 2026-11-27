@@ -229,8 +229,11 @@ pub(crate) fn estimate_from_fits(
     );
     let ps: Vec<Params> = fits.iter().map(|f| f.params).collect();
     let (lo, hi) = (o.model.lower[SIGMA], o.model.upper[SIGMA]);
-    let est = estimate_psf(normals, &ps, model, min_ratio, lo, hi)
-        .ok_or_else(|| Error::InvalidOption("too few nodes with a thick cortex to estimate the PSF".into()))?;
+    let est = estimate_psf(normals, &ps, model, min_ratio, lo, hi).ok_or_else(|| {
+        log::warn!("PSF estimate: too few nodes with a thick cortex");
+        Error::InvalidOption("too few nodes with a thick cortex to estimate the PSF".into())
+    })?;
+    log::debug!("PSF estimate ({model:?}): {est:.3?} from {} local fits", ps.len());
     Ok(est.map(|v| v.clamp(lo, hi)))
 }
 

@@ -83,6 +83,7 @@ pub(crate) fn run<'py>(
     sub_mask: Option<PyReadonlyArray3<'py, u8>>,
     options: &Bound<'py, PyDict>,
 ) -> PyResult<Bound<'py, PyDict>> {
+    crate::logs::refresh();
     let opts = parse_options(options)?;
     let m = mask.as_array();
     let s: Option<ArrayView3<'_, u8>> = sub_mask.as_ref().map(|s| s.as_array());
@@ -102,6 +103,7 @@ pub(crate) fn mask_surface<'py>(
     mask: PyReadonlyArray3<'py, u8>,
     options: &Bound<'py, PyDict>,
 ) -> PyResult<SurfaceArrays<'py>> {
+    crate::logs::refresh();
     let opts = parse_options(options)?;
     let m = mask.as_array();
     let (mesh, border) = py.detach(|| cbm::pipeline::prepare_surface(&m, &opts));
@@ -120,6 +122,7 @@ pub(crate) fn refine<'py>(
     refine: &Bound<'py, PyDict>,
     exclude: Option<PyReadonlyArray3<'py, u8>>,
 ) -> PyResult<Bound<'py, PyDict>> {
+    crate::logs::refresh();
     let opts = parse_options(options)?;
     let ro = parse_refine(refine)?;
     let m = mask.as_array();
@@ -131,9 +134,9 @@ pub(crate) fn refine<'py>(
     let d = PyDict::new(py);
     d.set_item("result", result_dict(py, &r.result)?)?;
     d.set_item("endosteal_vertices", v3_array(py, &r.endosteal.vertices))?;
-    d.set_item("periosteal_mask", r.periosteal_mask.into_pyarray(py))?;
-    d.set_item("endosteal_mask", r.endosteal_mask.into_pyarray(py))?;
-    d.set_item("cortical_mask", r.cortical_mask.into_pyarray(py))?;
+    d.set_item("periosteal_mask", r.periosteal_mask.map(|m| m.into_pyarray(py)))?;
+    d.set_item("endosteal_mask", r.endosteal_mask.map(|m| m.into_pyarray(py)))?;
+    d.set_item("cortical_mask", r.cortical_mask.map(|m| m.into_pyarray(py)))?;
     d.set_item("history", history_list(py, &r.history)?)?;
     let surfs = PyList::empty(py);
     let sfaces = PyList::empty(py);
@@ -205,6 +208,7 @@ pub(crate) fn fit_profiles<'py>(
     Bound<'py, numpy::PyArray1<u32>>,
     Bound<'py, numpy::PyArray1<bool>>,
 )> {
+    crate::logs::refresh();
     let p = profiles.as_array();
     let (n, m) = p.dim();
     if m != x.len() {

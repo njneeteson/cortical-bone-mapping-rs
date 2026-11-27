@@ -62,6 +62,7 @@ impl SmoothingOperator {
                 },
             };
         }
+        let s = crate::stage!("smoothing operator");
         let mut cols = vec![0u32; n * k];
         let mut vals = vec![0f32; n * k];
         let mut counts = vec![0usize; n];
@@ -100,6 +101,13 @@ impl SmoothingOperator {
             cols.shrink_to_fit();
             vals.shrink_to_fit();
         }
+        crate::done!(
+            s,
+            "{n} nodes, {k} neighbours within {:.3} (sigma {sigma}): {w} weights, {:.1} per node, {:.1} MB",
+            r2.sqrt(),
+            w as f64 / n.max(1) as f64,
+            (w * 8) as f64 / 1e6
+        );
         SmoothingOperator {
             rows: SparseRows {
                 offsets,

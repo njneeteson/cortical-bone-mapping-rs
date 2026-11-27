@@ -76,7 +76,11 @@ pub(crate) fn node_reach<T: Voxel>(image: &ArrayView3<T>, points: &[V3], normals
         })
         .collect();
     let (low, high) = levels(&profiles, n_out, spec.outside, step);
-    let (outside, inside) = profiles
+    log::debug!(
+        "adaptive band: soft-tissue level {low:.1}, bone level {high:.1}, cap {}x",
+        spec.cap
+    );
+    let (outside, inside): (Vec<f64>, Vec<f64>) = profiles
         .par_iter()
         .map(|prof| {
             let outward: Vec<f64> = prof[..=n_out].iter().rev().copied().collect();
@@ -86,6 +90,12 @@ pub(crate) fn node_reach<T: Voxel>(image: &ArrayView3<T>, points: &[V3], normals
             (o.clamp(spec.outside, out_max), i.clamp(spec.inside, in_max))
         })
         .unzip();
+    log::debug!(
+        "adaptive band: median reach outside {:.2}, inside {:.2} ({} nodes)",
+        crate::util::median(&outside),
+        crate::util::median(&inside),
+        outside.len()
+    );
     Reach { outside, inside }
 }
 

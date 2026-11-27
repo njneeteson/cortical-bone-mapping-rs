@@ -33,9 +33,16 @@
 //! Stopping (as in MINPACK; Moré 1978): the scaled gradient
 //! `max_a |g_a| / (‖J_a‖ ‖r‖)` over the active variables, the cosine of the
 //! angle between the residual and a Jacobian column, below `gtol`; an accepted
-//! step reducing `F` by less than `ftol` (relative); the step, scaled by the
-//! column norms `‖J_a‖ = √H_aa`, below `xtol` relative to `p`; `μ > 10¹⁶`; or
-//! `max_iterations` trial steps.
+//! step reducing `F` by less than `ftol` (relative); an accepted step below
+//! `xtol`, taken where the scaled gradient is within `√gtol` (a rejected step
+//! is short because of the damping, and far from the solution the residual is
+//! misfit rather than noise), as the largest change it makes in the
+//! predictions, in units of the noise,
+//! `max_a √(H_aa / W) |s_a| / σ_r` (`W = Σ w`, `σ_r = √(2F / W)`), which,
+//! unlike a step relative to `p`, does not depend on where the units put
+//! their zero (densities in HU or mg HA/cm³); `μ > 10¹⁶`; or
+//! `max_iterations` trial steps. All are measured on the profile itself, so
+//! none depends on how many profiles are fitted.
 //!
 //! Every node is independent, so nodes are fitted in parallel with no shared
 //! state.
@@ -168,6 +175,7 @@ pub fn fit_profile(y: &[f32], x: &[f64], w: &[f64], rho_c: f64, init: &Params, s
         }
     }
     let mut ne = normal_eq(y, x, w, rho_c, &p);
+    let weight: f64 = w.iter().sum();
     let mut mu = 1e-3;
     let mut nu = 2.0;
     let mut status = Status::MaxIterations;
@@ -181,10 +189,13 @@ pub fn fit_profile(y: &[f32], x: &[f64], w: &[f64], rho_c: f64, init: &Params, s
         }
         let pn = active.trial_point(&p, &ne, mu, s);
         let step: Params = std::array::from_fn(|a| pn[a] - p[a]);
-        if negligible(&ne, &p, &step, s.xtol) {
+        if step.iter().all(|&d| d == 0.0) {
             status = Status::Xtol;
             break;
         }
+        // tested on accepted steps only: a rejected step is short because of
+        // the damping, not because the fit has converged
+        let small = negligible(&ne, &step, weight, s.xtol) && active.gmax <= s.gtol.sqrt();
         let pred = predicted_decrease(&ne, &step);
         let cn = cost_only(y, x, w, rho_c, &pn);
         let actual = ne.cost - cn;
@@ -197,6 +208,10 @@ pub fn fit_profile(y: &[f32], x: &[f64], w: &[f64], rho_c: f64, init: &Params, s
             nu = 2.0;
             if actual <= s.ftol * prev {
                 status = Status::Ftol;
+                break;
+            }
+            if small {
+                status = Status::Xtol;
                 break;
             }
         } else {
@@ -278,17 +293,18 @@ impl Active {
     }
 }
 
-/// The step, scaled by the Jacobian column norms `√H_aa`, is below `xtol`
-/// relative to `p` in the same norm: `‖D s‖ ≤ xtol (‖D p‖ + xtol)`.
-fn negligible(ne: &Normal, p: &Params, step: &Params, xtol: f64) -> bool {
-    let mut snorm = 0.0;
-    let mut pnorm = 0.0;
-    for a in 0..NPARAM {
-        let d = ne.h[sym5(a, a)].max(1e-300).sqrt();
-        snorm += (d * step[a]).powi(2);
-        pnorm += (d * p[a]).powi(2);
+/// The step changes the predictions by at most `xtol` of the noise:
+/// `max_a √(H_aa / W) |s_a| ≤ xtol σ_r`, `σ_r = √(2F / W)` (module
+/// documentation). A perfect fit (`F = 0`) has nothing left to change.
+fn negligible(ne: &Normal, step: &Params, weight: f64, xtol: f64) -> bool {
+    let sigma = (2.0 * ne.cost / weight.max(1e-300)).sqrt();
+    if !(sigma > 0.0) {
+        return true;
     }
-    snorm.sqrt() <= xtol * (pnorm.sqrt() + xtol)
+    let largest = (0..NPARAM)
+        .map(|a| (ne.h[sym5(a, a)].max(0.0) / weight.max(1e-300)).sqrt() * step[a].abs())
+        .fold(0.0, f64::max);
+    largest <= xtol * sigma
 }
 
 /// The cost decrease the Gauss–Newton model predicts for the actual step `s`,
@@ -316,9 +332,10 @@ pub fn fit_all(
     init: &[Params],
     settings: &FitSettings,
 ) -> Vec<LocalFit> {
+    let s = crate::stage!("local fits");
     let wsum: f64 = weights.iter().sum();
     let w: Vec<f64> = weights.iter().map(|v| v / wsum).collect();
-    (0..profiles.n)
+    let fits: Vec<LocalFit> = (0..profiles.n)
         .into_par_iter()
         .map(|i| {
             let p0 = if init.len() == 1 { &init[0] } else { &init[i] };
@@ -333,7 +350,9 @@ pub fn fit_all(
                 }
             }
         })
-        .collect()
+        .collect();
+    crate::done!(s, "{} profiles", fits.len());
+    fits
 }
 
 /// The local method: fit every node's profile independently from its start.
@@ -350,6 +369,11 @@ pub(crate) fn fit_nodes(data: &Data, start: &Start, info: &mut FitInfo) -> Vec<P
     let n = fits.len();
     info.converged = fits.iter().filter(|f| f.status.converged()).count() as f64 / n as f64;
     info.iterations = fits.iter().map(|f| f.iterations as usize).max().unwrap_or(0);
+    log::debug!(
+        "local fits: {n} nodes, {:.1} % converged, at most {} iterations",
+        100.0 * info.converged,
+        info.iterations
+    );
     fits.iter().map(|f| f.params).collect()
 }
 

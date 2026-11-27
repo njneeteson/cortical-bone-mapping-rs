@@ -39,14 +39,13 @@
 //!   optimization*, Computers in Biology and Medicine, 2025,
 //!   doi:10.1016/j.compbiomed.2025.110636.
 
-use std::time::Instant;
-
 use super::global::{self, Problem, Role, Smoothing, State};
-use super::{base_roles, local, local_settings, Data, FitConstraints, Nodes, Start};
+use super::{base_roles, cortical_contrast, local, local_settings, Data, FitConstraints, Nodes, Start};
 use crate::model::{Params, M, NPARAM, RHO_B, RHO_S, SIGMA, T};
 use crate::operators::{CurvatureMode, CurvatureOperator, Neighbours, SmoothingOperator, SurfaceLaplacian};
 use crate::options::{CurvatureOptions, Method};
 use crate::result::FitInfo;
+use crate::units::{Dimensionless, IntensityContrast, IntensityContrastSq, Length, Quantity, N2, P2};
 
 /// Fit with [`Method::Regularized`]; returns the parameters per node.
 pub(crate) fn fit(
@@ -71,17 +70,26 @@ pub(crate) fn fit(
     let (o, rho_c, points) = (data.options, data.rho_c, &nodes.mesh.vertices);
     let first = first_estimate(data, start, *init_from_local);
     let (roles, fixed) = roles(data, start, constraints);
+    log::debug!(
+        "regularised fit: {} nodes, lambda {lambda}, sigma_reg {sigma}, {neighbours} neighbours, roles {roles:?}, \n         curvature {}, start from {}",
+        points.len(),
+        curvature.as_ref().map_or("none".to_string(), |c| format!("{:?}", c.mode)),
+        if *init_from_local { "local fits" } else { "the node starts" }
+    );
 
-    // penalties, weighted relative to the global model
-    let base = lambda * rho_c * rho_c / points.len() as f64;
-    let t_op = Instant::now();
+    // penalties, weighted relative to the global model: the squared contrast
+    // of the cortex against soft tissue per node (Neeteson & Boyd 2025 use
+    // ρc², which depends on where the image's units put their zero)
+    let contrast = cortical_contrast(rho_c, start.global[RHO_S]);
+    let base: IntensityContrastSq = contrast * contrast * (lambda / points.len() as f64);
+    let t_op = crate::stage!("smoothing operator");
     let near = Neighbours::new(nodes.mesh, o.distance());
     let op = (*lambda > 0.0).then(|| SmoothingOperator::new(&near, *neighbours, *sigma, *cutoff));
-    timings.push(("smoothing operator".to_string(), t_op.elapsed().as_secs_f64()));
-    let coef = smoothing_weights(data, start, &roles, base);
+    timings.push(("smoothing operator".to_string(), t_op.end()));
+    let coef = smoothing_weights(data, start, &roles, base, contrast);
     let curv = curvature
         .as_ref()
-        .map(|c| curvature_operator(c, nodes, &near, rho_c, start.global[T].max(1e-6)));
+        .map(|c| curvature_operator(c, nodes, &near, contrast, start.global[T].max(1e-6)));
 
     let pr = Problem {
         profiles: data.profiles,
@@ -157,28 +165,41 @@ fn roles<'a>(
 
 /// Smoothing weights `κ_c`: `base` over the squared scale of each parameter
 /// (global thickness and blur; densities relative to the cortical density).
-fn smoothing_weights(data: &Data, start: &Start, roles: &[Role; NPARAM], base: f64) -> Params {
-    let t0g = start.global[T].max(1e-6);
-    let s0g = start.global[SIGMA].max(1e-6);
+///
+/// The smoothing cost `½ κ ‖ω v‖²` has the units of the data cost (squared
+/// intensity contrast): `κ` is a contrast² per length² for `m`, `t`, `σ`
+/// (relative to the global thickness and blur) and a plain number for the
+/// densities (relative to the contrast).
+fn smoothing_weights(
+    data: &Data,
+    start: &Start,
+    roles: &[Role; NPARAM],
+    base: IntensityContrastSq,
+    contrast: IntensityContrast,
+) -> Params {
+    let t0 = Length::new(start.global[T].max(1e-6));
+    let s0 = Length::new(start.global[SIGMA].max(1e-6));
+    let length_weight = |l: Length| -> Quantity<N2, P2> { base / (l * l) };
     let mut coef = [0.0; NPARAM];
-    coef[M] = base / (t0g * t0g);
-    coef[T] = base / (t0g * t0g);
+    coef[M] = length_weight(t0).value();
+    coef[T] = length_weight(t0).value();
     if start.sigma_fixed.is_none() && roles[SIGMA] == Role::Field {
-        coef[SIGMA] = base / (s0g * s0g);
+        coef[SIGMA] = length_weight(s0).value();
     }
-    let cd = data.options.model.density_smoothing * base / (data.rho_c * data.rho_c);
-    coef[RHO_S] = cd;
-    coef[RHO_B] = cd;
+    let density: Dimensionless = base / (contrast * contrast) * data.options.model.density_smoothing;
+    coef[RHO_S] = density.value();
+    coef[RHO_B] = density.value();
     coef
 }
 
 /// The curvature penalty on the fitted surfaces; lengths default to the
-/// global thickness `t0`.
+/// global thickness `t0`. Its residuals (a curvature times a length, or its
+/// gradient times a length², times `contrast`) have the units of the data's.
 pub(crate) fn curvature_operator(
     c: &CurvatureOptions,
     nodes: &Nodes,
     near: &Neighbours,
-    rho_c: f64,
+    contrast: IntensityContrast,
     t0: f64,
 ) -> CurvatureOperator {
     let points = &nodes.mesh.vertices;
@@ -191,7 +212,7 @@ pub(crate) fn curvature_operator(
     };
     let scale = |w: f64, on: bool| {
         if on {
-            (w / points.len() as f64).sqrt() * rho_c * lengths
+            ((w / points.len() as f64).sqrt() * contrast).value() * lengths
         } else {
             0.0
         }

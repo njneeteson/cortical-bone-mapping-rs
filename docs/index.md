@@ -10,7 +10,7 @@ tissue, cortex, trabecular bone): the cortical thickness `t`, the position
 `m` of the cortex, the blur `σ` and the soft-tissue and trabecular
 densities.
 
-![Volumetric refinement of both knees of a clinical CT](images/knee_refinement.gif)
+![Volumetric refinement of both knees of a clinical CT](../examples/images/knee_refinement.gif)
 
 *Refinement of all eight bones of a clinical CT of both knees, from a rough
 automatic segmentation (yellow dashed) to the fitted periosteal surfaces,
@@ -45,7 +45,8 @@ rr.periosteal_mask, rr.endosteal_mask, rr.cortical_mask
   bones](guide/several_bones.md) in one scan.
 - [Examples](examples.md): every method on phantoms and on a clinical CT of
   both knees. [Benchmarks](benchmarks.md): run time and memory.
-- [Method](method.md) and the [API reference](api.md).
+- [Method](method.md), [architecture](architecture.md) (how the code fits
+  together) and the [API reference](api.md).
 
 ```{toctree}
 :hidden:
@@ -74,6 +75,7 @@ benchmarks
 :caption: Reference
 
 method
+architecture
 api
 ```
 

@@ -13,5 +13,7 @@ crate-type = ["cdylib"]
 [dependencies]
 cortical-bone-mapping = { path = "../crates/cortical-bone-mapping" }
 ndarray.workspace = true
+log.workspace = true
+pyo3-log = "0.13"
 numpy = "0.30"
 pyo3 = { version = "0.30", features = ["extension-module", "abi3-py310"] }

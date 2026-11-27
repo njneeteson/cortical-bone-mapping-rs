@@ -41,13 +41,15 @@
 //!   Analysis 20(1):249–264, 2015.
 
 pub(crate) mod band;
+#[cfg(feature = "bench")]
+pub mod bench;
 pub(crate) mod problem;
+mod quantise;
 mod reach;
 mod reliability;
+pub(crate) mod start;
 #[cfg(test)]
 mod tests;
-
-use std::time::Instant;
 
 use ndarray::ArrayView3;
 
@@ -57,13 +59,14 @@ use self::reach::{node_reach, uniform_reach, Reach, ReachSpec};
 use super::global::{minimise, Role};
 use super::profiles::{sampling_normals, NormalConstraint};
 use super::regularized::curvature_operator;
-use super::{global_settings, held_subset, FitConstraints, Nodes};
+use super::{cortical_contrast, global_settings, held_subset, FitConstraints, Nodes};
 use crate::error::Error;
 use crate::model::{Params, M as PM, RHO_B as PRB, RHO_S as PRS, SIGMA as PS, T as PT};
 use crate::operators::{CurvatureOperator, Neighbours, SmoothingOperator};
 use crate::options::{AxialBlur, Options, VolumetricOptions};
 use crate::result::{CbmResult, FitInfo, VolumetricInfo};
 use crate::surface::mesh::Mesh;
+use crate::units::{Length, Quantity, N2, P2};
 use crate::util::{dot, scale, V3};
 use crate::volume::{Geometry, Voxel};
 
@@ -79,21 +82,37 @@ pub(crate) fn fit_surface<T: Voxel>(
     warm_start: Option<&[Option<Params>]>,
     c: &FitConstraints,
 ) -> Result<CbmResult, Error> {
-    let t0 = Instant::now();
+    let st = crate::stage!("band");
     let mut timings = Vec::new();
     let (d0, d1, d2) = image.dim();
     let cut = ImageEdge::new([d0, d1, d2], &options.geometry);
     let nodes = FitNodes::new(&surface, keep, options.sampling.normal_constraint, &cut)?;
     let reach = band_reach(image, &nodes, options, v);
     let mut spec = band_spec(options, v, c.exclude);
+    spec.grid = reliability_wanted(options, c);
     if v.adaptive_band.is_some() {
         spec.face_reach = Some(face_reach(&nodes.mesh, &reach));
     }
     let band = Band::build(image, &surface, &nodes.fitted, nodes.mesh.faces.len(), &spec);
     if band.is_empty() {
+        log::warn!("the volumetric band is empty");
         return Err(Error::NoNodes);
     }
-    timings.push(("band".to_string(), t0.elapsed().as_secs_f64()));
+    timings.push((
+        "band".to_string(),
+        crate::done!(
+            st,
+            "{} nodes, {} fitted faces, {} voxels ({:.1} per node), outside {} / inside {}{}, stride {}",
+            nodes.ids.len(),
+            nodes.mesh.faces.len(),
+            band.len(),
+            band.len() as f64 / nodes.ids.len() as f64,
+            options.sampling.outside,
+            options.sampling.inside,
+            if v.adaptive_band.is_some() { " (adaptive)" } else { "" },
+            v.voxel_stride
+        ),
+    ));
     let held = held_subset(c.fixed, warm_start, &nodes.ids)?;
     let fit = Fit::new(&band, &nodes, options, v, *c, held.as_deref());
     let mut info = FitInfo {
@@ -101,16 +120,17 @@ pub(crate) fn fit_surface<T: Voxel>(
         ..Default::default()
     };
     let rho_c = fit.rho_c();
-    let tg = Instant::now();
+    let st = crate::stage!("global fit");
     let global = fit.global_stage(rho_c, &mut info);
-    timings.push(("global fit".to_string(), tg.elapsed().as_secs_f64()));
-    let tf = Instant::now();
+    timings.push((
+        "global fit".to_string(),
+        crate::done!(
+            st,
+            "rho_c {rho_c:.1}; [m, t, rho_s, rho_b, sigma_xy, sigma_z] = {global:.3?}"
+        ),
+    ));
     let starts = fit.node_starts(&global, warm_start);
-    let x = fit.field_stage(rho_c, &global, &starts, &mut info);
-    timings.push(("volumetric fit".to_string(), tf.elapsed().as_secs_f64()));
-    let tr = Instant::now();
-    let out = fit.outputs(rho_c, &global, &x);
-    timings.push(("reliability".to_string(), tr.elapsed().as_secs_f64()));
+    let out = fit.field_stage(rho_c, &global, &starts, &mut info, &mut timings);
     timings.append(&mut info.timings);
     info.timings = timings;
     Ok(CbmResult {
@@ -273,7 +293,14 @@ fn band_spec<'a>(o: &'a Options, v: &VolumetricOptions, exclude: Option<ArrayVie
         exclude,
         stride: v.voxel_stride,
         face_reach: None,
+        grid: false,
     }
+}
+
+/// Whether the reliability outputs are wanted: by the options, and not in
+/// refinement's intermediate fits.
+fn reliability_wanted(o: &Options, c: &FitConstraints) -> bool {
+    o.reliability && !c.skip_reliability && c.edge_tol == 0.0
 }
 
 /// What the stages of one fit share.
@@ -395,11 +422,15 @@ impl<'a, 'c> Fit<'a, 'c> {
     ) -> VolumetricProblem<'p> {
         let (roles, tied) = self.roles(fields);
         // the regularised method's weights: λ/N on the densities (relative to
-        // ρc), λ ρc² / (N t0²) on m and t (relative to the global thickness)
+        // the contrast), λ (ρc − ρs)² / (N t0²) on m and t (relative to the
+        // global thickness), so that the smoothing costs have the units of
+        // the data cost (squared contrast)
         let nn = self.nodes.ids.len() as f64;
         let kappa = self.v.lambda / nn;
-        let t0 = scalars[T].max(1e-6);
-        let kappa_edges = self.v.edge_lambda * rho_c * rho_c / (nn * t0 * t0);
+        let t0 = Length::new(scalars[T].max(1e-6));
+        let contrast = cortical_contrast(rho_c, scalars[RHO_S]);
+        let kappa_edges: Quantity<N2, P2> = contrast * contrast * self.v.edge_lambda / (t0 * t0 * nn);
+        let kappa_edges = kappa_edges.value();
         VolumetricProblem {
             band: self.band,
             faces: &self.nodes.mesh.faces,
@@ -482,41 +513,45 @@ impl<'a, 'c> Fit<'a, 'c> {
             mesh: &self.nodes.mesh,
             normals: &self.nodes.normals,
         };
-        self.v
-            .curvature
-            .as_ref()
-            .map(|cv| curvature_operator(cv, &nodes, &self.neighbours, rho_c, global[T].max(1e-6)))
+        self.v.curvature.as_ref().map(|cv| {
+            let contrast = cortical_contrast(rho_c, global[RHO_S]);
+            curvature_operator(cv, &nodes, &self.neighbours, contrast, global[T].max(1e-6))
+        })
     }
 
-    /// Stage 3: the field fit from `starts`; returns the variables.
-    fn field_stage(&self, rho_c: f64, global: &[f64; NV], starts: &[[f64; 4]], info: &mut FitInfo) -> Vec<f64> {
+    /// Stages 3 and 5: the field fit from `starts`, then the outputs at its
+    /// solution, on the same prepared problem.
+    fn field_stage(
+        &self,
+        rho_c: f64,
+        global: &[f64; NV],
+        starts: &[[f64; 4]],
+        info: &mut FitInfo,
+        timings: &mut Vec<(String, f64)>,
+    ) -> Outputs {
+        let st = crate::stage!("volumetric fit");
         let curv = self.curvature(rho_c, global);
         let pr = self.problem(true, rho_c, global, curv.as_ref());
         let prep = Prepared::new(&pr);
-        let mut x = Vec::with_capacity(prep.lay.fields.len() * starts.len() + prep.lay.globals.len());
-        for &c in &prep.lay.fields {
-            x.extend(starts.iter().map(|s| s[c]));
-        }
-        x.extend(prep.lay.globals.iter().map(|&c| global[c]));
+        let mut x = field_variables(&prep, global, starts);
         let settings = super::global::Settings {
             edge_tol: self.c.edge_tol,
             ..global_settings(self.o)
         };
         let si = minimise(&prep, &mut x, &settings);
         info.add_solve(&si);
-        x
+        timings.push(("volumetric fit".to_string(), st.end()));
+        self.outputs(&prep, global, &x, timings)
     }
 
-    /// Stage 5: node parameters, residuals and reliability at `x` (only the
-    /// residuals for an inexact inner fit, `edge_tol > 0`).
-    fn outputs(&self, rho_c: f64, global: &[f64; NV], x: &[f64]) -> Outputs {
-        let curv = self.curvature(rho_c, global);
-        let pr = self.problem(true, rho_c, global, curv.as_ref());
-        let prep = Prepared::new(&pr);
+    /// Stage 5: node parameters, residuals and (unless not wanted) the
+    /// reliability outputs at `x`.
+    fn outputs(&self, prep: &Prepared, global: &[f64; NV], x: &[f64], timings: &mut Vec<(String, f64)>) -> Outputs {
+        let st = crate::stage!("outputs and reliability");
         let values = prep.node_values(x);
         let scalars: [f64; NV] = std::array::from_fn(|c| values[c].first().copied().unwrap_or(global[c]));
         let axis = self.v.scanner_axis;
-        let params = (0..self.nodes.ids.len())
+        let params: Vec<Params> = (0..self.nodes.ids.len())
             .map(|v| {
                 let a2 = self.nodes.normals[v][axis].powi(2);
                 let sn = (scalars[SXY].powi(2) * (1.0 - a2) + scalars[SZ].powi(2) * a2).sqrt();
@@ -531,12 +566,21 @@ impl<'a, 'c> Fit<'a, 'c> {
                 ]
             })
             .collect();
-        // inexact inner fits of a refinement only need the residuals
-        let rel = if self.c.edge_tol > 0.0 {
-            reliability::residuals_only(&prep, x, global_psf(&scalars), axis)
+        // only the residuals unless the reliability outputs are wanted
+        let rel = if reliability_wanted(self.o, &self.c) {
+            reliability::assess(prep, x, global_psf(&scalars), axis)
         } else {
-            reliability::assess(&prep, x, global_psf(&scalars), axis)
+            log::debug!("reliability outputs not computed (not wanted, or an intermediate fit): residuals only");
+            reliability::residuals_only(prep, x, global_psf(&scalars), axis)
         };
+        let t = crate::done!(
+            st,
+            "psf ({:.3}, {:.3}), median thickness {:.3}",
+            scalars[SXY],
+            scalars[SZ],
+            crate::util::median(&params.iter().map(|p: &Params| p[PT]).collect::<Vec<_>>())
+        );
+        timings.push(("reliability".to_string(), t));
         Outputs {
             params,
             residual: rel.residual,
@@ -544,6 +588,17 @@ impl<'a, 'c> Fit<'a, 'c> {
             info: rel.info,
         }
     }
+}
+
+/// The field stage's variables: every field channel's node starts, then the
+/// globals.
+fn field_variables(prep: &Prepared, global: &[f64; NV], starts: &[[f64; 4]]) -> Vec<f64> {
+    let mut x = Vec::with_capacity(prep.lay.fields.len() * starts.len() + prep.lay.globals.len());
+    for &c in &prep.lay.fields {
+        x.extend(starts.iter().map(|s| s[c]));
+    }
+    x.extend(prep.lay.globals.iter().map(|&c| global[c]));
+    x
 }
 
 /// The PSF `(σ_xy, σ_z)` of a set of scalars.

@@ -175,7 +175,8 @@ class RefineResult:
         The final fit on the refined surface.
     periosteal_mask, endosteal_mask, cortical_mask
         Boolean masks of the regions enclosed by the refined periosteal and
-        the fitted endosteal surfaces, and the cortex between them.
+        the fitted endosteal surfaces, and the cortex between them (``None``
+        if :attr:`RefineOptions.masks` is off).
     endosteal_vertices
         The fitted endosteal surface (faces: ``result.surface_faces``).
     history
@@ -205,9 +206,9 @@ class RefineResult:
     """
 
     result: CbmResult
-    periosteal_mask: np.ndarray
-    endosteal_mask: np.ndarray
-    cortical_mask: np.ndarray
+    periosteal_mask: Optional[np.ndarray]
+    endosteal_mask: Optional[np.ndarray]
+    cortical_mask: Optional[np.ndarray]
     endosteal_vertices: np.ndarray
     history: list
     surfaces: list

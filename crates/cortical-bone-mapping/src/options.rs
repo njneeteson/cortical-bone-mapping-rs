@@ -19,6 +19,13 @@ pub struct SurfaceOptions {
     pub taubin_lambda: f64,
     /// Skip nodes on caps where the mask touches the image edge.
     pub exclude_border: bool,
+    /// Extract the surface on every `grid_step`-th voxel of the image grid
+    /// (1 = every voxel): nodes about `grid_step` voxels apart, about
+    /// `grid_step²` times fewer of them. The surface is then the zero level
+    /// of the mask's exact signed distance, sampled on that coarser grid, so
+    /// its vertices keep sub-voxel positions. The data are still every voxel.
+    /// Not combined with `mask_smoothing`.
+    pub grid_step: usize,
 }
 
 impl Default for SurfaceOptions {
@@ -29,6 +36,7 @@ impl Default for SurfaceOptions {
             taubin_passband: 0.1,
             taubin_lambda: 0.5,
             exclude_border: true,
+            grid_step: 1,
         }
     }
 }
@@ -144,15 +152,27 @@ impl Default for ModelOptions {
     }
 }
 
-/// Stopping criteria shared by the local and global solvers.
+/// Stopping criteria shared by the local and global solvers. All are
+/// dimensionless and do not depend on the number of nodes, the units of
+/// lengths or of image values (nor their zero); see
+/// [`fit::global`](crate::fit::global) and [`fit::local`](crate::fit::local).
 #[derive(Clone, Debug, PartialEq)]
 pub struct SolverOptions {
     pub max_iterations: usize,
+    /// Relative cost decrease of an accepted step that ends a local
+    /// (per-profile) fit.
     pub ftol: f64,
+    /// Largest scaled gradient (the cosine between a variable's Jacobian
+    /// column and its residuals) at convergence.
     pub gtol: f64,
+    /// Smallest step, as the largest change of the predictions it makes, in
+    /// units of the noise (the RMS residual).
     pub xtol: f64,
     pub cg_max_iterations: usize,
     pub cg_tolerance: f64,
+    /// The loosest relative residual of a global solve's linear solves (the
+    /// cap of the inexact-Newton forcing term `min(cg_forcing, √g)`).
+    pub cg_forcing: f64,
     /// CG iterations allowed over one global solve (bounds the work on a
     /// badly posed problem; the fit is then flagged in
     /// [`FitInfo::budget_exhausted`](crate::result::FitInfo::budget_exhausted)).
@@ -168,9 +188,10 @@ impl Default for SolverOptions {
             max_iterations: 100,
             ftol: 1e-8,
             gtol: 1e-8,
-            xtol: 1e-10,
+            xtol: 1e-3,
             cg_max_iterations: 200,
             cg_tolerance: 1e-3,
+            cg_forcing: 0.1,
             cg_max_total: 2000,
             progress_every: 1,
         }
@@ -297,6 +318,10 @@ pub struct VolumetricOptions {
     /// edge, up to this multiple of the sampling range (`None`: the sampling
     /// range everywhere; see `fit::volumetric::reach`).
     pub adaptive_band: Option<f64>,
+    /// Start every node from its own 1D (local) fit, and the PSF from those
+    /// fits' blur, instead of from one model of all band voxels
+    /// ([`crate::fit::volumetric::start`]).
+    pub init_from_local: bool,
 }
 
 impl Default for VolumetricOptions {
@@ -318,6 +343,7 @@ impl Default for VolumetricOptions {
             }),
             voxel_stride: 1,
             adaptive_band: None,
+            init_from_local: false,
         }
     }
 }
@@ -435,6 +461,10 @@ pub struct Options {
     pub init_from_global: bool,
     /// Keep the sampled profiles in the result.
     pub keep_profiles: bool,
+    /// Compute the volumetric model's reliability outputs (noise level and
+    /// correlation, per-node standard error of `t`, data share, misfit).
+    /// They are only reported, never used by the fit or by refinement.
+    pub reliability: bool,
     /// Worker threads (`None` = all cores).
     pub threads: Option<usize>,
     /// How node neighbourhoods are measured for the regularisation operator
@@ -455,6 +485,7 @@ impl Default for Options {
             method: Method::Local,
             init_from_global: true,
             keep_profiles: false,
+            reliability: true,
             threads: None,
             neighbour_distance: None,
         }
@@ -576,6 +607,12 @@ impl Options {
         }
         if o.sampling.resolution.is_some_and(|r| !(r > 0.0)) {
             return bad("sampling resolution must be positive");
+        }
+        if o.surface.grid_step == 0 {
+            return bad("grid_step must be at least 1");
+        }
+        if o.surface.grid_step > 1 && o.surface.mask_smoothing > 0.0 {
+            return bad("grid_step > 1 extracts the surface from the mask's signed distance; set mask_smoothing to 0");
         }
         for c in 0..NPARAM {
             if !(o.model.lower[c] <= o.model.upper[c]) {

@@ -150,6 +150,21 @@ pub fn refine_segmentation_excluding<T: Voxel, U: Voxel, V: Voxel, W: Voxel>(
         options,
         refine,
     };
+    log::info!(
+        "refinement{}: image {:?}, method {}, level set {}, freezing {}, at most {} moves",
+        if refine.label.is_empty() {
+            String::new()
+        } else {
+            format!(" of {}", refine.label)
+        },
+        image.dim(),
+        options.method.name(),
+        refine.level_set,
+        refine.freeze.is_some(),
+        refine.max_iterations
+    );
+    log::debug!("options: {options:?}");
+    log::debug!("refine options: {refine:?}");
     with_threads(options.threads, || {
         let mut r = Refinement::start(inputs, &mask)?;
         let end = loop {
@@ -285,14 +300,20 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
         let max_spacing = geom.spacing.iter().cloned().fold(0.0, f64::max);
         let locked = locked_axes(&mesh, geom, dims.map(|v| v as f64));
         let pinned = locked.iter().map(|l| l.iter().any(|&b| b)).collect();
-        let tl = Instant::now();
-        let level_set = refine.level_set.then(|| {
-            let band = lim.max_move + 3.0 * max_spacing;
-            initial_level_set(&mesh, dims, band, inp.exclude.as_ref(), options)
-        });
-        if level_set.is_some() {
-            clock.since("level set: initialisation", tl);
-        }
+        log::debug!(
+            "surface: {} vertices, {} candidate nodes; tolerance {:.4} (regional {:.4} over {:.3}), \
+             relaxation {}, largest move {:.3}",
+            mesh.vertices.len(),
+            keep.iter().filter(|&&k| k).count(),
+            lim.tol,
+            lim.region_tol,
+            lim.region_radius,
+            lim.alpha,
+            lim.max_move
+        );
+        // the level set is built at the first move (a refinement that ends
+        // after its first fit never needs it)
+        let level_set = None;
         let freeze = refine
             .freeze
             .as_ref()
@@ -303,8 +324,10 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
             format!("refine {}", refine.label)
         };
         let tf = Instant::now();
+        log::debug!("initial fit");
         let first = FitConstraints {
             exclude: inp.exclude,
+            skip_reliability: true,
             ..FitConstraints::default()
         };
         let result = fit_surface_constrained(&inp.image, mesh.clone(), &keep, options, None, &first)?;
@@ -364,7 +387,7 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
             fz.thaw_moved(&mut self.state, &step);
         }
         for v in 0..self.mesh.vertices.len() {
-            let fixed_cap = self.level_set.is_some() && self.border[v] && !step.fitted[v];
+            let fixed_cap = self.inp.refine.level_set && self.border[v] && !step.fitted[v];
             if self.state.frozen[v] || fixed_cap {
                 step.disp[v] = [0.0; 3];
                 step.known[v] = true;
@@ -390,7 +413,7 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
         let s: Vec<f64> = (0..nv)
             .map(|v| (-dot(step.disp[v], outward[v])).clamp(-max_move, max_move))
             .collect();
-        let level_set = self.level_set.is_some();
+        let level_set = self.inp.refine.level_set;
         let mag = |v: usize| if level_set { s[v].abs() } else { norm(step.disp[v]) };
         let m2: Vec<f64> = moving_fitted.iter().map(|&v| mag(v).powi(2)).collect();
         let rms = (m2.iter().sum::<f64>() / moving_fitted.len().max(1) as f64).sqrt();
@@ -426,7 +449,7 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
 
     /// One progress line about the last fit.
     fn report(&self, st: &IterationStats) {
-        if !self.inp.refine.verbose {
+        if !self.inp.refine.verbose && !log::log_enabled!(log::Level::Debug) {
             return;
         }
         let moving_note = if self.freeze.is_some() {
@@ -434,7 +457,7 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
         } else {
             String::new()
         };
-        eprintln!(
+        let line = format!(
             "{}: {}: displacement RMS {:.3} max {:.3} regional {:.3} (tolerance {:.3} / {:.3}), \
              mean thickness {:.3}, {} untrusted{moving_note}, {}, {:.1} s",
             self.tag,
@@ -449,6 +472,10 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
             self.result.summary(),
             self.t0.elapsed().as_secs_f64()
         );
+        log::debug!("{line}");
+        if self.inp.refine.verbose {
+            eprintln!("{line}");
+        }
     }
 
     /// Converged (a full, converged fit that barely moves the surface), out
@@ -506,6 +533,32 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
     fn move_surface(&mut self, step: &Step, m: &Measured) -> Result<(), Error> {
         let tm = Instant::now();
         let options = self.inp.options;
+        let mv = crate::stage!("move");
+        // the level set's band: this move's largest displacement and a margin
+        // of grid steps (`LevelSet::set_band`)
+        let max_spacing = options.geometry.spacing.iter().cloned().fold(0.0, f64::max);
+        let band =
+            m.s.iter().fold(0.0f64, |a, &v| a.max(v.abs())) + band_margin(options.surface.grid_step) * max_spacing;
+        if self.inp.refine.level_set && self.level_set.is_none() {
+            let tl = Instant::now();
+            let (d0, d1, d2) = self.inp.image.dim();
+            let s = crate::stage!("level set: initialisation");
+            let ls = initial_level_set(
+                &self.mesh,
+                [d0, d1, d2],
+                band,
+                self.lim.max_move,
+                self.inp.exclude.as_ref(),
+                options,
+            );
+            crate::done!(s, "band {band:.3}");
+            self.level_set = Some(ls);
+            self.clock.since("level set: initialisation", tl);
+        } else if let Some(ls) = self.level_set.as_mut() {
+            let tb = Instant::now();
+            ls.set_band(&self.mesh, band);
+            self.clock.since("level set: band", tb);
+        }
         if let Some(ls) = self.level_set.as_mut() {
             let mut stages = Vec::new();
             let (e, map) = move_level_set(ls, &self.mesh, &m.outward, &m.s, self.inp.exclude.as_ref(), &mut stages);
@@ -540,6 +593,13 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
         }
         self.clock.since("moves", tm);
         self.moves += 1;
+        crate::done!(
+            mv,
+            "move {}: {} vertices, {} frozen",
+            self.moves,
+            self.mesh.vertices.len(),
+            self.state.frozen.iter().filter(|&&f| f).count()
+        );
         if self.inp.refine.keep_history {
             self.surfaces.push(self.mesh.clone());
         }
@@ -569,6 +629,17 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
         };
         let held = (!full && self.freeze.is_some()).then_some(self.state.held.as_slice());
         let edge_tol = refine.edge_ratio * m.stats.rms_displacement;
+        log::debug!(
+            "refit: {} fit of {} nodes ({} held){}",
+            if full { "full" } else { "inexact" },
+            fit_mask.iter().filter(|&&f| f).count(),
+            held.map_or(0, |h| h.iter().filter(|&&b| b).count()),
+            if full {
+                String::new()
+            } else {
+                format!(", edge tolerance {edge_tol:.4}")
+            }
+        );
         let constraints = self.shared.constraints(self.inp.exclude, full, held, edge_tol);
         let tf = Instant::now();
         let warm = Some(self.state.warm.as_slice());
@@ -614,16 +685,18 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
         self.clock.add_fit(&fit);
         let before = self.shared.scanner;
         let change = self.shared.relax(&fit, refine.scanner_relaxation);
+        let line = format!(
+            "{}: scanner re-fit after pass {}: {:?} -> {:?} (re-fit changed by {:.1}%, tolerance {:.1}%)",
+            self.tag,
+            self.passes.len(),
+            before,
+            self.shared.scanner,
+            100.0 * change,
+            100.0 * refine.scanner_tolerance
+        );
+        log::debug!("{line}");
         if refine.verbose {
-            eprintln!(
-                "{}: scanner re-fit after pass {}: {:?} -> {:?} (re-fit changed by {:.1}%, tolerance {:.1}%)",
-                self.tag,
-                self.passes.len(),
-                before,
-                self.shared.scanner,
-                100.0 * change,
-                100.0 * refine.scanner_tolerance
-            );
+            eprintln!("{line}");
         }
         if change <= refine.scanner_tolerance {
             self.shared.scanner = before;
@@ -655,42 +728,67 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
         Ok(())
     }
 
-    /// A fit of the whole surface with nothing held, for the outputs (after
-    /// a last fit that covered only part of it).
+    /// A fit of the whole surface with nothing held, for the outputs: after
+    /// a last fit that covered only part of it, or to compute the volumetric
+    /// model's reliability outputs, which the intermediate fits skip.
     fn output_fit(&mut self) -> Result<(), Error> {
         let tf = Instant::now();
-        let constraints = self.shared.constraints(self.inp.exclude, true, None, 0.0);
+        let constraints = FitConstraints {
+            skip_reliability: false,
+            ..self.shared.constraints(self.inp.exclude, true, None, 0.0)
+        };
         let warm = Some(self.state.warm.as_slice());
         let (image, options) = (&self.inp.image, self.inp.options);
         self.result = fit_surface_constrained(image, self.mesh.clone(), &self.keep, options, warm, &constraints)?;
         self.clock.since("fits", tf);
         self.clock.add_fit(&self.result);
+        let t = self.t0.elapsed().as_secs_f64();
+        let line = format!(
+            "{}: output fit on the whole surface, {}, {t:.1} s",
+            self.tag,
+            self.result.summary()
+        );
+        log::debug!("{line}");
         if self.inp.refine.verbose {
-            let t = self.t0.elapsed().as_secs_f64();
-            eprintln!(
-                "{}: output fit on the whole surface, {}, {t:.1} s",
-                self.tag,
-                self.result.summary()
-            );
+            eprintln!("{line}");
         }
         Ok(())
     }
 
-    /// The outputs: if the last fit covered only part of the surface, a fit
-    /// of all of it; the fitted surfaces and their masks; and the timings.
+    /// The outputs: a fit of the whole surface if the last fit covered only
+    /// part of it or (volumetric model) skipped the reliability outputs; the
+    /// fitted surfaces and their masks; and the timings.
     fn finish(mut self, end: End) -> Result<RefineResult, Error> {
         let (options, tag) = (self.inp.options, self.tag.clone());
-        if !self.last_full && self.freeze.is_some() {
+        let volumetric = matches!(options.method, crate::options::Method::Volumetric(_));
+        if volumetric && options.reliability || !self.last_full && self.freeze.is_some() {
             self.output_fit()?;
         }
-        let tk = Instant::now();
         let periosteal = self.result.surface.clone();
         let endosteal = self.result.displaced_surface(1.0);
-        let shape = self.inp.image.dim();
-        let [periosteal_mask, endosteal_mask, cortical_mask] =
-            region_masks(&periosteal, &endosteal, shape, &options.geometry);
-        self.clock.since("masks", tk);
+        let [periosteal_mask, endosteal_mask, cortical_mask] = if self.inp.refine.masks {
+            let tk = Instant::now();
+            let st = crate::stage!("masks");
+            let shape = self.inp.image.dim();
+            let [p, e, c] = region_masks(&periosteal, &endosteal, shape, &options.geometry);
+            self.clock.since("masks", tk);
+            if log::log_enabled!(log::Level::Debug) {
+                let count = |m: &Array3<bool>| m.iter().filter(|&&b| b).count();
+                crate::done!(st, "{} periosteal, {} cortical voxels", count(&p), count(&c));
+            }
+            [Some(p), Some(e), Some(c)]
+        } else {
+            log::debug!("masks not computed (not wanted)");
+            [None, None, None]
+        };
         add_timing(&mut self.clock.0, "total", self.t0.elapsed().as_secs_f64());
+        let level = if end.converged {
+            log::Level::Info
+        } else {
+            log::Level::Warn
+        };
+        log::log!(level, "{tag}: {} ({} moves)", end.message, self.moves);
+        log::debug!("{tag}: time: {}", self.clock.summary(self.t0));
         if self.inp.refine.verbose {
             eprintln!("{tag}: {}", end.message);
             eprintln!("{tag}: time: {}", self.clock.summary(self.t0));
@@ -713,17 +811,31 @@ impl<'a, T: Voxel, V: Voxel> Refinement<'a, T, V> {
     }
 }
 
+/// Voxels of margin around the level set's box beyond the largest moves.
+const LEVEL_SET_MARGIN: f64 = 3.0;
+
+/// Voxels of margin in the level set's band beyond a move's largest
+/// displacement: the extraction reads `φ` at the corners of the cells the
+/// surface crosses, within `√3` extraction-grid steps (`grid_step` voxels
+/// each) of it, and one voxel more for the distances' rounding.
+fn band_margin(grid_step: usize) -> f64 {
+    3f64.sqrt() * grid_step as f64 + 1.0
+}
+
 /// The level set of the starting surface, over the image grid within reach
-/// of the profiles and `band` of moves; `exclude` voxels kept outside.
+/// of the profiles and of the largest moves allowed (exact within `band`);
+/// `exclude` voxels kept outside.
 fn initial_level_set(
     mesh: &Mesh,
     dims: [usize; 3],
     band: f64,
+    max_move: f64,
     exclude: Option<&ArrayView3<bool>>,
     options: &Options,
 ) -> LevelSet {
-    let margin = options.sampling.outside + options.sampling.inside + band;
-    let mut ls = LevelSet::from_mesh(mesh, dims, &options.geometry, margin, band);
+    let max_spacing = options.geometry.spacing.iter().cloned().fold(0.0, f64::max);
+    let margin = options.sampling.outside + options.sampling.inside + max_move + LEVEL_SET_MARGIN * max_spacing;
+    let mut ls = LevelSet::from_mesh(mesh, dims, &options.geometry, margin, band, options.surface.grid_step);
     if let Some(e) = exclude {
         let mut changed = Array3::from_elem(ls.phi.dim(), false);
         ls.forbid(e, &mut changed);

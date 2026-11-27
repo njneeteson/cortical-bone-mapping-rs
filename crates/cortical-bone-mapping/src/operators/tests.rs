@@ -81,6 +81,18 @@ fn control_points_cover_and_separate() {
 }
 
 #[test]
+fn gaussian_laplacian_drops_rows_that_sample_less_than_its_scale() {
+    // a flat grid (edges and corners included) and, far from it, a fragment
+    // of three nearly coincident nodes
+    let mut pts = grid_points(30, 0.1);
+    let grid = pts.len();
+    pts.extend([[50.0, 50.0, 0.0], [50.0 + 1e-9, 50.0, 0.0], [50.0, 50.0 + 1e-9, 0.0]]);
+    let lap = SurfaceLaplacian::gaussian(&Neighbours::euclidean(&pts), 200, 0.3, 3.0);
+    assert!(lap.interior[..grid].iter().all(|&a| a), "a grid row was dropped");
+    assert!(lap.interior[grid..].iter().all(|&a| !a), "a fragment row was kept");
+}
+
+#[test]
 fn change_mode_ignores_uniform_offsets_but_not_bumps() {
     let mesh = Mesh::uv_sphere(3.0, 48, 32);
     let normals: Vec<V3> = mesh.vertex_normals().iter().map(|v| scale(*v, -1.0)).collect();

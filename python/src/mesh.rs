@@ -19,6 +19,7 @@ pub(crate) fn voxelize<'py>(
     spacing: V3,
     origin: V3,
 ) -> PyResult<Bound<'py, numpy::PyArray3<bool>>> {
+    crate::logs::refresh();
     let mesh = mesh_from(vertices, faces)?;
     let g = cbm::Geometry { spacing, origin };
     let out = py.detach(|| mesh.voxelize(shape, &g));
@@ -38,6 +39,7 @@ pub(crate) fn mesh_curvature<'py>(
     neighbours: usize,
     distance: &str,
 ) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
+    crate::logs::refresh();
     let mesh = mesh_from(vertices, faces)?;
     let measure = match measure {
         "mean" => cbm::CurvatureMeasure::Mean,
@@ -66,6 +68,7 @@ pub(crate) fn write_vtk(
     scalars: Vec<(String, Vec<f64>)>,
     vectors: Vec<(String, PyReadonlyArray2<'_, f64>)>,
 ) -> PyResult<()> {
+    crate::logs::refresh();
     let mesh = mesh_from(vertices, faces)?;
     let n = mesh.vertices.len();
     for (name, s) in &scalars {

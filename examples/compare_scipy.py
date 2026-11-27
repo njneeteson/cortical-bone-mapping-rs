@@ -11,9 +11,9 @@ Reports wall time, peak Python-heap memory (tracemalloc, which includes NumPy
 buffers) for SciPy and the crate's own peak (from the Rust benchmark,
 separately), final cost and thickness error against the phantom truth.
 
-    python docs/scripts/compare_scipy.py            # prints the rows
+    python examples/compare_scipy.py            # prints the rows
 
-``docs/scripts/benchmarks.py`` runs it with the other benchmarks.
+``examples/benchmarks.py`` runs it with the other benchmarks.
 """
 
 import sys

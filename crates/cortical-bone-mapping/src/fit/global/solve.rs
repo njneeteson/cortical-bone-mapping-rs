@@ -7,13 +7,11 @@
 //!
 //! 1. **Gradient test and active set.** Variables at a bound with the
 //!    gradient pointing out of the box, and frozen nodes, are held (projected
-//!    Newton; Bertsekas 1982). The scaled gradient
-//!    `max_v |g_v| / (√D_v ‖r‖)` over the others (`D = diag JᵀJ`,
-//!    `‖r‖ = √(2L)`), the MINPACK test of the local method generalised to
-//!    many variables (Moré 1978), below `gtol` ends the solve.
+//!    Newton; Bertsekas 1982). The scaled gradient (below) over the others
+//!    below `gtol` ends the solve.
 //! 2. **Inexact Newton step.** Solve `(JᵀJ + μD) δ = −g` over the free
 //!    variables by preconditioned conjugate gradients (Hestenes & Stiefel
-//!    1952) to a relative residual `η = max(min(0.1, √gmax), cg_tolerance)`.
+//!    1952) to a relative residual `η = max(min(cg_forcing, √gmax), cg_tolerance)`.
 //!    A forcing term that shrinks with the gradient gives superlinear
 //!    convergence while keeping early, far-from-optimal solves cheap (Dembo
 //!    et al. 1982; Nocedal & Wright 2006 use `min(0.5, √‖∇f‖)`). The
@@ -21,16 +19,43 @@
 //!    one for the globals, each factored by Cholesky on its free rows.
 //! 3. **Projection and gain ratio.** `x' = clamp(x + δ, l, u)`; with the actual
 //!    step `s = x' − x`, `ρ = (L(x) − L(x')) / (−gᵀs − ½ sᵀ JᵀJ s)`.
+//!    **3b. Line search on large residuals.** Gauss–Newton neglects the
+//!    residuals' second derivatives; where the residuals are large (model
+//!    misfit, not noise), `JᵀJ` overestimates the curvature along the step,
+//!    every step falls short by a similar factor, and the iteration
+//!    converges only linearly, with `ρ > 1` throughout. So after an accepted
+//!    step with `ρ > 1`, the minimum of the parabola through `L(x)`, the
+//!    slope `gᵀs` and `L(x')` is tried (one more evaluation, dimensionless
+//!    and free of the problem's size).
 //! 4. **Damping** (Nielsen 1999): accept if `ρ > 10⁻⁴`, then
 //!    `μ ← μ max(1/3, 1 − (2ρ − 1)³)`; otherwise `μ ← μν`, `ν ← 2ν`.
 //!
-//! A solve stops converged on the gradient test; on an accepted step that
-//! lowers the cost by less than `ftol` (relative); on a step below `xtol`
-//! relative to the point (in the `√D` norm); on a stall (the last 10 accepted
-//! steps together lower the cost by less than 10⁻⁴, the slow crawl of
-//! projected steps when many nodes sit on a bound); or, with `edge_tol`, when an
-//! accepted step moves the fitted periosteal edges `m − t/2` of the free nodes
-//! by less than `edge_tol` (RMS), which is all refinement needs from an
+//! **Stopping tests, free of units and of the problem's size.** Each test is
+//! a maximum over the variables of a dimensionless measure, never a norm of
+//! the whole problem: relative to the whole cost, a node's share shrinks as
+//! nodes are added, and relative to the point `x`, a step depends on where
+//! the units put their zero (densities in HU or mg HA/cm³). The variables are
+//! scaled by their Jacobian, `√D_v` (`D = diag JᵀJ`, the change of the
+//! predictions per unit of the variable, as MINPACK's `diag`), and the
+//! residuals by the noise, the weighted RMS residual
+//! `σ_r = √(Σ w r² / Σ w)`; `W_v` is the weight of the residuals a variable
+//! touches (its own samples; all of them for a global):
+//!
+//! * gradient `max_v |g_v| / (√(D_v W_v) σ_r)`: the cosine between a
+//!   variable's Jacobian column and the residuals it touches (MINPACK's test,
+//!   Moré 1978, with the variable's own residuals instead of all of them);
+//! * step `max_v √(D_v / W_v) |s_v| / σ_r`: the largest change a step makes
+//!   in the predictions of any variable's samples, in units of the noise.
+//!
+//! A solve stops converged on the gradient test (`gtol`); on an accepted step
+//! below `xtol` taken where the gradient is within `√gtol` (a rejected step is
+//! short because of the damping, and far from the solution the residual is
+//! misfit rather than noise, next to which a slow crawl looks negligible); on
+//! a stall (the last 10 accepted steps each below `10³ xtol`, the
+//! slow crawl of projected steps when many nodes sit on a bound); or, with
+//! `edge_tol`, when an accepted step moves the fitted periosteal edges
+//! `m − t/2` of the free nodes by less than `edge_tol` (RMS, a length
+//! relative to refinement's last move), which is all refinement needs from an
 //! intermediate fit. It stops unconverged when it runs out of trial steps or
 //! CG iterations.
 //!
@@ -61,12 +86,17 @@ use super::{Settings, SolveInfo};
 use crate::fit::local::Status;
 use crate::util::{cholesky_solve, det_sum};
 
-/// The last `STALL_WINDOW` accepted steps together reducing the cost by less
-/// than `STALL_DECREASE` (relative) stops the solve.
+/// The last `STALL_WINDOW` accepted steps each below `STALL_FACTOR × xtol`
+/// (the step measure of the module documentation) stop the solve.
 const STALL_WINDOW: usize = 10;
-const STALL_DECREASE: f64 = 1e-4;
+const STALL_FACTOR: f64 = 10.0;
 /// A trial step is accepted above this ratio of actual to predicted decrease.
 const ACCEPT_RATIO: f64 = 1e-4;
+/// The line search along an accepted step ([`Solver::extend`]) tries
+/// lengths `α*` from this (shorter is not worth an evaluation) ...
+const MIN_EXTENSION: f64 = 1.25;
+/// ... up to this multiple of the step.
+const MAX_EXTENSION: f64 = 10.0;
 /// Largest preconditioner block (field channels per dof, or globals).
 const MAX_BLOCK: usize = 8;
 
@@ -97,6 +127,15 @@ pub(crate) trait LeastSquares: Sync {
     fn held(&self, dof: usize) -> bool;
     /// The cost at `x`.
     fn cost(&self, x: &[f64]) -> f64;
+    /// The cost at `x` by part (for diagnostics; by default all in `data`).
+    fn cost_parts(&self, x: &[f64]) -> Costs {
+        let total = self.cost(x);
+        Costs {
+            total,
+            data: total,
+            ..Costs::default()
+        }
+    }
     /// The cost, its gradient and the linearisation at `x`.
     fn linearise(&self, x: &[f64]) -> (Costs, Vec<f64>, Self::Lin);
     /// The diagonal Gauss–Newton blocks of the dofs and of the globals.
@@ -105,13 +144,46 @@ pub(crate) trait LeastSquares: Sync {
     fn hess_vec(&self, lin: &Self::Lin, v: &[f64], out: &mut [f64]);
     /// The fitted periosteal edge of every dof (for `Settings::edge_tol`).
     fn edges(&self, x: &[f64]) -> Vec<f64>;
+    /// The weight of the residuals each dof's values touch (`W_v` of the
+    /// module documentation, in the normalisation of the cost), and of all
+    /// residuals (a global's).
+    fn data_weights(&self) -> (Vec<f64>, f64);
 }
 
 /// Minimise `problem` from `x` (clamped into the bounds first), updating `x`.
 pub(crate) fn minimise<P: LeastSquares>(problem: &P, x: &mut Vec<f64>, settings: &Settings) -> SolveInfo {
+    let (nfc, ndof, ng) = problem.shape();
+    log::debug!(
+        "solve: {} variables ({nfc} field channels x {ndof} dofs + {ng} globals), \
+         at most {} iterations and {} CG iterations",
+        x.len(),
+        settings.max_iterations,
+        settings.cg_max_total
+    );
     let mut solver = Solver::new(problem, std::mem::take(x), settings);
     let status = solver.run();
     let info = solver.info(status);
+    let level = if status == Status::MaxIterations {
+        log::Level::Warn
+    } else {
+        log::Level::Debug
+    };
+    log::log!(
+        level,
+        "solve: {status:?} after {} iterations ({} CG) in {:.2} s; cost {:.6e} (data {:.6e}, \
+         smoothing {:.6e}, curvature {:.6e}); time: evaluation {:.2} s, products {:.2} s, \
+         preconditioner {:.2} s",
+        info.iterations,
+        info.cg_iterations,
+        info.time_total,
+        info.cost,
+        info.data_cost,
+        info.smoothing_cost,
+        info.curvature_cost,
+        info.time_evaluate,
+        info.time_hessian,
+        info.time_precond
+    );
     *x = solver.x;
     info
 }
@@ -150,8 +222,7 @@ struct Linearisation {
 /// The outcome of a trial step.
 struct Trial {
     cost: f64,
-    /// Actual decrease, and its ratio to the predicted one.
-    actual: f64,
+    /// The ratio of the actual to the predicted decrease.
     rho: f64,
 }
 
@@ -176,8 +247,15 @@ struct Solver<'p, P: LeastSquares> {
     nu: f64,
     iterations: usize,
     cg_total: usize,
-    /// Costs after the last accepted steps, for the stall test.
+    /// The data weight `W_v` of every variable, and of all residuals.
+    weight: Vec<f64>,
+    weight_total: f64,
+    /// The step measure of the last trial step, and of the last accepted
+    /// steps (for the stall test).
+    last_step: f64,
     recent: VecDeque<f64>,
+    /// The scaled gradient where the last trial step started.
+    last_gmax: f64,
     /// Fitted edges after the last accepted step (with `edge_tol`).
     edges: Vec<f64>,
     edge_stop: bool,
@@ -205,6 +283,17 @@ impl<'p, P: LeastSquares> Solver<'p, P> {
             Vec::new()
         };
         let nv = x.len();
+        let (dof_weight, weight_total) = problem.data_weights();
+        let (nfc, ndof, _) = shape;
+        let weight = (0..nv)
+            .map(|v| {
+                if v < nfc * ndof {
+                    dof_weight[v % ndof]
+                } else {
+                    weight_total
+                }
+            })
+            .collect();
         Solver {
             problem,
             settings,
@@ -212,7 +301,11 @@ impl<'p, P: LeastSquares> Solver<'p, P> {
             lower,
             upper,
             x,
-            recent: VecDeque::from([costs.total]),
+            weight,
+            weight_total,
+            last_step: f64::INFINITY,
+            recent: VecDeque::new(),
+            last_gmax: f64::INFINITY,
             costs,
             grad,
             lin,
@@ -233,6 +326,11 @@ impl<'p, P: LeastSquares> Solver<'p, P> {
         while self.iterations < self.settings.max_iterations {
             let lin = self.linearise();
             if lin.gmax <= self.settings.gtol || !self.free.iter().any(|&f| f) {
+                log::debug!(
+                    "solve stops: scaled gradient {:.2e} <= gtol {:.0e}, or no free variable",
+                    lin.gmax,
+                    self.settings.gtol
+                );
                 return Status::Gtol;
             }
             if let Some(status) = self.damped_step(&lin) {
@@ -244,7 +342,7 @@ impl<'p, P: LeastSquares> Solver<'p, P> {
 
     /// Steps 1–2 of the module documentation: diagonal blocks, the gradient test
     /// (which also sets the free variables) and the forcing term
-    /// `η = max(min(0.1, √gmax), cg_tolerance)` of the linear solves.
+    /// `η = max(min(cg_forcing, √gmax), cg_tolerance)` of the linear solves.
     fn linearise(&mut self) -> Linearisation {
         let (fblocks, gblock) = timed!(self.clock.precond, self.problem.diag_blocks(&self.lin));
         let diag = diagonal(self.shape, &fblocks, &gblock);
@@ -253,7 +351,10 @@ impl<'p, P: LeastSquares> Solver<'p, P> {
         let gmax = self.gradient_test(&diag);
         // inexact Newton (forcing term min(0.1, sqrt(|g|)) on the scaled
         // gradient): loose solves far from the optimum, tight near it
-        let eta = gmax.sqrt().min(0.1).max(self.settings.cg_tolerance);
+        let eta = gmax
+            .sqrt()
+            .min(self.settings.cg_forcing)
+            .max(self.settings.cg_tolerance);
         Linearisation {
             fblocks,
             gblock,
@@ -264,12 +365,18 @@ impl<'p, P: LeastSquares> Solver<'p, P> {
         }
     }
 
+    /// The noise level `σ_r`: the weighted RMS residual of the data.
+    fn noise(&self) -> f64 {
+        (2.0 * self.costs.data / self.weight_total.max(1e-300)).sqrt()
+    }
+
     /// Mark the variables held at a bound (or frozen) and return the largest
-    /// scaled gradient `|g| / (√D ‖r‖)` over the others.
+    /// scaled gradient `|g_v| / (√(D_v W_v) σ_r)` over the others (module
+    /// documentation); 0 for a perfect fit.
     fn gradient_test(&mut self, diag: &[f64]) -> f64 {
         let (nfc, ndof, _) = self.shape;
         let off = nfc * ndof;
-        let rnorm = (2.0 * self.costs.total).sqrt();
+        let sigma = self.noise();
         let mut gmax: f64 = 0.0;
         for v in 0..self.x.len() {
             let g = self.grad[v];
@@ -277,8 +384,9 @@ impl<'p, P: LeastSquares> Solver<'p, P> {
             let at_bound = (self.x[v] <= self.lower[v] && g > 0.0) || (self.x[v] >= self.upper[v] && g < 0.0);
             let blocked = held || at_bound;
             self.free[v] = !blocked;
-            if !blocked && diag[v] > 0.0 && rnorm > 0.0 {
-                gmax = gmax.max(g.abs() / (diag[v].sqrt() * rnorm));
+            let w = self.weight[v];
+            if !blocked && diag[v] > 0.0 && w > 0.0 && sigma > 0.0 {
+                gmax = gmax.max(g.abs() / ((diag[v] * w).sqrt() * sigma));
             }
         }
         gmax
@@ -289,6 +397,13 @@ impl<'p, P: LeastSquares> Solver<'p, P> {
     fn damped_step(&mut self, lin: &Linearisation) -> Option<Status> {
         loop {
             if self.iterations >= self.settings.max_iterations || self.cg_total >= self.settings.cg_max_total {
+                log::debug!(
+                    "solve stops: budget spent ({} of {} iterations, {} of {} CG iterations)",
+                    self.iterations,
+                    self.settings.max_iterations,
+                    self.cg_total,
+                    self.settings.cg_max_total
+                );
                 return Some(Status::MaxIterations);
             }
             self.iterations += 1;
@@ -298,17 +413,28 @@ impl<'p, P: LeastSquares> Solver<'p, P> {
             let delta = self.pcg(&pre, &damp, lin.eta);
             let xt = self.project(&delta);
             let step: Vec<f64> = xt.par_iter().zip(self.x.par_iter()).map(|(a, b)| a - b).collect();
-            if self.negligible(&step, lin) {
+            self.last_step = self.step_measure(&step, lin);
+            self.last_gmax = lin.gmax;
+            if self.last_step == 0.0 {
+                log::debug!("solve stops: no variable can move (all held at their bounds)");
                 return Some(Status::Xtol);
             }
             let trial = self.try_step(&xt, &step);
             self.report(&trial, lin.gmax, self.cg_total - cg_before);
+            if log::log_enabled!(log::Level::Debug) {
+                self.log_measures(&step, lin);
+            }
             if trial.rho > ACCEPT_RATIO {
+                let (xt, trial) = self.extend(xt, &step, trial, lin);
                 return self.accept(xt, &trial);
+            }
+            if log::log_enabled!(log::Level::Trace) {
+                self.check_direction(&step, &trial);
             }
             self.mu *= self.nu;
             self.nu *= 2.0;
             if self.mu > 1e16 {
+                log::debug!("solve stops: no acceptable step (damping above 1e16)");
                 return Some(Status::Xtol);
             }
         }
@@ -339,28 +465,43 @@ impl<'p, P: LeastSquares> Solver<'p, P> {
 
     /// Preconditioned conjugate gradients (Hestenes & Stiefel 1952; Nocedal &
     /// Wright 2006, ch. 5) on `(JᵀJ + μD) δ = −g` over the free
-    /// variables, from `δ = 0`, stopping at `‖r‖ ≤ η ‖g‖`, on negative curvature
-    /// (`pᵀAp ≤ 0`, which damping prevents in exact arithmetic) or on the CG
-    /// budget.
+    /// variables, from `δ = 0`, stopping at `‖r‖ ≤ η ‖g‖` in the
+    /// preconditioned norm `‖r‖ = √(rᵀM⁻¹r)` (each term has the units of the
+    /// cost, so the test does not depend on the variables' units, unlike the
+    /// Euclidean norm, which adds up gradients of lengths and of densities),
+    /// on negative curvature (`pᵀAp ≤ 0`, which damping prevents in exact
+    /// arithmetic) or on the CG budget.
     fn pcg(&mut self, pre: &Precond, damp: &[f64], eta: f64) -> Vec<f64> {
         let nv = self.x.len();
         let mut delta = vec![0.0; nv];
         let mut r: Vec<f64> = (0..nv)
             .map(|v| if self.free[v] { -self.grad[v] } else { 0.0 })
             .collect();
-        let bnorm = dotp(&r, &r).sqrt();
         let mut z = vec![0.0; nv];
         timed!(self.clock.precond, pre.apply(&r, &self.free, &mut z));
         let mut p = z.clone();
         let mut rz = dotp(&r, &z);
+        let bnorm = rz.max(0.0).sqrt();
+        let mut why = "iteration limit";
+        let mut k = 0;
         for _ in 0..self.settings.cg_max_iterations {
             if self.cg_total >= self.settings.cg_max_total {
+                why = "total CG budget";
                 break;
             }
             self.cg_total += 1;
+            k += 1;
             self.damped_product(&p, damp);
             let pap = dotp(&p, &self.hv);
             if !(pap > 0.0) {
+                // impossible for a damped Gauss–Newton system in exact
+                // arithmetic: the products or the preconditioner are broken
+                log::warn!(
+                    "CG: non-positive curvature pᵀAp = {pap:e} at CG iteration {k} (damping {:.1e}); \
+                     the step so far is used",
+                    self.mu
+                );
+                why = "non-positive curvature";
                 break;
             }
             let alpha = rz / pap;
@@ -371,17 +512,23 @@ impl<'p, P: LeastSquares> Solver<'p, P> {
             r.par_iter_mut()
                 .zip(self.hv.par_iter())
                 .for_each(|(rv, &h)| *rv -= alpha * h);
-            if dotp(&r, &r).sqrt() <= eta * bnorm {
-                break;
-            }
             timed!(self.clock.precond, pre.apply(&r, &self.free, &mut z));
             let rz_new = dotp(&r, &z);
+            if rz_new.max(0.0).sqrt() <= eta * bnorm {
+                rz = rz_new;
+                why = "converged";
+                break;
+            }
             let beta = rz_new / rz;
             rz = rz_new;
             p.par_iter_mut()
                 .zip(z.par_iter())
                 .for_each(|(pv, &zv)| *pv = zv + beta * *pv);
         }
+        log::trace!(
+            "CG: {k} iterations, stopped by {why}; relative residual {:.2e} (target {eta:.2e})",
+            rz.max(0.0).sqrt() / bnorm.max(1e-300)
+        );
         delta
     }
 
@@ -403,18 +550,57 @@ impl<'p, P: LeastSquares> Solver<'p, P> {
             .collect()
     }
 
-    /// The (scaled) step is negligible next to the point.
-    fn negligible(&self, step: &[f64], lin: &Linearisation) -> bool {
-        let (diag, dfloor, x) = (&lin.diag, lin.dfloor, &self.x);
-        let snorm: f64 = (0..x.len())
-            .map(|v| diag[v].max(dfloor) * step[v] * step[v])
-            .sum::<f64>()
-            .sqrt();
-        let xnorm: f64 = (0..x.len())
-            .map(|v| diag[v].max(dfloor) * x[v] * x[v])
-            .sum::<f64>()
-            .sqrt();
-        snorm <= self.settings.xtol * (xnorm + self.settings.xtol)
+    /// The step measure `max_v √(D_v / W_v) |s_v| / σ_r` of the module
+    /// documentation: the largest change the step makes in the predictions
+    /// of any variable's samples, in units of the noise (0 for a perfect fit,
+    /// whose steps are all negligible).
+    fn step_measure(&self, step: &[f64], lin: &Linearisation) -> f64 {
+        let sigma = self.noise();
+        if !(sigma > 0.0) {
+            return 0.0;
+        }
+        let (diag, dfloor) = (&lin.diag, lin.dfloor);
+        let largest = (0..step.len())
+            .into_par_iter()
+            .filter(|&v| self.weight[v] > 0.0)
+            .map(|v| (diag[v].max(dfloor) / self.weight[v]).sqrt() * step[v].abs())
+            .reduce(|| 0.0, f64::max);
+        largest / sigma
+    }
+
+    /// Step 3b of the module documentation: after an accepted step `s` (to
+    /// `xt`) that lowered the cost by more than the Gauss–Newton model
+    /// predicted (`ρ > 1`: the model overestimates the curvature along `s`),
+    /// the minimum of the parabola through the cost at `x`, its slope `gᵀs`
+    /// and the cost at `xt`, at `α* = −gᵀs / κ` with
+    /// `κ = 2 (L(xt) − L(x) − gᵀs)`; taken if it lowers the cost further.
+    /// The trial keeps the gain ratio of the unit step (for the damping).
+    fn extend(&mut self, xt: Vec<f64>, step: &[f64], trial: Trial, lin: &Linearisation) -> (Vec<f64>, Trial) {
+        if trial.rho <= 1.0 {
+            return (xt, trial);
+        }
+        let slope = dotp(&self.grad, step);
+        let kappa = 2.0 * (trial.cost - self.costs.total - slope);
+        let alpha = (-slope / kappa).min(MAX_EXTENSION);
+        if !(kappa > 0.0) || alpha < MIN_EXTENSION {
+            return (xt, trial);
+        }
+        let xa: Vec<f64> = (0..self.x.len())
+            .into_par_iter()
+            .map(|v| (self.x[v] + alpha * step[v]).clamp(self.lower[v], self.upper[v]))
+            .collect();
+        let cost = timed!(self.clock.evaluate, self.problem.cost(&xa));
+        log::debug!(
+            "  line search: α {alpha:.3}, cost {cost:.6e} ({} than the unit step's {:.6e})",
+            if cost < trial.cost { "lower" } else { "not lower" },
+            trial.cost
+        );
+        if !(cost < trial.cost) {
+            return (xt, trial);
+        }
+        let sa: Vec<f64> = xa.par_iter().zip(self.x.par_iter()).map(|(a, b)| a - b).collect();
+        self.last_step = self.step_measure(&sa, lin);
+        (xa, Trial { cost, rho: trial.rho })
     }
 
     /// Evaluate the trial point against the decrease the linear model predicts.
@@ -424,17 +610,162 @@ impl<'p, P: LeastSquares> Solver<'p, P> {
         let cost = timed!(self.clock.evaluate, self.problem.cost(xt));
         let actual = self.costs.total - cost;
         let rho = if pred > 0.0 { actual / pred } else { -1.0 };
-        Trial { cost, actual, rho }
+        Trial { cost, rho }
+    }
+
+    /// Diagnosis of a rejected step (trace level): along its direction `s`,
+    /// the analytic slope `gᵀs` and Gauss–Newton curvature `sᵀJᵀJs` (in
+    /// `hv`, from [`Self::try_step`]) against central differences of the
+    /// cost at a hundredth of the step. A slope that disagrees means a wrong
+    /// gradient; a curvature that disagrees, a model that does not hold over
+    /// the step (or a wrong product).
+    fn check_direction(&self, step: &[f64], trial: &Trial) {
+        let h = 1e-2;
+        // the cost along the step restricted to `range`
+        let at = |sign: f64, range: std::ops::Range<usize>| -> Costs {
+            let x: Vec<f64> = (0..step.len())
+                .into_par_iter()
+                .map(|v| {
+                    let s = if range.contains(&v) { step[v] } else { 0.0 };
+                    (self.x[v] + sign * h * s).clamp(self.lower[v], self.upper[v])
+                })
+                .collect();
+            self.problem.cost_parts(&x)
+        };
+        let all = 0..step.len();
+        let (cp, cm, c0) = (at(1.0, all.clone()), at(-1.0, all), self.problem.cost_parts(&self.x));
+        let slope = dotp(&self.grad, step);
+        let curvature = dotp(step, &self.hv);
+        let diff = |f: fn(&Costs) -> f64| (f(&cp) - f(&cm)) / (2.0 * h);
+        let moved = step.iter().filter(|&&s| s != 0.0).count();
+        log::trace!(
+            "rejected step ({moved} of {} variables moved): slope gᵀs {slope:.6e} vs difference {:.6e} \
+             (data {:.6e}, smoothing {:.6e}, curvature {:.6e}); curvature sᵀJᵀJs {curvature:.6e} vs \
+             difference {:.6e}; full step: predicted decrease {:.6e}, actual {:.6e}; cost here {:.6e} \
+             (linearised {:.6e})",
+            step.len(),
+            diff(|c| c.total),
+            diff(|c| c.data),
+            diff(|c| c.smoothing),
+            diff(|c| c.curvature),
+            (cp.total - 2.0 * c0.total + cm.total) / (h * h),
+            -(slope + 0.5 * curvature),
+            self.costs.total - trial.cost,
+            c0.total,
+            self.costs.total
+        );
+        // by block: each field channel, then the globals
+        let (nfc, n, ng) = self.problem.shape();
+        let blocks = (0..nfc).map(|fi| (format!("field {fi}"), fi * n..(fi + 1) * n));
+        for (name, range) in blocks.chain(std::iter::once(("globals".to_string(), nfc * n..nfc * n + ng))) {
+            let part = dotp(&self.grad[range.clone()], &step[range.clone()]);
+            let (p, m) = (at(1.0, range.clone()), at(-1.0, range.clone()));
+            let big = range.clone().max_by(|&a, &b| {
+                (self.grad[a] * step[a])
+                    .abs()
+                    .total_cmp(&(self.grad[b] * step[b]).abs())
+            });
+            log::trace!(
+                "  {name}: slope {part:.6e} vs difference {:.6e} (data {:.6e}); largest gᵥsᵥ at {big:?}: {}",
+                (p.total - m.total) / (2.0 * h),
+                (p.data - m.data) / (2.0 * h),
+                big.map_or(String::new(), |v| format!(
+                    "g {:.3e}, s {:.3e}, x {:.6e} in [{:.3e}, {:.3e}]",
+                    self.grad[v], step[v], self.x[v], self.lower[v], self.upper[v]
+                ))
+            );
+        }
+    }
+
+    /// Where the stopping tests' measures are largest, and how they are
+    /// distributed (debug level): the step and gradient measures of every
+    /// variable with data, their largest value (variable, as channel and
+    /// dof) and their 50th and 99th percentiles.
+    fn log_measures(&self, step: &[f64], lin: &Linearisation) {
+        let sigma = self.noise();
+        if !(sigma > 0.0) {
+            return;
+        }
+        let (nfc, ndof, _) = self.shape;
+        let place = |v: usize| {
+            if v < nfc * ndof {
+                format!("channel {} dof {}", v / ndof, v % ndof)
+            } else {
+                format!("global {}", v - nfc * ndof)
+            }
+        };
+        // a dof's values on every channel, `*` marking those on a bound
+        let node = |v: usize| -> String {
+            if v >= nfc * ndof {
+                return String::new();
+            }
+            let k = v % ndof;
+            let vals: Vec<String> = (0..nfc)
+                .map(|c| {
+                    let u = c * ndof + k;
+                    let bound = self.x[u] <= self.lower[u] || self.x[u] >= self.upper[u];
+                    format!("{:.4}{}", self.x[u], if bound { "*" } else { "" })
+                })
+                .collect();
+            format!(
+                " (values [{}], data weight {:.2e} of {:.2e})",
+                vals.join(", "),
+                self.weight[v],
+                self.weight_total
+            )
+        };
+        let summary = |m: Vec<(f64, usize)>| -> String {
+            let mut vals: Vec<f64> = m.iter().map(|p| p.0).collect();
+            if vals.is_empty() {
+                return "none".into();
+            }
+            let (big, at) = m
+                .iter()
+                .fold((f64::MIN, 0), |a, &(x, v)| if x > a.0 { (x, v) } else { a });
+            vals.sort_by(f64::total_cmp);
+            let q = |p: f64| vals[((vals.len() - 1) as f64 * p).round() as usize];
+            format!(
+                "max {big:.2e} at {}{}, p50 {:.2e}, p99 {:.2e}",
+                place(at),
+                node(at),
+                q(0.5),
+                q(0.99)
+            )
+        };
+        let bounded = (0..self.x.len())
+            .filter(|&v| self.x[v] <= self.lower[v] || self.x[v] >= self.upper[v])
+            .count();
+        let with_data = |v: &usize| self.weight[*v] > 0.0 && lin.diag[*v] > 0.0;
+        let steps = (0..step.len())
+            .filter(with_data)
+            .map(|v| {
+                (
+                    (lin.diag[v].max(lin.dfloor) / self.weight[v]).sqrt() * step[v].abs() / sigma,
+                    v,
+                )
+            })
+            .collect();
+        let grads = (0..step.len())
+            .filter(|v| with_data(v) && self.free[*v])
+            .map(|v| (self.grad[v].abs() / ((lin.diag[v] * self.weight[v]).sqrt() * sigma), v))
+            .collect();
+        log::debug!(
+            "  step measure {}; gradient measure {}; {bounded} of {} variables on a bound",
+            summary(steps),
+            summary(grads),
+            self.x.len()
+        );
     }
 
     /// Progress line (every `progress_every` trial steps).
     fn report(&self, trial: &Trial, gmax: f64, cg: usize) {
         let s = self.settings;
-        if s.progress_every == 0 || !self.iterations.is_multiple_of(s.progress_every) {
+        let progress = s.progress_every > 0 && self.iterations.is_multiple_of(s.progress_every);
+        if !progress && !log::log_enabled!(log::Level::Debug) {
             return;
         }
-        eprintln!(
-            "  fit iteration {}/{}: cost {:.6e} -> {:.6e} ({}), gradient {gmax:.2e}, CG {cg} \
+        let line = format!(
+            "fit iteration {}/{}: cost {:.6e} -> {:.6e} ({}, gain ratio {:.3}), gradient {gmax:.2e}, CG {cg} \
              ({}/{} total), damping {:.1e}, {:.1} s",
             self.iterations,
             s.max_iterations,
@@ -445,30 +776,54 @@ impl<'p, P: LeastSquares> Solver<'p, P> {
             } else {
                 "rejected"
             },
+            trial.rho,
             self.cg_total,
             s.cg_max_total,
             self.mu,
             self.clock.start.elapsed().as_secs_f64()
         );
+        log::debug!("{line}");
+        if progress {
+            eprintln!("  {line}");
+        }
     }
 
     /// Move to the trial point, relax the damping, and test for convergence
-    /// (relative decrease, edge change, stall).
+    /// (edge change, stall).
     fn accept(&mut self, xt: Vec<f64>, trial: &Trial) -> Option<Status> {
-        let prev = self.costs.total;
         self.x = xt;
         let (costs, grad, lin) = timed!(self.clock.evaluate, self.problem.linearise(&self.x));
         (self.costs, self.grad, self.lin) = (costs, grad, lin);
         self.mu *= (1.0 - (2.0 * trial.rho - 1.0).powi(3)).max(1.0 / 3.0);
         self.nu = 2.0;
-        if trial.actual <= self.settings.ftol * prev {
-            return Some(Status::Ftol);
+        // on accepted steps only (a rejected step is short because of the
+        // damping), and only near a stationary point: far from the solution
+        // the residual is misfit rather than noise, and a slow crawl would
+        // look negligible next to it
+        if self.last_step <= self.settings.xtol && self.last_gmax <= self.settings.gtol.sqrt() {
+            log::debug!(
+                "solve stops: the step changed the predictions by {:.2e} of the noise at most (xtol {:.0e})",
+                self.last_step,
+                self.settings.xtol
+            );
+            return Some(Status::Xtol);
         }
         if self.settings.edge_tol > 0.0 && self.edges_settled() {
+            log::debug!(
+                "solve stops: the edges moved less than edge_tol {}",
+                self.settings.edge_tol
+            );
             self.edge_stop = true;
             return Some(Status::Ftol);
         }
-        self.stalled().then_some(Status::Ftol)
+        let stalled = self.stalled();
+        if stalled {
+            log::debug!(
+                "solve stops: stalled (the last {STALL_WINDOW} steps each changed the predictions by less than {:.0e} of the noise)",
+                STALL_FACTOR * self.settings.xtol
+            );
+        }
+        stalled.then_some(Status::Ftol)
     }
 
     /// The accepted step changed the free nodes' edges by less than `edge_tol` (RMS).
@@ -481,16 +836,15 @@ impl<'p, P: LeastSquares> Solver<'p, P> {
         cnt == 0 || (s2 / cnt as f64).sqrt() < self.settings.edge_tol
     }
 
-    /// The last `STALL_WINDOW` accepted steps together barely reduced the
-    /// cost: happens when steps are cut by the bounds at many nodes
-    /// (projected Newton).
+    /// The last `STALL_WINDOW` accepted steps each changed the predictions
+    /// by less than `STALL_FACTOR × xtol` of the noise: happens when steps
+    /// are cut by the bounds at many nodes (projected Newton).
     fn stalled(&mut self) -> bool {
-        self.recent.push_back(self.costs.total);
-        if self.recent.len() <= STALL_WINDOW {
-            return false;
+        self.recent.push_back(self.last_step);
+        if self.recent.len() > STALL_WINDOW {
+            self.recent.pop_front();
         }
-        let old = self.recent.pop_front().unwrap();
-        old - self.costs.total <= STALL_DECREASE * old
+        self.recent.len() == STALL_WINDOW && self.recent.iter().all(|&s| s <= STALL_FACTOR * self.settings.xtol)
     }
 
     /// The summary of the solve, ended with `status`.
